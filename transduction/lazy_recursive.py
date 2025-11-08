@@ -81,7 +81,7 @@ class BuggyLazyRecursive(AbstractAlgorithm):
         decomp = self(target)
         # The method below is better implemented by the else clause.
         states = {x[:t] for x in decomp.quotient | decomp.remainder
-                  for t in range(len(x))}
+                  for t in range(len(x)+1)}
         m = FSA()
         m.add_start('')
         for x in states:
@@ -175,9 +175,9 @@ class BuggyLazyRecursive(AbstractAlgorithm):
         q_fsa = S_fst.project(0)
         # use the unweighted FSA library instead
         q_dfa = q_fsa.min()
-        if len(q_dfa.nodes) != 1:
+        if len(q_dfa.states) != 1:
             return False
-        [i] = q_dfa.nodes
+        [i] = q_dfa.states
         for a in self.source_alphabet:
             if set(q_dfa.arcs(i, a)) != {i}:
                 return False

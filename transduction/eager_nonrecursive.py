@@ -33,9 +33,9 @@ def force_start(fsa, start_states):
 def is_universal(fsa, q, alphabet):
     # universality test; below we create the force-start machine
     q_fsa = force_start(fsa, [q]).min()
-    if len(q_fsa.nodes) != 1:
+    if len(q_fsa.states) != 1:
         return False
-    [i] = q_fsa.nodes
+    [i] = q_fsa.states
     for a in alphabet:
         if set(q_fsa.arcs(i, a)) != {i}:
             return False
@@ -59,7 +59,7 @@ class EagerNonrecursive(AbstractAlgorithm):
         precover_dfa = self.precover_dfa(target).min()
 
         # identify all universal states
-        universal_states = {i for i in precover_dfa.nodes
+        universal_states = {i for i in precover_dfa.states
                             if is_universal(precover_dfa, i, self.source_alphabet)}
         #print(universal_states)
 
@@ -118,5 +118,5 @@ class EagerNonrecursive(AbstractAlgorithm):
     @memoize
     def _continuity(self, target, state):
         dfa = self.precover_dfa(target)
-        assert state in dfa.nodes
+        assert state in dfa.states
         return is_universal(dfa, state, self.source_alphabet)

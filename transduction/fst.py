@@ -11,6 +11,7 @@ from arsenal import Integerizer
 from graphviz import Digraph
 
 
+# TODO: technically, we need to ensure that these are unique objects.
 ε_1 = f'{EPSILON}₁'
 ε_2 = f'{EPSILON}₂'
 
@@ -37,10 +38,10 @@ class FST:
         output.append('}')
         return '\n'.join(output)
 
-    def add_arc(self, i, a, b, j, w=None):  # pylint: disable=arguments-renamed
-        if w is not None:
-            import warnings
-            warnings.warn('weights are deprecated.')
+    def is_final(self, i):
+        return i in self.F
+
+    def add_arc(self, i, a, b, j):  # pylint: disable=arguments-renamed
         self.states.add(i)
         self.states.add(j)
         self.delta[i][(a,b)].add(j)   # TODO: change this data structure to separarate a and b.
@@ -72,9 +73,6 @@ class FST:
                 m.add_arc(f(i), a, b, f(j))
         return m
 
-    def to_fst(self):
-        return self
-
     @cached_property
     def renumber(self):
         return self.rename(Integerizer())
@@ -100,47 +98,56 @@ class FST:
     def graphviz(
         self,
         fmt_node=lambda x: ' ',
-        fmt_edge=lambda i,a,j: \
-            f'{html.escape(str(":".join(str(A or "ε") for A in a)) if isinstance(a, tuple) else str(a))}',
-        attr_node=None,
+        fmt_edge=lambda i, a, j: f'{str(a[0] or "ε")}:{str(a[1] or "ε")}' if a[0] != a[1] else str(a[0]),
+        sty_node=lambda i: {},
     ):
-        if attr_node is None: attr_node = {}
         if len(self.states) == 0:
             import warnings
-
             warnings.warn('empty visualization')
+
         g = Digraph(
             graph_attr=dict(rankdir='LR'),
             node_attr=dict(
                 fontname='Monospace',
-                fontsize='10',
-                height='.05',
-                width='.05',
-                # margin="0.055,0.042"
-                margin='0,0',
+                fontsize='8',
+                height='.05', width='.05',
+                margin="0.055,0.042",
+                shape='box',
+                style='rounded',
             ),
             edge_attr=dict(
-                # arrowhead='vee',
                 arrowsize='0.3',
                 fontname='Monospace',
-                fontsize='9',
+                fontsize='8'
             ),
         )
+
         f = Integerizer()
+
+        # Start pointers
         for i in self.I:
             start = f'<start_{i}>'
             g.node(start, label='', shape='point', height='0', width='0')
             g.edge(start, str(f(i)), label='')
+
+        # Nodes
         for i in self.states:
-            attrs = dict(shape='circle') | attr_node.get(i, {})
-            g.node(str(f(i)), label=str(fmt_node(i)), **attrs)
-        for i in self.F:
-            stop = f'<stop_{i}>'
-            g.node(stop, label='', shape='point', height='0', width='0')
-            g.edge(str(f(i)), stop, label='')
+            sty = dict(peripheries='2' if i in self.F else '1')
+            sty.update(sty_node(i))
+            g.node(str(f(i)), label=str(fmt_node(i)), **sty)
+
+        # Collect parallel-edge labels by (i, j)
+        by_pair = defaultdict(list)
         for i in self.states:
             for a, b, j in self.arcs(i):
-                g.edge(str(f(i)), str(f(j)), label=f'{fmt_edge(i,(a,b),j)}')
+                lbl = fmt_edge(i, (a, b), j)
+                by_pair[(str(f(i)), str(f(j)))].append(lbl)
+
+        # Emit one edge per (i, j) with stacked labels
+        for (u, v), labels in by_pair.items():
+            # Stack with literal newlines. Graphviz renders '\n' as a line break.
+            g.edge(u, v, label='\n'.join(sorted(labels)))
+
         return g
 
     def __call__(self, x, y):
@@ -151,20 +158,33 @@ class FST:
         """
 
         if x is not None and y is not None:
-            x = FST.from_string(x, self.R)
-            y = FST.from_string(y, self.R)
-            return (x @ self @ y).total_weight()
+            if isinstance(x, str):
+                x = FST.from_string(x)
+            if isinstance(y, str):
+                y = FST.from_string(y)
+            return (x @ self @ y)
 
         elif x is not None and y is None:
-            x = FST.from_string(x, self.R)
+            if isinstance(x, str):
+                x = FST.from_string(x)
             return (x @ self).project(1)
 
         elif x is None and y is not None:
-            y = FST.from_string(y, self.R)
+            if isinstance(y, str):
+                y = FST.from_string(y)
             return (self @ y).project(0)
 
         else:
             return self
+
+    @classmethod
+    def from_string(cls, xs):
+        m = cls()
+        m.add_I(xs[:0])
+        for i in range(len(xs)):
+            m.add_arc(xs[:i], xs[i], xs[i], xs[:i+1])
+        m.add_F(xs)
+        return m
 
     @staticmethod
     def from_pairs(pairs):
@@ -239,9 +259,10 @@ class FST:
             )
 
     # TODO: add assertions for the 'bad' epsilon cases to ensure users aren't using this method incorrectly.
+    # TODO: use lazy machine pattern
     def _compose(self, other):
         """
-        Implements the on-the-fly composition of the FST self with the FST T.
+        Implements the on-the-fly composition of the FST `self` with the FST `other`.
         """
 
         C = FST()
@@ -289,6 +310,7 @@ class FST:
 
         return C
 
+    # TODO: use lazy pattern here too.
     def _augment_epsilon_transitions(self, idx):
         """
         Augments the FST by changing the appropriate epsilon transitions to

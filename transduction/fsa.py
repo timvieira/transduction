@@ -11,9 +11,9 @@ def dfs(Ps, arcs):
     while stack:
         P = stack.pop()
         for a, Q in arcs(P):
-            if Q not in m.nodes:
+            if Q not in m.states:
                 stack.append(Q)
-                m.nodes.add(Q)
+                m.states.add(Q)
             m.add(P, a, Q)
     return m
 
@@ -21,12 +21,7 @@ def dfs(Ps, arcs):
 _frozenset = frozenset
 class frozenset(_frozenset):
     def __repr__(self):
-        return '{%s}' % (','.join(str(x) for x in sorted_robust(self)))
-
-
-
-def sorted_robust(xs):
-    return sorted(xs, key=lambda x: (type(x).__name__, x))
+        return '{%s}' % (','.join(str(x) for x in self))
 
 
 class FSA:
@@ -34,12 +29,12 @@ class FSA:
     def __init__(self):
         self.start = set()
         self.edges = defaultdict(lambda: defaultdict(set))
-        self.nodes = set()
+        self.states = set()
         self.stop = set()
         self.syms = set()
 
     def as_tuple(self):
-        return (frozenset(self.nodes),
+        return (frozenset(self.states),
                 frozenset(self.start),
                 frozenset(self.stop),
 #                frozenset(self.syms),
@@ -57,14 +52,14 @@ class FSA:
 
     def __repr__(self):
         x = ['{']   # todo: better print; include start/stop
-        for s in sorted_robust(self.nodes):
+        for s in self.states:
             ss = f'{s}'
             if s in self.start:
                 ss = f'^{ss}'
             if s in self.stop:
                 ss = f'{ss}$'
             x.append(f'  {ss}:')
-            for a, t in sorted_robust(self.arcs(s)):
+            for a, t in self.arcs(s):
                 x.append(f'    {a} -> {t}')
         x.append('}')
         return '\n'.join(x)
@@ -79,14 +74,13 @@ class FSA:
             node_attr=dict(
                 fontname='Monospace',
                 fontsize='8',
-                height='.05', width='.05',
+                height='.05',
+                width='.05',
                 margin="0.055,0.042",
-                #margin="0,0",
                 shape='box',
                 style='rounded',
             ),
             edge_attr=dict(
-                #arrowhead='vee',
                 arrowsize='0.3',
                 fontname='Monospace',
                 fontsize='8'
@@ -94,21 +88,31 @@ class FSA:
         )
         f = Integerizer()
 
-        # FIXME: make sure this name is actually unqiue
+        # FIXME: make sure this name is actually unique
         start = '<start>'
-        assert start not in self.nodes
+        assert start not in self.states
         g.node(start, label='', shape='point', height='0', width='0')
         for i in self.start:
             g.edge(start, str(f(i)), label='')
 
-        for i in sorted_robust(self.nodes):
+        for i in self.states:
             label = html.escape(str(fmt_node(i)))
             #if i in self.start: label = '*'
             sty = dict(peripheries='2' if i in self.stop else '1')
             sty.update(sty_node(i))
             g.node(str(f(i)), label=label, **sty)
-            for a, j in sorted_robust(self.arcs(i)):
-                g.edge(str(f(i)), str(f(j)), label=html.escape(str(a).replace(' ', '␣')))
+
+        # Collect parallel-edge labels by (i, j)
+        by_pair = defaultdict(list)
+        for i in self.states:
+            for a, j in self.arcs(i):
+                lbl = html.escape(str(a))
+                by_pair[(str(f(i)), str(f(j)))].append(lbl)
+
+        # Emit one edge per (i, j) with stacked labels
+        for (u, v), labels in by_pair.items():
+            # Stack with literal newlines. Graphviz renders '\n' as a line break.
+            g.edge(u, v, label='\n'.join(sorted(labels)))
 
         return g
 
@@ -130,20 +134,23 @@ class FSA:
 
     def add(self, i, a, j):
         self.edges[i][a].add(j)
-        self.nodes.add(i); self.syms.add(a); self.nodes.add(j)
+        self.states.add(i); self.syms.add(a); self.states.add(j)
         return self
 
     add_arc = add
 
     def add_start(self, i):
         self.start.add(i)
-        self.nodes.add(i)
+        self.states.add(i)
         return self
 
     def add_stop(self, i):
         self.stop.add(i)
-        self.nodes.add(i)
+        self.states.add(i)
         return self
+
+    def is_final(self, i):
+        return i in self.stop
 
     def arcs(self, i=None, a=None):
         if i is None and a is None:
@@ -178,7 +185,7 @@ class FSA:
         return m
 
     def _accessible(self, start):
-        return dfs(start, self.arcs).nodes
+        return dfs(start, self.arcs).states
 
     def accessible(self):
         return self._accessible(self.start)
@@ -214,7 +221,7 @@ class FSA:
         f = Integerizer()
         self = self.rename(lambda i: f((0, i)))
         other = other.rename(lambda i: f((1, i)))
-        assert self.nodes.isdisjoint(other.nodes)
+        assert self.states.isdisjoint(other.states)
         return (self, other)
 
     def __mul__(self, other):
@@ -260,7 +267,7 @@ class FSA:
         return one + self.p()
 
 #    def L(self, s):
-#        assert s in self.nodes
+#        assert s in self.states
 #        return dfs({s}, self.arcs)
 
     @lru_cache(None)
@@ -306,7 +313,7 @@ class FSA:
 
         m = dfs([frozenset(self.start)], powerarcs)
 
-        for powerstate in m.nodes:
+        for powerstate in m.states:
             if powerstate & self.stop:
                 m.add_stop(powerstate)
 
@@ -346,7 +353,7 @@ class FSA:
             inv[j,a].add(i)
 
         final = self.stop
-        nonfinal = self.nodes - final
+        nonfinal = self.states - final
 
         P = [final, nonfinal]
         W = [final, nonfinal]
@@ -385,7 +392,7 @@ class FSA:
             inv[j,a].add(i)
 
         final = self.stop
-        nonfinal = self.nodes - final
+        nonfinal = self.states - final
 
         P = [final, nonfinal]
         W = [final, nonfinal]
@@ -448,7 +455,7 @@ class FSA:
 
         # Two minimized DFAs are input
         # If the number of states is differs, these machines cannot be isomorphic
-        if len(self.nodes) != len(other.nodes): return False
+        if len(self.states) != len(other.states): return False
         if len(self.start) == 0: return len(other.start) == 0
 
         assert len(self.start) == 1 and len(other.start) == 1
@@ -495,15 +502,15 @@ class FSA:
 #        from semirings.regex import Symbol
 #        from semirings.kleene import kleene
 #
-#        n = len(self.nodes)
+#        n = len(self.states)
 #
 #        A = np.full((n,n), Symbol.zero)
 #        start = np.full(n, Symbol.zero)
 #        stop = np.full(n, Symbol.zero)
 #
-#        ix = Integerizer(list(self.nodes))
+#        ix = Integerizer(list(self.states))
 #
-#        for i in self.nodes:
+#        for i in self.states:
 #            for a, j in self.arcs(i):
 #                if a == eps:
 #                    A[ix(i),ix(j)] += Symbol.one
@@ -547,11 +554,11 @@ class FSA:
 
         self = self.renumber()
 
-        sink = len(self.nodes)
+        sink = len(self.states)
         for a in syms:
             self.add(sink, a, sink)
 
-        for q in self.nodes:
+        for q in self.states:
             if q == sink: continue
             for a in syms - set(self.edges[q]):
                 if a == eps: continue  # ignore epsilon
@@ -575,14 +582,14 @@ class FSA:
 
         m = FSA()
 
-        for i in self.nodes:
+        for i in self.states:
             for a, j in self.arcs(i):
                 m.add(i, a, j)
 
         for q in self.start:
             m.add_start(q)
 
-        for q in self.nodes - self.stop:
+        for q in self.states - self.stop:
             m.add_stop(q)
 
         return m
@@ -607,12 +614,12 @@ class FSA:
 
         # If we have managed to reach a final state of q2 then we can move into
         # the post-prefix set of states
-        for (q1,q2) in set(m.nodes):
+        for (q1,q2) in set(m.states):
             if q2 in other.stop:
                 m.add((q1, q2), eps, (q1,))
 
         # business as usual
-        for q1 in self.nodes:
+        for q1 in self.states:
             for a, j1 in self.arcs(q1):
                 m.add((q1,), a, (j1,))
         for q1 in self.stop:
@@ -690,11 +697,10 @@ class FSA:
         u.add_stop(0)
         return u
 
-    
+
 EPSILON = eps = ''
 
 FSA.one = one = FSA()
 one.add_start(0); one.add_stop(0)
 
 FSA.zero = zero = FSA()
-
