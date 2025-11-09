@@ -113,7 +113,7 @@ class BuggyLazyRecursive(AbstractAlgorithm):
         return any((s in self.fst.F) for (s, ys) in self.frontier(xs)
                    if ys.startswith(target))
 
-    # XXX: technically, this state depends on the target `y`
+    # XXX: technically, this state depends on the `target` as it was used for filtering.
     @memoize
     def frontier(self, xs):
         """This method is primarily for debugging.  It rReturns the state of
@@ -131,10 +131,9 @@ class BuggyLazyRecursive(AbstractAlgorithm):
         else:
             return self.next_frontier(self.frontier(xs[:-1]), xs[-1])
 
+    # XXX: these are the arcs of the "lazy frontier machine"
     def next_frontier(self, frontier, source_symbol):
-        """
-        Transitions in the augmented-powerstate construction.
-        """
+        "Transitions in the augmented-powerstate construction."
         assert source_symbol != EPSILON
         next_frontier = set()
         for s, ys in frontier:
@@ -207,15 +206,13 @@ class LazyRecursive(BuggyLazyRecursive):
             # the composition machine that we used in the new lazy, nonrecursive
             # algorithm.
             N = len(target)
-            frontier = {
-                (i, ys[:N]) for i, ys in frontier
-            }
             return frozenset({
-                (i, ys) for i, ys in frontier
-                if ys.startswith(target)
+                (i, ys[:N]) for i, ys in frontier
+                if ys[:N].startswith(target)
             })
 
-        # XXX: same as `candidates` method
+        # XXX: same as `candidates` method, except that it generates a
+        # source_symbol---extended_string pair.
         def arcs(xs):
             for source_symbol in self.source_alphabet:
                 next_xs = self.extend(xs, source_symbol)
@@ -232,14 +229,8 @@ class LazyRecursive(BuggyLazyRecursive):
 
         visited = {refine(self.frontier(xs))}
 
-        steps = 0
         while worklist:
             i = worklist.pop()
-
-            steps += 1
-            if steps >= 50: return False
-
-            #print('checking:', repr(i), self.frontier(i))
 
             # All-final check in the DFA view
             if not is_final(i):

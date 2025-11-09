@@ -23,8 +23,13 @@ class Precover:
         self.U = FSA.universal(self.source_alphabet)
 
     @cached_property
-    def dfa(self):
+    def det(self):
         "DFA representing the complete precover."
+        return self.fsa.det()
+
+    @cached_property
+    def min(self):
+        "Minimal DFA representing the complete precover."
         return self.fsa.min()
 
     @cached_property
@@ -45,7 +50,7 @@ class Precover:
     def decomposition(self):
         # make sure that the DFA is minimizd so that we can use the simple
         # self-loop-elimination strategy on universal state to get the quotient.
-        P = self.dfa.min()
+        P = self.min
 
         # identify all universal states
         universal_states = {i for i in P.states if is_universal(P, i, self.source_alphabet)}
@@ -80,15 +85,15 @@ class Precover:
 
     def _repr_mimebundle_(self, *args, **kwargs):
         "For visualization purposes in notebook."
-        return self.dfa._repr_mimebundle_(*args, **kwargs)
+        return self.min._repr_mimebundle_(*args, **kwargs)
 
     def is_cylinder(self, xs):
         "Is the source string `xs` a cylinder of the precover?"
-        return FSA.from_string(xs) * self.U <= self.dfa
+        return FSA.from_string(xs) * self.U <= self.min
 
     def is_valid(self, Q, R):
         "Is the decompositions (Q, R) valid?"
-        return self.dfa.equal(FSA.from_strings(Q) * self.U + FSA.from_strings(R))
+        return self.min.equal(FSA.from_strings(Q) * self.U + FSA.from_strings(R))
 
     def find_cylinder_prefixes(self, xs):
         "Find all strict prefixes that are cylinders of the precover."
@@ -120,7 +125,7 @@ class Precover:
                 ok &= False
         if len(R): print('├─ remainder:')
         for xs in R:
-            z = (xs in self.dfa)
+            z = (xs in self.min)
             zz = not self.is_cylinder(xs)
             print('├─', colors.mark(z & zz), repr(xs), 'in precover and not a cylinder')
             ok &= z
@@ -171,17 +176,17 @@ class EagerNonrecursive(AbstractAlgorithm):
         self.state[self.empty_source] = state
         yield self.empty_source
 
+    @memoize
+    def precover_dfa(self, target):
+        return Precover(self.fst, target).min
+
     def candidates(self, xs, target):
         dfa = self.precover_dfa(target)
         state = self.state[xs]
-        for source_symbol, next_state in dfa.arcs(state):   # DFA
+        for source_symbol, next_state in dfa.arcs(state):
             next_xs = self.extend(xs, source_symbol)
             self.state[next_xs] = next_state
             yield next_xs
-
-    @memoize
-    def precover_dfa(self, target):
-        return Precover(self.fst, target).dfa
 
     def discontinuity(self, xs, target):
         #assert not self.continuity(xs, target)
