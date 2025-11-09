@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import defaultdict, deque
 from functools import cached_property
 from itertools import zip_longest
 
@@ -17,13 +17,15 @@ from graphviz import Digraph
 
 
 class FST:
-    def __init__(self):
+    def __init__(self, start=(), stop=()):
         self.A = set()
         self.B = set()
         self.states = set()
         self.delta = defaultdict(lambda: defaultdict(set))
         self.I = set()
         self.F = set()
+        for i in start: self.add_I(i)
+        for i in stop: self.add_F(i)
 
     def __repr__(self):
         return f'{__class__.__name__}({len(self.states)} states)'
@@ -351,6 +353,20 @@ class FST:
         for i in fsa.F:
             fst.add_F(i)
         return fst
+
+    def paths(self):
+        "Enumerate paths in the FST using breadth-first order."
+        worklist = deque()
+        for i in self.I:
+            worklist.append((i,))
+        while worklist:
+            path = worklist.popleft()
+            i = path[-1]
+            if self.is_final(i):
+                yield path
+            for a, b, j in self.arcs(i):
+                worklist.append((*path, (a,b), j))
+        return m
 
 
 def epsilon_filter_fst(Sigma):

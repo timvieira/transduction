@@ -171,3 +171,7 @@ def format_table(rows, headings=None):
         f"{head_html}{body_html}"
         "</table>"
     )
+
+
+def display_table(rows, **kwargs):
+    display(HTML(format_table(rows, **kwargs)))

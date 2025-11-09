@@ -70,7 +70,7 @@ class FSA:
     def _repr_mimebundle_(self, *args, **kwargs):
         return self.graphviz()._repr_mimebundle_(*args, **kwargs)
 
-    def graphviz(self, fmt_node=lambda x: x, sty_node=lambda x: {}):
+    def graphviz(self, fmt_node=lambda x: x, sty_node=lambda x: {}, fmt_edge=lambda i,a,j: a):
         import html
         g = Digraph(
             graph_attr=dict(rankdir='LR'),
@@ -109,7 +109,7 @@ class FSA:
         by_pair = defaultdict(list)
         for i in self.states:
             for a, j in self.arcs(i):
-                lbl = html.escape(str(a))
+                lbl = html.escape(fmt_edge(i,a,j))
                 by_pair[(str(f(i)), str(f(j)))].append(lbl)
 
         # Emit one edge per (i, j) with stacked labels
