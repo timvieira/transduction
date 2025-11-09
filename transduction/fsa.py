@@ -26,11 +26,14 @@ class frozenset(_frozenset):
 
 class FSA:
 
-    def __init__(self):
-        self.start = set()
-        self.edges = defaultdict(lambda: defaultdict(set))
+    def __init__(self, start=(), stop=()):
         self.states = set()
+        self.start = set()
         self.stop = set()
+        # use the official methods for the constructor's initialization
+        for i in start: self.add_start(i)
+        for i in stop: self.add_stop(i)
+        self.edges = defaultdict(lambda: defaultdict(set))
         self.syms = set()
 
     def as_tuple(self):

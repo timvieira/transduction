@@ -20,6 +20,7 @@ class Precover:
         self.target = target
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
+        self.U = FSA.universal(self.source_alphabet)
 
     @cached_property
     def dfa(self):
@@ -44,36 +45,26 @@ class Precover:
     def decomposition(self):
         # make sure that the DFA is minimizd so that we can use the simple
         # self-loop-elimination strategy on universal state to get the quotient.
-        precover_dfa = self.dfa.min()
+        P = self.dfa.min()
 
         # identify all universal states
-        universal_states = {i for i in precover_dfa.states
-                            if is_universal(precover_dfa, i, self.source_alphabet)}
-        #print(universal_states)
+        universal_states = {i for i in P.states if is_universal(P, i, self.source_alphabet)}
         assert len(universal_states) <= 1
 
-        Q = FSA()
         # copy start states
-        for i in precover_dfa.start:
-            Q.add_start(i)
+        Q = FSA(start=P.start, stop=universal_states)           # replace accepting states with just universal states
+        R = FSA(start=P.start, stop=P.stop - universal_states)  # keep non-universal accepting states
         # copy all but self-arcs on the [minimized] universal states.
-        for i,a,j in precover_dfa.arcs():
-            # skip self-arcs
-            if i == j and i in universal_states: continue  # drop these
+        for i,a,j in P.arcs():
+            # skip self-arcs on the minimal universal states
+            if i == j and i in universal_states: continue  # drop these arcs!
             Q.add(i, a, j)
-        # replace accepting states; make universal states accepting
-        for i in universal_states:
-            Q.add_stop(i)
+            R.add(i, a, j)
         Q = Q.min()
+        R = R.min()
 
-        # XXX: There might be a simpler algorithm that returns the set of
-        # remainders by eliminating the universal states and keeping the other
-        # accepting states.
-
-        U = FSA.universal(self.source_alphabet)
-
-        # figure out the remainder by set subtraction (i.e., P - Q X = P & ~(Q X))
-        R = (precover_dfa - Q * U).min()
+        # Double-check the remainder through set subtraction (i.e., P - Q X = P & ~(Q X))
+        assert R.equal(P - Q * self.U)
 
         return (Q, R)
 
@@ -91,47 +82,52 @@ class Precover:
         "For visualization purposes in notebook."
         return self.dfa._repr_mimebundle_(*args, **kwargs)
 
+    def is_cylinder(self, xs):
+        "Is the source string `xs` a cylinder of the precover?"
+        return FSA.from_string(xs) * self.U <= self.dfa
+
+    def is_valid(self, Q, R):
+        "Is the decompositions (Q, R) valid?"
+        return self.dfa.equal(FSA.from_strings(Q) * self.U + FSA.from_strings(R))
+
+    def find_cylinder_prefixes(self, xs):
+        "Find all strict prefixes that are cylinders of the precover."
+        for t in range(len(xs)):
+            xss = xs[:t]
+            if self.is_cylinder(xss):
+                yield xss
+
     def check_decomposition(self, Q, R, throw=False):
         "Analyze the decompositions Q and R: is it valid? optimal?"
-        P = self.dfa
-
-        U = FSA.universal(self.source_alphabet)
-
         ok = True
-
-        # check validity
-        z = P.equal(FSA.from_strings(Q) * U + FSA.from_strings(R))
-
+        z = self.is_valid(Q, R)   # check validity of the decomposition
         ok &= z
         print('check decomposition:')
         print('├─ valid:', colors.mark(z), 'equal to precover')
         assert z
-
         if Q: print('├─ quotient:')
         for xs in Q:
-            z = FSA.from_string(xs) * U <= P
+            # Elements of the quotinet should all be cylinders
+            z = self.is_cylinder(xs)
             print('├─', colors.mark(z), repr(xs), 'is a valid cylinder')
             ok &= z
-
             # minimality -- if there is a strict prefix that is a cylinder of
             # the precover, then `xs` is not minimal.  in terms of the precover
             # automaton, `xs` leads to a universal state, but we want to make
             # sure that there wasn't an earlier time that it arrived there.
-            for t in range(len(xs)):
-                xss = xs[:t]
-                if FSA.from_string(xss) * U <= P:
-                    print('├─', colors.mark(False), repr(xs), 'is not minimal because its strict prefix', repr(xss), 'is a cylinder of the precover')
-                    ok &= False
-
+            for xss in self.find_cylinder_prefixes(xs):
+                print('├─', colors.mark(False), repr(xs), 'is not minimal because its strict prefix', repr(xss), 'is a cylinder of the precover')
+                ok &= False
         if len(R): print('├─ remainder:')
         for xs in R:
-            z = (xs in P)
-            zz = not (FSA.from_string(xs) * U <= P)
+            z = (xs in self.dfa)
+            zz = not self.is_cylinder(xs)
             print('├─', colors.mark(z & zz), repr(xs), 'in precover and not a cylinder')
             ok &= z
             ok &= zz
         print('└─ overall:', colors.mark(ok))
         assert not throw or ok
+        return ok
 
 
 def force_start(fsa, start_state):
