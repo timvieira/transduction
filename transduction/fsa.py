@@ -70,7 +70,7 @@ class FSA:
     def _repr_mimebundle_(self, *args, **kwargs):
         return self.graphviz()._repr_mimebundle_(*args, **kwargs)
 
-    def graphviz(self, fmt_node=lambda x: x, sty_node=lambda x: {}, fmt_edge=lambda i,a,j: a):
+    def graphviz(self, fmt_node=lambda x: x, sty_node=lambda x: {}, fmt_edge=lambda i,a,j: 'ε' if a == EPSILON else a):
         import html
         g = Digraph(
             graph_attr=dict(rankdir='LR'),
@@ -300,8 +300,6 @@ class FSA:
 
         for i in self.stop:
             m.add_stop(i)
-            for k in eps_accessible(i):
-                m.add_stop(k)
 
         return m
 
