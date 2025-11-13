@@ -111,14 +111,12 @@ class EpsilonRemove(Lazy):
 
     def start(self):
         for i in self.fsa.start():
-            for j in self._closure(i):
-                yield j
+            yield from self._closure(i)
 
     def is_final(self, i):
         return any(self.fsa.is_final(j) for j in self._closure(i))
 
     def arcs(self, i):
-        tmp = defaultdict(set)
         for a, j in self.fsa.arcs(i):
             if a == EPSILON: continue
             for k in self._closure(j):

@@ -36,6 +36,10 @@ class Precover:
     def fsa(self):
         "FSA representing the complete precover."
         # this is a copy machine for target \targetAlphabet^*
+        return (self.fst @ self.target_prefixes).project(0)
+
+    @cached_property
+    def target_prefixes(self):
         m = FST()
         m.add_I(0)
         N = len(self.target)
@@ -44,7 +48,7 @@ class Precover:
         for x in self.target_alphabet:
             m.add_arc(N, x, x, N)
         m.add_F(N)
-        return (self.fst @ m).project(0)
+        return m
 
     @cached_property
     def decomposition(self):
@@ -167,36 +171,28 @@ class EagerNonrecursive(AbstractAlgorithm):
         super().__init__(fst, **kwargs)
         # the variables below need to be used very carefully
         self.state = None
+        self.dfa = None
 
     def initialize(self, target):
         self.state = {}
-        dfa = self.precover_dfa(target)
-        if len(dfa.start) == 0: return    # empty!
-        [state] = dfa.start
+        self.dfa = Precover(self.fst, target).min
+        if len(self.dfa.start) == 0: return    # empty!
+        [state] = self.dfa.start
         self.state[self.empty_source] = state
         yield self.empty_source
 
-    @memoize
-    def precover_dfa(self, target):
-        return Precover(self.fst, target).min
-
     def candidates(self, xs, target):
-        dfa = self.precover_dfa(target)
-        state = self.state[xs]
-        for source_symbol, next_state in dfa.arcs(state):
+        for source_symbol, next_state in self.dfa.arcs(self.state[xs]):
             next_xs = self.extend(xs, source_symbol)
             self.state[next_xs] = next_state
             yield next_xs
 
     def discontinuity(self, xs, target):
-        #assert not self.continuity(xs, target)
-        return (self.state[xs] in self.precover_dfa(target).stop)
+        return self.dfa.is_final(self.state[xs])
 
     def continuity(self, xs, target):
         return self._continuity(target, self.state[xs])
 
     @memoize
     def _continuity(self, target, state):
-        dfa = self.precover_dfa(target)
-        assert state in dfa.states
-        return is_universal(dfa, state, self.source_alphabet)
+        return is_universal(self.dfa, state, self.source_alphabet)

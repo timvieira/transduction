@@ -42,15 +42,16 @@ class LazyPrecoverNFA(Lazy):
                     # we advance in the left machine, but stay in the right machine's final state (because we traverse a self-arc)
                     yield (a, (j, ys))
         else:
+            n = len(ys)
             # TODO: it would be nice if this iteration were filtered more efficiently
             for a,b,j in self.f.arcs(i):
                 if b == EPSILON:
                     # we don't advance in the right machine because we didn't actually match anything
                     yield (a, (j, ys))
-                elif b == self.target[len(ys)]:
+                elif b == self.target[n]:
                     # advance in both the left and the right machine along this new edge.
                     # note that we input-project, so we drop the output symbol (i.e., the output is an FSA not an FST)
-                    yield (a, (j, self.target[:1+len(ys)]))
+                    yield (a, (j, self.target[:n+1]))
 
     def start(self):
         for i in self.f.I:
@@ -74,14 +75,12 @@ class LazyNonrecursive(AbstractAlgorithm):
         self.dfa = None
 
     def initialize(self, target):
-        # initialize empty string's state
         self.state = {}
         self.nfa = LazyPrecoverNFA(self.fst, target)
         self.dfa = self.nfa.det()
-        if len(list(self.dfa.start())) == 0: return    # empty!
-        [state] = self.dfa.start()
-        self.state[self.empty_source] = state
-        yield self.empty_source
+        for state in self.dfa.start():
+            self.state[self.empty_source] = state
+            yield self.empty_source
 
     def candidates(self, xs, target): # pylint: disable=W0613
         for source_symbol, next_state in self.dfa.arcs(self.state[xs]):
@@ -89,8 +88,7 @@ class LazyNonrecursive(AbstractAlgorithm):
             self.state[next_xs] = next_state
             yield next_xs
 
-    def discontinuity(self, xs, target):  # pylint: disable=W0613
-        #assert not self.continuity(xs, target)
+    def discontinuity(self, xs, target):
         return self.dfa.is_final(self.state[xs])
 
     def continuity(self, xs, target):

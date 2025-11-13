@@ -1,19 +1,11 @@
 from transduction.base import AbstractAlgorithm, EPSILON, PrecoverDecomp
+from transduction.lazy import Lazy
 from transduction.fst import FST, EPSILON
 from transduction.eager_nonrecursive import EagerNonrecursive
 from transduction.lazy_recursive import LazyRecursive
+from transduction.lazy_nonrecursive import LazyNonrecursive
 
 from arsenal import colors
-
-
-def get_string_from_state(state):
-    # the epsilon filtering trick does some annoying stuff with how states are
-    # named here we do a little guess work.
-    if isinstance(state, tuple):
-        _, ys = state
-    else:
-        ys = state
-    return ys
 
 
 class Peekaboo(AbstractAlgorithm):
@@ -55,12 +47,7 @@ class Peekaboo(AbstractAlgorithm):
                         count.add(ys[N])
                     #else:
                     #    print(colors.light.red % 'incomplete state:', repr(ys), 'in', self.state[xs])
-                assert len(count) == 1, f"""
-{count = }
-{xs = }
-{target = }
-state = {self.state[xs]}
-"""
+                assert len(count) == 1, f"""\n{count = }\n{xs = }\n{target = }\nstate = {self.state[xs]}\n"""
                 continue
             if self.discontinuity(xs, target):
                 for _, ys in self.state[xs]:
@@ -94,28 +81,6 @@ state = {self.state[xs]}
         return self.dfa.accepts_universal(self.state[xs], self.source_alphabet)
 
 
-#def PeekabooPrecover(fst, target):
-#    "FSA representing the complete precover."
-#    target_alphabet = fst.B - {EPSILON}
-#    # this is a copy machine for target \targetAlphabet^+
-#    m = FST()
-#    m.add_I(target[:0])
-#    N = len(target)
-#    for i in range(N):
-#        m.add_arc(target[:i], target[i], target[i], target[:i+1])
-#    for y in target_alphabet:
-#        m.add_arc(target, y, y, target + y)
-#        # XXX: we have separate final states for each target extension
-#        m.add_F(target + y)
-#        for yy in target_alphabet:
-#            m.add_arc(target + y, yy, yy, target + y)
-#    have = LazyPeekabooPrecover(fst, target).materialize()
-#    want = (fst @ m).project(0)   # this version does not bypass the epsilon filter
-#    assert have.equal(want)
-#    return want
-
-
-from transduction.lazy import Lazy
 class PeekabooPrecover(Lazy):
 
     def __init__(self, f, target):
@@ -153,6 +118,13 @@ class PeekabooPrecover(Lazy):
         return (i in self.f.F) and ys.startswith(self.target) and len(ys) == len(self.target) + 1
 
 
+
+#_______________________________________________________________________________
+# TESTING CODE BELOW
+
+from transduction import examples
+
+
 class recursive_testing:
     """
     Utility function for testing the `Peekaboo` method against a slower method.
@@ -162,6 +134,8 @@ class recursive_testing:
         self.depth = depth
         self.peekaboo = Peekaboo(fst)
         self.reference = LazyRecursive(fst)
+#        self.reference = LazyNonrecursive(fst)
+#        self.reference = EagerNonrecursive(fst)
         self.run(target, depth)
 
     def run(self, target, depth):
@@ -173,8 +147,6 @@ class recursive_testing:
             if want[y].quotient or want[y].remainder:   # nonempty
                 self.run(target + y, depth - 1)
 
-
-from transduction import examples
 
 def test_abc():
     fst = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c'), ('4', 'd'), ('5', 'e')])
