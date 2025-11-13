@@ -19,13 +19,22 @@ class BuggyLazyRecursive(AbstractAlgorithm):
     def __init__(self, fst, empty_target = '', **kwargs):
         super().__init__(fst, **kwargs)
         self.empty_target = empty_target
+        self.cache = {}
 
     def initialize(self, target):
         pass   # does nothing.
 
     # Note: this version overrides the base because it is recursive;
     # TODO: make a base class for abstract *recursive* algorithms!
+
     def __call__(self, y):
+        val = self.cache.get(y)
+        if val is None:
+            val = self.compute(y)
+            self.cache[y] = val
+        return val
+
+    def compute(self, y):
 
         N = len(y)
         if N == 0:
@@ -164,6 +173,11 @@ class BuggyLazyRecursive(AbstractAlgorithm):
         return self.is_universal(frozenset(s for (s, ys) in self.frontier(xs)
                                            if ys.startswith(target)))
 
+    # TODO: using lazy determinization with the search for acceptance and
+    # completeness of all downstream states is likely faster here, as we may find a
+    # counterexample more quickly than the full determinization + minimization
+    # pipeline.  That said, this method doesn't lead to a correct algorithm, so
+    # there is no use in speeding it up.
     @memoize
     def is_universal(self, S):
         """
@@ -172,7 +186,6 @@ class BuggyLazyRecursive(AbstractAlgorithm):
         S_fst = self.fst.spawn(keep_arcs=True, keep_stop=True)
         for q in S: S_fst.add_I(q)
         q_fsa = S_fst.project(0)
-        # use the unweighted FSA library instead
         q_dfa = q_fsa.min()
         if len(q_dfa.states) != 1:
             return False

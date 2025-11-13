@@ -24,10 +24,11 @@ class PrecoverDecomp:
     def __eq__(self, other):
         return tuple(other) == tuple(self)
 
-    # TODO: I would like to be able to convert back to an FSA for testing and inspection.
-    # Howedver, we don't currently have a reference to the source-string universe.
-    #def to_precover_fsa(self):
-    #    return FSA.from_strings(self.quotient) * U + FSA.from_strings(self.remainder)
+    def to_precover_fsa(self, source_alphabet):
+        return (
+            FSA.from_strings(self.quotient) * FSA.universal(source_alphabet)
+            + FSA.from_strings(self.remainder)
+        )
 
 
 class AbstractAlgorithm:

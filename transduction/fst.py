@@ -99,7 +99,7 @@ class FST:
 
     def graphviz(
         self,
-        fmt_node=lambda x: ' ',
+        fmt_node=lambda x: x,
         fmt_edge=lambda i, a, j: f'{str(a[0] or "ε")}:{str(a[1] or "ε")}' if a[0] != a[1] else str(a[0]),
         sty_node=lambda i: {},
     ):
@@ -136,13 +136,13 @@ class FST:
         for i in self.states:
             sty = dict(peripheries='2' if i in self.F else '1')
             sty.update(sty_node(i))
-            g.node(str(f(i)), label=str(fmt_node(i)), **sty)
+            g.node(str(f(i)), label=html.escape(str(fmt_node(i))), **sty)
 
         # Collect parallel-edge labels by (i, j)
         by_pair = defaultdict(list)
         for i in self.states:
             for a, b, j in self.arcs(i):
-                lbl = fmt_edge(i, (a, b), j)
+                lbl = html.escape(str(fmt_edge(i, (a, b), j)))
                 by_pair[(str(f(i)), str(f(j)))].append(lbl)
 
         # Emit one edge per (i, j) with stacked labels
@@ -247,7 +247,7 @@ class FST:
                 )  # this FST carefully combines the special epsilons
                 ._compose(
                     other._augment_epsilon_transitions(1)
-                )  # rename epsilons on th left
+                )  # rename epsilons on the left
             )
 
         else:
@@ -348,9 +348,9 @@ class FST:
         fst = cls()
         for i, a, j in fsa.arcs():
             fst.add_arc(i, a, a, j)
-        for i in fsa.I:
+        for i in fsa.start:
             fst.add_I(i)
-        for i in fsa.F:
+        for i in fsa.stop:
             fst.add_F(i)
         return fst
 

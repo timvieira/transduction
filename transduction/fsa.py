@@ -109,7 +109,7 @@ class FSA:
         by_pair = defaultdict(list)
         for i in self.states:
             for a, j in self.arcs(i):
-                lbl = html.escape(fmt_edge(i,a,j))
+                lbl = html.escape(str(fmt_edge(i,a,j)))
                 by_pair[(str(f(i)), str(f(j)))].append(lbl)
 
         # Emit one edge per (i, j) with stacked labels

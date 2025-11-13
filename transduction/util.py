@@ -157,7 +157,7 @@ def _as_html_cell(x):
 def format_table(rows, headings=None):
     head_html = ""
     if headings:
-        head_cells = "".join(f"<th>{_as_html_cell(h)}</th>" for h in headings)
+        head_cells = "".join(f"<th>{h}</th>" for h in headings)
         head_html = f"<thead><tr>{head_cells}</tr></thead>"
 
     body_rows = []

@@ -53,7 +53,7 @@ class Precover:
         P = self.min
 
         # identify all universal states
-        universal_states = {i for i in P.states if is_universal(P, i, self.source_alphabet)}
+        universal_states = {i for i in P.stop if is_universal(P, i, self.source_alphabet)}
         assert len(universal_states) <= 1
 
         # copy start states
@@ -61,14 +61,14 @@ class Precover:
         R = FSA(start=P.start, stop=P.stop - universal_states)  # keep non-universal accepting states
         # copy all but self-arcs on the [minimized] universal states.
         for i,a,j in P.arcs():
-            # skip self-arcs on the minimal universal states
-            if i == j and i in universal_states: continue  # drop these arcs!
+            # drop arcs leaving universal states
+            if i in universal_states: continue
             Q.add(i, a, j)
             R.add(i, a, j)
         Q = Q.min()
         R = R.min()
 
-        # Double-check the remainder through set subtraction (i.e., P - Q X = P & ~(Q X))
+        # Double-check the remainder through set subtraction
         assert R.equal(P - Q * self.U)
 
         return (Q, R)

@@ -1,5 +1,12 @@
-from collections import defaultdict
+from collections import defaultdict, deque
 from transduction.fsa import FSA, EPSILON
+
+
+_frozenset = frozenset
+class frozenset(_frozenset):
+    "Same as frozenset, but with a nicer printing method."
+    def __repr__(self):
+        return '{%s}' % (','.join(str(x) for x in self))
 
 
 class Lazy:
@@ -31,13 +38,13 @@ class Lazy:
     def materialize(self):
         "Materialized this automaton using a depth-first traversal from its initial states."
         m = FSA()
-        worklist = []
+        worklist = deque()
         visited = set()
         for i in self.start():
             worklist.append(i)
             m.add_start(i)
         while worklist:
-            i = worklist.pop()
+            i = worklist.popleft()
             if i in visited: continue
             visited.add(i)
             if self.is_final(i):
@@ -64,7 +71,7 @@ class Lazy:
         dfa = LazyDeterminize(self.start_at(state))
 
         visited = set()
-        worklist = []
+        worklist = deque()
 
         # DFA start state
         for i in dfa.start():
@@ -74,7 +81,7 @@ class Lazy:
         assert len(worklist) == 1
 
         while worklist:
-            i = worklist.pop()
+            i = worklist.popleft()
 
             # All-final check in the DFA view
             if not dfa.is_final(i):
@@ -107,7 +114,16 @@ class EpsilonRemove(Lazy):
             for j in self._closure(i):
                 yield j
 
-    # TODO: can memoize
+    def is_final(self, i):
+        return any(self.fsa.is_final(j) for j in self._closure(i))
+
+    def arcs(self, i):
+        tmp = defaultdict(set)
+        for a, j in self.fsa.arcs(i):
+            if a == EPSILON: continue
+            for k in self._closure(j):
+                yield a, k
+
     def _closure(self, i):
         pushed = {i}
         worklist = {i}
@@ -118,16 +134,6 @@ class EpsilonRemove(Lazy):
                 if a == EPSILON and j not in pushed:
                     worklist.add(j)
                     pushed.add(j)
-
-    def is_final(self, i):
-        return any(self.fsa.is_final(j) for j in self._closure(i))
-
-    def arcs(self, i):
-        tmp = defaultdict(set)
-        for a, j in self.fsa.arcs(i):
-            if a == EPSILON: continue
-            for k in self._closure(j):
-                yield a, k
 
 
 class LazyDeterminize(Lazy):
@@ -145,7 +151,6 @@ class LazyDeterminize(Lazy):
         tmp = defaultdict(set)
         for i in Q:
             for a, j in self.fsa.arcs(i):
-                assert a != EPSILON
                 tmp[a].add(j)
         for a, j in tmp.items():
             yield a, frozenset(j)

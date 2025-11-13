@@ -1,14 +1,11 @@
 from transduction import (
     PrecoverDecomp, LazyNonrecursive, BuggyLazyRecursive, LazyRecursive, LazyPrecoverNFA,
-    EagerNonrecursive
-)
-from transduction.examples import (
-    newspeak, duplicate, replace, sdd1_fst, samuel_example, number_comma_separator
+    EagerNonrecursive, examples
 )
 
 
 def test_sdd1():
-    fst = sdd1_fst()
+    fst = examples.sdd1_fst()
 
     tmp = BuggyLazyRecursive(fst)
     assert tmp('') == PrecoverDecomp({''}, set())    # this is a weird case and it differs from the other ones!
@@ -33,7 +30,7 @@ def test_sdd1():
 
 
 def test_simple():
-    fst = replace([('1', 'a'), ('2', 'b'), ('3', 'c'), ('4', 'd'), ('5', 'e')])
+    fst = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c'), ('4', 'd'), ('5', 'e')])
 
     tmp = LazyNonrecursive(fst)
     assert tmp('') == PrecoverDecomp({''}, set())
@@ -61,10 +58,9 @@ def test_simple():
 
 
 def test_lazy_precover_nfa():
-    c = LazyPrecoverNFA(
-        f = replace([('a', 'A'), ('b', 'B')]),
-        target = 'AB',
-    )
+    fst = examples.replace([('a', 'A'), ('b', 'B')])
+
+    c = LazyPrecoverNFA(fst, 'AB')
 
     assert set(c.arcs((0, ''))) == {('a', (0, 'A'))}
     assert set(c.arcs((0, 'A'))) == {('b', (0, 'AB'))}
@@ -76,7 +72,7 @@ def test_lazy_precover_nfa():
 
 
 def test_duplicate():
-    fst = duplicate(set('12345'))
+    fst = examples.duplicate(set('12345'))
 
     tmp = BuggyLazyRecursive(fst)
     assert tmp('') == PrecoverDecomp({''}, set())
@@ -109,7 +105,7 @@ def test_duplicate():
 
 def test_newspeak():
 
-    n = newspeak()
+    n = examples.newspeak()
 
     tmp = BuggyLazyRecursive(n, empty_source = b'', empty_target = b'', extend = lambda x, y: x + bytes([y]))
     assert tmp(b'bad') == PrecoverDecomp(set(), set())
@@ -153,7 +149,7 @@ def test_newspeak():
 
 
 def test_samuel_example():
-    fst = samuel_example()
+    fst = examples.samuel_example()
     target = 'c'
     tmp = LazyNonrecursive(fst)
     have = tmp(target)
@@ -186,7 +182,7 @@ def test_samuel_example():
 def test_number_comma_separator():
     import string
     digits = {str(i) for i in range(10)}
-    fst = number_comma_separator(set(string.printable) - set('\t\n\r\x0b\x0c'))
+    fst = examples.number_comma_separator(set(string.printable) - set('\t\n\r\x0b\x0c'))
 
     tmp = LazyNonrecursive(fst)
     assert tmp('1,| 2,| and 3') == ({'1, 2, and 3'}, set())
