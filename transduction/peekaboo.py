@@ -6,6 +6,7 @@ from transduction.lazy_recursive import LazyRecursive
 from transduction.lazy_nonrecursive import LazyNonrecursive
 
 from arsenal import colors
+from collections import deque
 
 
 class Peekaboo(AbstractAlgorithm):
@@ -24,18 +25,28 @@ class Peekaboo(AbstractAlgorithm):
 
     def __call__(self, target):
         precover = {y: PrecoverDecomp(set(), set()) for y in self.target_alphabet}
-        worklist = []
+        worklist = deque()
         for xs in self.initialize(target):
             worklist.append(xs)
         t = 0
         N = len(target)
         while worklist:
-            xs = worklist.pop()
+            xs = worklist.popleft()
             t += 1
             if t > self.max_steps:
                 print(colors.light.red % 'stopped early')
                 break
-            if self.continuity(xs, target):
+
+            # XXX: I think that both the continuity test and discontinuity test
+            # here are hacky.  We need to test that the relevant target-side
+            # strings that we encounter once they look "ripe" are ready for
+            # their tests.  Much like the recursive algorithm, it is best to
+            # view the peekaboo machine as a semi-automatan.  The universality
+            # test and---more fundamentally---the acceptance tests run can't be
+            # accurately translated
+            #
+
+            if self.continuity(xs, None):
                 # samuel pointed out that at most one of the target-side
                 # extensions can have `xs` in its quotient.  Given that the
                 # continuity test was true, we just need to figure out which
@@ -45,11 +56,11 @@ class Peekaboo(AbstractAlgorithm):
                     if len(ys) > N:
                         precover[ys[N]].quotient.add(xs)
                         count.add(ys[N])
-                    #else:
-                    #    print(colors.light.red % 'incomplete state:', repr(ys), 'in', self.state[xs])
-                assert len(count) == 1, f"""\n{count = }\n{xs = }\n{target = }\nstate = {self.state[xs]}\n"""
-                continue
-            if self.discontinuity(xs, target):
+                if len(count) == 1:
+                    continue
+                else:
+                    print(colors.light.yellow % 'NOTE', f"""\n{count = }\n{xs = }\n{target = }\nstate = {self.state[xs]}\n""")
+            if self.discontinuity(xs, None):
                 for _, ys in self.state[xs]:
                     if len(ys) > N:
                         precover[ys[N]].remainder.add(xs)

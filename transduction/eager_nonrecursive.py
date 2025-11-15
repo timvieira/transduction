@@ -41,13 +41,13 @@ class Precover:
     @cached_property
     def target_prefixes(self):
         m = FST()
-        m.add_I(0)
+        m.add_I(self.target[:0])
         N = len(self.target)
         for i in range(N):
-            m.add_arc(i, self.target[i], self.target[i], i+1)
+            m.add_arc(self.target[:i], self.target[i], self.target[i], self.target[:i+1])
         for x in self.target_alphabet:
-            m.add_arc(N, x, x, N)
-        m.add_F(N)
+            m.add_arc(self.target, x, x, self.target)
+        m.add_F(self.target)
         return m
 
     @cached_property

@@ -155,6 +155,8 @@ def togglecase():
     return T
 
 
+# TODO: dump the machine to python code and create it here so that `pynini` is
+# no longer a dependency.
 def newspeak():
     import pynini
 
@@ -205,3 +207,18 @@ def newspeak():
             m.add_arc(s, x, y, a.nextstate)
 
     return m
+
+
+def newspeak2():
+    "Same as `newspeak` except over `str` rather than `bytes`."
+    self = newspeak()
+    m = FST()
+    for i in self.I:
+        m.add_I(i)
+    for i in self.states:
+        for a, b, j in self.arcs(i):
+            m.add_arc(i, bytes([a]).decode() if a != EPSILON else EPSILON, bytes([b]).decode() if a != EPSILON else EPSILON, j)
+    for i in self.F:
+        m.add_F(i)
+    return m
+
