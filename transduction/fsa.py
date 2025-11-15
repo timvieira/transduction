@@ -1,5 +1,5 @@
 from arsenal import Integerizer, colors
-from collections import defaultdict
+from collections import defaultdict, deque
 from functools import lru_cache
 from graphviz import Digraph
 
@@ -26,15 +26,16 @@ class frozenset(_frozenset):
 
 class FSA:
 
-    def __init__(self, start=(), stop=()):
+    def __init__(self, start=(), arcs=(), stop=()):
         self.states = set()
         self.start = set()
         self.stop = set()
+        self.syms = set()
+        self.edges = defaultdict(lambda: defaultdict(set))
         # use the official methods for the constructor's initialization
         for i in start: self.add_start(i)
         for i in stop: self.add_stop(i)
-        self.edges = defaultdict(lambda: defaultdict(set))
-        self.syms = set()
+        for i,a,j in arcs: self.add_arc(i,a,j)
 
     def as_tuple(self):
         return (frozenset(self.states),
@@ -697,6 +698,19 @@ class FSA:
             u.add(0, a, 0)
         u.add_stop(0)
         return u
+
+    def language(self, max_length):
+        "Enumerate strings in the language of this FSA up to length `max_length`."
+        worklist = deque()
+        worklist.extend([(i, '') for i in self.start])
+        while worklist:
+            (i, x) = worklist.popleft()
+            if i in self.stop:
+                yield x
+            if len(x) >= max_length:
+                continue
+            for a, j in self.arcs(i):
+                worklist.append((j, x + a))
 
 
 EPSILON = eps = ''

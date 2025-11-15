@@ -17,7 +17,7 @@ from graphviz import Digraph
 
 
 class FST:
-    def __init__(self, start=(), stop=()):
+    def __init__(self, start=(), arcs=(), stop=()):
         self.A = set()
         self.B = set()
         self.states = set()
@@ -26,6 +26,7 @@ class FST:
         self.F = set()
         for i in start: self.add_I(i)
         for i in stop: self.add_F(i)
+        for i,a,b,j in arcs: self.add_arc(i,a,b,j)
 
     def __repr__(self):
         return f'{__class__.__name__}({len(self.states)} states)'
@@ -80,7 +81,6 @@ class FST:
         return self.rename(Integerizer())
 
     def spawn(self, *, keep_init=False, keep_arcs=False, keep_stop=False):
-        "Returns a new WFSA in the same semiring."
         m = self.__class__()
         if keep_init:
             for q in self.I:
