@@ -368,6 +368,19 @@ class FST:
                 worklist.append((*path, (a,b), j))
         return m
 
+    def relation(self, max_length):
+        "Enumerate string pairs in the relation of this FST up to length `max_length`."
+        worklist = deque()
+        worklist.extend([(i, '', '') for i in self.I])
+        while worklist:
+            (i, xs, ys) = worklist.popleft()
+            if self.is_final(i):
+                yield xs, ys
+            if len(xs) >= max_length or len(ys) >= max_length:
+                continue
+            for x, y, j in self.arcs(i):
+                worklist.append((j, xs + x, ys + y))
+
 
 def epsilon_filter_fst(Sigma):
     """
