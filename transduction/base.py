@@ -1,5 +1,6 @@
 from transduction.fst import EPSILON
 from arsenal import colors
+from collections import deque
 
 
 class PrecoverDecomp:
@@ -43,12 +44,12 @@ class AbstractAlgorithm:
 
     def __call__(self, target):
         precover = PrecoverDecomp(set(), set())
-        worklist = []
+        worklist = deque()
         for xs in self.initialize(target):
             worklist.append(xs)
         t = 0
         while worklist:
-            xs = worklist.pop()
+            xs = worklist.popleft()
             t += 1
             if t > self.max_steps:
                 print(colors.light.red % 'stopped early')
