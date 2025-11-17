@@ -16,17 +16,28 @@ from graphviz import Digraph
 ε_2 = f'{EPSILON}₂'
 
 
+eps = EPSILON
+
+
 class FST:
     def __init__(self, start=(), arcs=(), stop=()):
         self.A = set()
         self.B = set()
         self.states = set()
-        self.delta = defaultdict(lambda: defaultdict(set))
+        self.delta = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
         self.I = set()
         self.F = set()
         for i in start: self.add_I(i)
         for i in stop: self.add_F(i)
         for i,a,b,j in arcs: self.add_arc(i,a,b,j)
+
+    @property
+    def start(self):
+        return self.I
+
+    @property
+    def stop(self):
+        return self.F
 
     def __repr__(self):
         return f'{__class__.__name__}({len(self.states)} states)'
@@ -41,13 +52,24 @@ class FST:
         output.append('}')
         return '\n'.join(output)
 
+    # TODO: test this method
+    def dump(self):
+        print('m = FST()')
+        for i in self.start:
+            print(f'm.add_start({i!r})')
+        for i in self.stop:
+            print(f'm.add_stop({i!r})')
+        for i in self.states:
+            for x, y, j in self.arcs(i):
+                print(f'm.add_arc({i!r}, {x!r}, {y!r}, {j!r})')
+
     def is_final(self, i):
         return i in self.F
 
     def add_arc(self, i, a, b, j):  # pylint: disable=arguments-renamed
         self.states.add(i)
         self.states.add(j)
-        self.delta[i][(a,b)].add(j)   # TODO: change this data structure to separarate a and b.
+        self.delta[i][a][b].add(j)   # TODO: change this data structure to separarate a and b.
         self.A.add(a)
         self.B.add(b)
 
@@ -59,10 +81,21 @@ class FST:
         self.states.add(q)
         self.F.add(q)
 
-    def arcs(self, i):
-        for (a, b), T in self.delta[i].items():
-            for j in T:
-                yield a, b, j
+    # aliases
+    add_start = add_I
+    add_stop = add_F
+
+    def arcs(self, i, x=None):
+        if x is None:
+            for a, A in self.delta[i].items():
+                for b, B in A.items():
+                    for j in B:
+                        yield a, b, j
+        else:
+            A = self.delta[i][x]
+            for b, B in A.items():
+                for j in B:
+                    yield b, j
 
     def rename(self, f):
         "Note: If `f` is not bijective, states may merge."
@@ -380,6 +413,111 @@ class FST:
                 continue
             for x, y, j in self.arcs(i):
                 worklist.append((j, xs + x, ys + y))
+
+    def trim(self):
+        """
+        Return a new FST containing only the states and arcs lying on
+        some start → stop path.
+        """
+
+        trimmed_states = self.reachable() & self.coreachable()
+
+        # ---- collect arcs within trimmed states ----
+        trimmed = FST(
+            start=self.start & trimmed_states,
+            stop=self.stop & trimmed_states,
+        )
+        for q in trimmed_states:
+            for x, y, dst in self.arcs(q):
+                if dst in trimmed_states:
+                    trimmed.add_arc(q, x, y, dst)
+
+        return trimmed
+
+    # TODO: we can tighten up the code for reachable and coreachable
+    # (e.g., no need to materialize `adj`).
+    def reachable(self):
+        reachable = set()
+        dq = deque(self.start)
+        while dq:
+            s = dq.popleft()
+            if s in reachable:
+                continue
+            reachable.add(s)
+            for _,_,t in self.arcs(s):
+                if t not in reachable:
+                    dq.append(t)
+        return reachable
+
+    # TODO: should we just use `self.reverse().reachable()`?
+    def coreachable(self):
+        radj = defaultdict(set)
+        for q in self.states:
+            for _, _, dst in self.arcs(q):
+                radj[dst].add(q)
+        coreachable = set()
+        dq = deque(self.stop)
+        while dq:
+            s = dq.popleft()
+            if s in coreachable:
+                continue
+            coreachable.add(s)
+            for t in radj[s]:
+                if t not in coreachable:
+                    dq.append(t)
+        return coreachable
+
+    #___________________________________________________________________________
+    #
+
+    def strongly_connected_components(self):
+        """
+        Return list of SCCs, each a list of states.
+        """
+
+        # Build adjacency
+        adj = defaultdict(list)
+        for q in self.states:
+            for _, _, dst in self.arcs(q):
+                adj[q].append(dst)
+
+        index = {}
+        lowlink = {}
+        stack = []
+        on_stack = set()
+        current_index = [0]
+        sccs = []
+
+        def strongconnect(v):
+            index[v] = current_index[0]
+            lowlink[v] = current_index[0]
+            current_index[0] += 1
+
+            stack.append(v)
+            on_stack.add(v)
+
+            for w in adj.get(v, ()):
+                if w not in index:
+                    strongconnect(w)
+                    lowlink[v] = min(lowlink[v], lowlink[w])
+                elif w in on_stack:
+                    lowlink[v] = min(lowlink[v], index[w])
+
+            if lowlink[v] == index[v]:
+                comp = []
+                while True:
+                    w = stack.pop()
+                    on_stack.remove(w)
+                    comp.append(w)
+                    if w == v:
+                        break
+                sccs.append(comp)
+
+        for v in self.states:
+            if v not in index:
+                strongconnect(v)
+
+        return sccs
 
 
 def epsilon_filter_fst(Sigma):
