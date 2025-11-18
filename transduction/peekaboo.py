@@ -46,26 +46,29 @@ class Peekaboo(AbstractAlgorithm):
             # accurately translated
             #
 
-            if self.continuity(xs, None):
-                # samuel pointed out that at most one of the target-side
-                # extensions can have `xs` in its quotient.  Given that the
-                # continuity test was true, we just need to figure out which
-                # target-side extension is responsible for it!
-                count = set()
-                for _, ys in self.state[xs]:
-                    if len(ys) > N:
-                        precover[ys[N]].quotient.add(xs)
-                        count.add(ys[N])
-                if len(count) == 1:
-                    continue
-                else:
-                    print(colors.light.yellow % 'NOTE', f"""\n{count = }\n{xs = }\n{target = }\nstate = {self.state[xs]}\n""")
-            if self.discontinuity(xs, None):
-                for _, ys in self.state[xs]:
-                    if len(ys) > N:
-                        precover[ys[N]].remainder.add(xs)
-                    else:
-                        print(colors.light.red % 'incomplete state:', repr(ys), 'in', self.state[xs])
+            # get Y, the relvant symbols
+            relevant_symbols = set()
+            for _, ys in self.state[xs]:
+                if len(ys) > N:
+                    relevant_symbols.add(ys[N])
+
+            if not relevant_symbols: # Early exit
+                for next_xs in self.candidates(xs, target):
+                    worklist.append(next_xs)
+                continue
+
+            found_continuous = False
+            for y in relevant_symbols: # 
+                if self.continuity(xs, y):
+                    precover[y].quotient.add(xs)
+                    found_continuous = True
+                    break  # At most one can be continuous
+            if found_continuous:
+                continue # we have found a quotient and can skip      
+
+            for y in relevant_symbols:
+                if self.discontinuity(xs, y):
+                    precover[y].remainder.add(xs)            
             for next_xs in self.candidates(xs, target):
                 worklist.append(next_xs)
         return precover
@@ -85,11 +88,46 @@ class Peekaboo(AbstractAlgorithm):
             self.state[next_xs] = next_state
             yield next_xs
 
-    def discontinuity(self, xs, target):
-        return self.dfa.is_final(self.state[xs])
+    # def discontinuity(self, xs, target):
+    #     return self.dfa.is_final(self.state[xs])
 
-    def continuity(self, xs, target):
-        return self.dfa.accepts_universal(self.state[xs], self.source_alphabet)
+    # def continuity(self, xs, target):
+    #     return self.dfa.accepts_universal(self.state[xs], self.source_alphabet)
+
+    def discontinuity(self, xs, target_symbol):
+        # Filtered finality
+        dfa_filtered = FilteredDFA(self.dfa, self.nfa, target_symbol, len(self.nfa.target))
+        return dfa_filtered.is_final(self.state[xs])
+
+    def continuity(self, xs, target_symbol):
+        # Filtered finality
+        dfa_filtered = FilteredDFA(self.dfa, self.nfa, target_symbol, len(self.nfa.target))
+        return dfa_filtered.accepts_universal(self.state[xs], self.source_alphabet)
+
+
+class FilteredDFA(Lazy):
+    """filter a DFA's is_final to only accept states that emit specific target symbol."""
+    
+    def __init__(self, dfa, nfa, target_symbol, target_length):
+        self.dfa = dfa
+        self.nfa = nfa
+        self.target_symbol = target_symbol
+        self.N = target_length
+    
+    def start(self):
+        return self.dfa.start()
+    
+    def arcs(self, state):
+        return self.dfa.arcs(state)
+    
+    def is_final(self, state):
+        # filter NFA states with the target symbol
+        for nfa_state in state:
+            _, ys = nfa_state
+            if len(ys) == self.N + 1 and ys[self.N] == self.target_symbol:
+                if self.nfa.is_final(nfa_state):
+                    return True
+        return False
 
 
 class PeekabooPrecover(Lazy):
