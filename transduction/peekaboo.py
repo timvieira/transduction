@@ -6,7 +6,7 @@ from transduction.lazy_recursive import LazyRecursive
 from transduction.lazy_nonrecursive import LazyNonrecursive
 
 from arsenal import colors
-from collections import deque
+from collections import deque, defaultdict
 
 
 class Peekaboo(AbstractAlgorithm):
@@ -234,10 +234,28 @@ def test_number_comma_separator():
     recursive_testing(fst, '', depth=5)
 
 
-# TODO: needs support for `bytes`
-#def test_newspeak():
-#    fst = examples.newspeak()
-#    recursive_testing(fst, b'', depth=3)
+def test_newspeak2():
+    from transduction import Precover
+    m = examples.newspeak2()
+    p = Peekaboo(m, max_steps=500)
+    target = ''
+    have = p(target)
+    tmp = EagerNonrecursive(m)
+    want = {y: tmp(target + y) for y in tmp.target_alphabet}
+
+    #print('have=', have)
+    #print('want=', want)
+
+    for y in have | want:
+        if have.get(y) == want.get(y):
+            print(colors.mark(True), repr(y))
+        else:
+            print(colors.mark(False), repr(y))
+            print('  have=', have.get(y))
+            print('  want=', want.get(y))
+            #Precover(m, target + y).check_decomposition(*want[y], throw=True)
+            Precover(m, target + y).check_decomposition(*have[y], throw=False)
+    assert have == want
 
 
 if __name__ == '__main__':
