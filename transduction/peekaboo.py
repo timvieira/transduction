@@ -117,13 +117,14 @@ class recursive_testing:
     """
     Utility function for testing the `Peekaboo` method against a slower method.
     """
-    def __init__(self, fst, target, depth):
+    def __init__(self, fst, target, depth, verbosity=0):
         self.fst = fst
         self.depth = depth
         self.peekaboo = Peekaboo(fst)
         self.reference = LazyRecursive(fst)
 #        self.reference = LazyNonrecursive(fst)
 #        self.reference = EagerNonrecursive(fst)
+        self.verbosity = verbosity
         self.run(target, depth)
 
     def run(self, target, depth):
@@ -132,6 +133,7 @@ class recursive_testing:
         have = self.peekaboo(target)
         assert have == want, f"""\ntarget = {target!r}\nhave = {have}\nwant = {want}\n"""
         for y in want:
+            if self.verbosity > 0: print('>', repr(target + y))
             if want[y].quotient or want[y].remainder:   # nonempty
                 self.run(target + y, depth - 1)
 
@@ -209,6 +211,9 @@ def test_number_comma_separator():
     fst = examples.number_comma_separator({'a','b',',',' ','0','1'}, Digit={'0', '1'})
 
     recursive_testing(fst, '', depth=5)
+
+    recursive_testing(fst, '0,| 1,', depth=1, verbosity=1)
+    recursive_testing(fst, '0,| 1,|', depth=1, verbosity=1)
 
 
 def test_newspeak2():
