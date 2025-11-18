@@ -11,85 +11,67 @@ from collections import deque, defaultdict
 
 class Peekaboo(AbstractAlgorithm):
 
-    def __init__(self, fst, empty_source = '', extend = lambda x,y: x + y, max_steps=float('inf')):
+    def __init__(self, fst, max_steps=float('inf')):
         self.fst = fst
-        self.empty_source = empty_source
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
-        self.extend = extend
         self.max_steps = max_steps
-        # the variables below need to be used very carefully
-        self.state = None
-        self.dfa = None
-        self.nfa = None
 
     def __call__(self, target):
         precover = {y: PrecoverDecomp(set(), set()) for y in self.target_alphabet}
         worklist = deque()
-        for xs in self.initialize(target):
-            worklist.append(xs)
+
+        dfa = PeekabooPrecover(self.fst, target).det()
+        for state in dfa.start():
+            worklist.append(('', state))
+
         t = 0
         N = len(target)
         while worklist:
-            xs = worklist.popleft()
+            (xs, state) = worklist.popleft()
             t += 1
             if t > self.max_steps:
                 print(colors.light.red % 'stopped early')
                 break
 
-            # XXX: I think that both the continuity test and discontinuity test
-            # here are hacky.  We need to test that the relevant target-side
-            # strings that we encounter once they look "ripe" are ready for
-            # their tests.  Much like the recursive algorithm, it is best to
-            # view the peekaboo machine as a semi-automatan.  The universality
-            # test and---more fundamentally---the acceptance tests run can't be
-            # accurately translated
-            #
+            relevant_symbols = {ys[N] for _, ys in state if len(ys) > N}
 
-            if self.continuity(xs, None):
-                # samuel pointed out that at most one of the target-side
-                # extensions can have `xs` in its quotient.  Given that the
-                # continuity test was true, we just need to figure out which
-                # target-side extension is responsible for it!
-                count = set()
-                for _, ys in self.state[xs]:
-                    if len(ys) > N:
-                        precover[ys[N]].quotient.add(xs)
-                        count.add(ys[N])
-                if len(count) == 1:
-                    continue
-                else:
-                    print(colors.light.yellow % 'NOTE', f"""\n{count = }\n{xs = }\n{target = }\nstate = {self.state[xs]}\n""")
-            if self.discontinuity(xs, None):
-                for _, ys in self.state[xs]:
-                    if len(ys) > N:
-                        precover[ys[N]].remainder.add(xs)
-                    else:
-                        print(colors.light.red % 'incomplete state:', repr(ys), 'in', self.state[xs])
-            for next_xs in self.candidates(xs, target):
-                worklist.append(next_xs)
+            # Shortcut: At most one of the `relevant_symbols` can be
+            # continuous. If we find one, we can stop expanding.
+            continuous = set()
+            for y in relevant_symbols:
+                dfa_filtered = FilteredDFA(dfa=dfa, fst=self.fst, target=target + y)
+                if dfa_filtered.accepts_universal(state, self.source_alphabet):
+                    precover[y].quotient.add(xs)
+                    continuous.add(y)
+                elif dfa_filtered.is_final(state):
+                    precover[y].remainder.add(xs)
+            assert len(continuous) <= 1
+            if continuous:
+                continue    # we have found a quotient and can skip
+
+            for x, next_state in dfa.arcs(state):
+                worklist.append((xs + x, next_state))
+
         return precover
 
-    def initialize(self, target):
-        self.state = {}
-        self.nfa = PeekabooPrecover(self.fst, target)
-        self.dfa = self.nfa.det()#.trim()   # XXX: if we don't trim here, there will be a dead state that causes us to run forever!
-        for state in self.dfa.start():
-            self.state[self.empty_source] = state
-            yield self.empty_source
 
-    def candidates(self, xs, target):
-        state = self.state[xs]
-        for source_symbol, next_state in self.dfa.arcs(state):
-            next_xs = self.extend(xs, source_symbol)
-            self.state[next_xs] = next_state
-            yield next_xs
+class FilteredDFA(Lazy):
+    """filter a DFA's is_final to only accept states that emit specific target symbol."""
 
-    def discontinuity(self, xs, target):
-        return self.dfa.is_final(self.state[xs])
+    def __init__(self, *, dfa, fst, target):
+        self.dfa = dfa
+        self.fst = fst
+        self.target = target
 
-    def continuity(self, xs, target):
-        return self.dfa.accepts_universal(self.state[xs], self.source_alphabet)
+    def start(self):
+        return self.dfa.start()
+
+    def arcs(self, state):
+        return self.dfa.arcs(state)
+
+    def is_final(self, state):
+        return any(ys.startswith(self.target) and self.fst.is_final(i) for (i, ys) in state)
 
 
 class PeekabooPrecover(Lazy):
@@ -122,12 +104,7 @@ class PeekabooPrecover(Lazy):
 
     def start(self):
         for i in self.f.I:
-            yield (i, self.target[:0])
-
-    def is_final(self, state):
-        (i, ys) = state
-        return (i in self.f.F) and ys.startswith(self.target) and len(ys) == len(self.target) + 1
-
+            yield (i, '')
 
 
 #_______________________________________________________________________________
@@ -236,11 +213,11 @@ def test_number_comma_separator():
 
 def test_newspeak2():
     from transduction import Precover
-    m = examples.newspeak2()
-    p = Peekaboo(m, max_steps=500)
+    fst = examples.newspeak2()
+    p = Peekaboo(fst, max_steps=500)
     target = ''
     have = p(target)
-    tmp = EagerNonrecursive(m)
+    tmp = EagerNonrecursive(fst)
     want = {y: tmp(target + y) for y in tmp.target_alphabet}
 
     #print('have=', have)
@@ -253,9 +230,11 @@ def test_newspeak2():
             print(colors.mark(False), repr(y))
             print('  have=', have.get(y))
             print('  want=', want.get(y))
-            #Precover(m, target + y).check_decomposition(*want[y], throw=True)
-            Precover(m, target + y).check_decomposition(*have[y], throw=False)
+            #Precover(fst, target + y).check_decomposition(*want[y], throw=True)
+            Precover(fst, target + y).check_decomposition(*have[y], throw=False)
     assert have == want
+
+    #recursive_testing(fst, '', depth=5)
 
 
 if __name__ == '__main__':

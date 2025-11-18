@@ -87,8 +87,8 @@ class RecursiveDFADecomposition:
 
             print(colors.yellow % 'work', i)
 
-            if self.is_final(i):
-                if self.is_universal(i):
+            if self.is_final(i, target):
+                if self.is_universal(i, target):
                     self._stop_Q.add(i)
                     continue             # will not expand further
                 else:
@@ -111,34 +111,34 @@ class RecursiveDFADecomposition:
     def R(self):
         return FSA(start=self._start, arcs=self._arcs, stop=self._stop_R)
 
-    def is_final(self, frontier):
-        return any(ys.startswith(self.target) for i, ys in frontier if self.fst.is_final(i))
+    def is_final(self, frontier, target):
+        return any(ys.startswith(target) for i, ys in frontier if self.fst.is_final(i))
 
     def arcs(self, i):
         yield from self.dfa.arcs(i)
 
-    def refine(self, frontier):
+    def refine(self, frontier, target):
         # Clip the target string state variable to `target`, as this mimics the states of
         # the composition machine for the complete string `target`, we haven't limited it
         # to this point, which means that we have an infinite-state machine.
-        N = len(self.target)
+        N = len(target)
         return frozenset({
             (i, ys[:N]) for i, ys in frontier
-            if ys[:N].startswith(self.target)
+            if ys[:min(N, len(ys))] == target[:min(N, len(ys))]
         })
 
-    def is_universal(self, frontier):
+    def is_universal(self, frontier, target):
         worklist = []
         worklist.append(frontier)
-        visited = {self.refine(frontier)}
+        visited = {self.refine(frontier, target)}
         while worklist:
             i = worklist.pop()
-            if not self.is_final(i): return False
+            if not self.is_final(i, target): return False
             dest = dict(self.arcs(i))
             for a in self.source_alphabet:
                 if a not in dest: return False
                 j = dest[a]
-                jj = self.refine(j)
+                jj = self.refine(j, target)
                 if jj not in visited:
                     visited.add(jj)
                     worklist.append(j)
@@ -150,8 +150,9 @@ class RecursiveDFADecomposition:
     def __iter__(self):
         return iter([self.Q.trim(), self.R.trim()])
 
-    # TODO: I think we should store and visualize the machine over the same state space and just use different notations
-    # for each of the final state types.
+    # TODO: I think we should store and visualize the machine over the same
+    # state space and just use different notations for each of the final state
+    # types.
     def _repr_html_(self, *args, **kwargs):
         return format_table([self], headings=['quotient', 'remainder'])
 

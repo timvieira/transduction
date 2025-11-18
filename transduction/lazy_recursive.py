@@ -221,7 +221,7 @@ class LazyRecursive(BuggyLazyRecursive):
             N = len(target)
             return frozenset({
                 (i, ys[:N]) for i, ys in frontier
-                if ys[:N].startswith(target)
+                if ys[:min(N, len(ys))] == target[:min(N, len(ys))]
             })
 
         # XXX: same as `candidates` method, except that it generates a
