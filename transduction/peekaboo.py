@@ -1,7 +1,7 @@
 from transduction.base import AbstractAlgorithm, EPSILON, PrecoverDecomp
 from transduction.lazy import Lazy
 from transduction.fst import FST, EPSILON
-from transduction.eager_nonrecursive import EagerNonrecursive
+from transduction.eager_nonrecursive import EagerNonrecursive, Precover
 from transduction.lazy_recursive import LazyRecursive
 from transduction.lazy_nonrecursive import LazyNonrecursive
 
@@ -41,6 +41,10 @@ class Peekaboo(AbstractAlgorithm):
             continuous = set()
             for y in relevant_symbols:
                 dfa_filtered = FilteredDFA(dfa=dfa, fst=self.fst, target=target + y)
+
+                #assert dfa_filtered.materialize().equal(Precover(self.fst, target + y).min)
+                #print('ok:', repr(target + y))
+
                 if dfa_filtered.accepts_universal(state, self.source_alphabet):
                     precover[y].quotient.add(xs)
                     continuous.add(y)
@@ -56,8 +60,53 @@ class Peekaboo(AbstractAlgorithm):
         return precover
 
 
+class PeekabooPrecover(Lazy):
+    """NOTE: this is a semi-automaton as it does not have an `is_final` method.
+
+    It implements a state space that tracks the states of an FST `fst` along
+    with the target string they generate.  It prunes the state space to just the
+    states that are relevant to `target` followed by at least additional target
+    symbol.
+
+    """
+
+    def __init__(self, fst, target):
+        self.fst = fst
+        self.target = target
+
+    def arcs(self, state):
+        (i, ys) = state
+        n = len(ys)
+        N = len(self.target)
+        if ys == self.target and n >= N:
+            for x,y,j in self.fst.arcs(i):
+                if y == EPSILON:
+                    yield (x, (j, ys))
+                else:
+                    yield (x, (j, ys + y))
+
+        # Note: we truncate the buffer after the (N+1)th symbol
+        elif ys.startswith(self.target) and n == N + 1:
+            for a,b,j in self.fst.arcs(i):
+                yield (a, (j, ys))
+
+        elif self.target.startswith(ys) and n < N:
+            for x,y,j in self.fst.arcs(i):
+                if y == EPSILON:
+                    yield (x, (j, ys))
+                elif y == self.target[len(ys)]:
+                    yield (x, (j, ys + y))
+
+    def start(self):
+        for i in self.fst.I:
+            yield (i, '')
+
+
 class FilteredDFA(Lazy):
-    """filter a DFA's is_final to only accept states that emit specific target symbol."""
+    """NOTE: This class augments a determinized `PeekabooPrecover` semi-automaton by
+    adding an appropriate `is_final` method so that it is a valid finite-state
+    automaton that encodes `Precover(fst, target)`.
+    """
 
     def __init__(self, *, dfa, fst, target):
         self.dfa = dfa
@@ -72,39 +121,6 @@ class FilteredDFA(Lazy):
 
     def is_final(self, state):
         return any(ys.startswith(self.target) and self.fst.is_final(i) for (i, ys) in state)
-
-
-class PeekabooPrecover(Lazy):
-
-    def __init__(self, f, target):
-        self.f = f
-        self.target = target
-
-    def arcs(self, state):
-        (i, ys) = state
-        n = len(ys)
-        N = len(self.target)
-        if ys == self.target and n == N:
-            for x,y,j in self.f.arcs(i):
-                if y == EPSILON:
-                    yield (x, (j, ys))
-                else:
-                    yield (x, (j, ys + y))
-
-        elif ys.startswith(self.target) and n == N + 1:
-            for a,b,j in self.f.arcs(i):
-                yield (a, (j, ys))
-
-        elif self.target.startswith(ys) and n < N:
-            for x,y,j in self.f.arcs(i):
-                if y == EPSILON:
-                    yield (x, (j, ys))
-                elif y == self.target[len(ys)]:
-                    yield (x, (j, ys + y))
-
-    def start(self):
-        for i in self.f.I:
-            yield (i, '')
 
 
 #_______________________________________________________________________________
