@@ -1,6 +1,33 @@
 from transduction.fst import FST, EPSILON
 
 
+def infinite_quotient(alphabet=('a',), separators=('#',)):
+    fst = FST()
+
+    fst.add_I(0)
+
+    # From start (state 0)
+    for x in alphabet:
+        fst.add_arc(0, x, EPSILON, 0)
+
+    # Exit parity region
+    for x in separators:
+        fst.add_arc(0, x, EPSILON, 1)
+
+    # Absorbing region:
+    for x in alphabet:
+        fst.add_arc(1, x, EPSILON, 1)
+    for x in separators:
+        fst.add_arc(1, x, EPSILON, 1)
+
+    fst.add_arc(1, '', '1', 3)
+
+    fst.add_F(3)
+    fst.add_F(0)
+
+    return fst
+
+
 def samuel_example():
     sam = FST()
 
@@ -221,4 +248,3 @@ def newspeak2():
     for i in self.F:
         m.add_F(i)
     return m
-

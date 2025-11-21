@@ -41,10 +41,8 @@ class Peekaboo(AbstractAlgorithm):
             continuous = set()
             for y in relevant_symbols:
                 dfa_filtered = FilteredDFA(dfa=dfa, fst=self.fst, target=target + y)
-
                 #assert dfa_filtered.materialize().equal(Precover(self.fst, target + y).min)
                 #print('ok:', repr(target + y))
-
                 if dfa_filtered.accepts_universal(state, self.source_alphabet):
                     precover[y].quotient.add(xs)
                     continuous.add(y)
