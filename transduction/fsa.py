@@ -712,6 +712,57 @@ class FSA:
             for a, j in self.arcs(i):
                 worklist.append((j, x + a))
 
+    def strongly_connected_components(self):
+        """
+        Return list of SCCs, each a list of states.
+
+        TODO: Refactor to not duplicate from FST.
+        """
+
+        # Build adjacency
+        adj = defaultdict(list)
+        for q in self.states:
+            for _, dst in self.arcs(q):
+                adj[q].append(dst)
+
+        index = {}
+        lowlink = {}
+        stack = []
+        on_stack = set()
+        current_index = [0]
+        sccs = []
+
+        def strongconnect(v):
+            index[v] = current_index[0]
+            lowlink[v] = current_index[0]
+            current_index[0] += 1
+
+            stack.append(v)
+            on_stack.add(v)
+
+            for w in adj.get(v, ()):
+                if w not in index:
+                    strongconnect(w)
+                    lowlink[v] = min(lowlink[v], lowlink[w])
+                elif w in on_stack:
+                    lowlink[v] = min(lowlink[v], index[w])
+
+            if lowlink[v] == index[v]:
+                comp = []
+                while True:
+                    w = stack.pop()
+                    on_stack.remove(w)
+                    comp.append(w)
+                    if w == v:
+                        break
+                sccs.append(comp)
+
+        for v in self.states:
+            if v not in index:
+                strongconnect(v)
+
+        return sccs
+
 
 EPSILON = eps = ''
 
