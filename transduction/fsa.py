@@ -69,6 +69,8 @@ class FSA:
         return '\n'.join(x)
 
     def _repr_mimebundle_(self, *args, **kwargs):
+        if not self.states:
+            return {'image/svg+xml': '<center>∅</center>'}
         return self.graphviz()._repr_mimebundle_(*args, **kwargs)
 
     def graphviz(self, fmt_node=lambda x: x, sty_node=lambda x: {}, fmt_edge=lambda i,a,j: 'ε' if a == EPSILON else a):

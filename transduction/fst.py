@@ -128,6 +128,8 @@ class FST:
         return m
 
     def _repr_mimebundle_(self, *args, **kwargs):
+        if not self.states:
+            return {'image/svg+xml': '<center>∅</center>'}
         return self.graphviz()._repr_mimebundle_(*args, **kwargs)
 
     def graphviz(
@@ -136,9 +138,6 @@ class FST:
         fmt_edge=lambda i, a, j: f'{str(a[0] or "ε")}:{str(a[1] or "ε")}' if a[0] != a[1] else str(a[0]),
         sty_node=lambda i: {},
     ):
-        if len(self.states) == 0:
-            import warnings
-            warnings.warn('empty visualization')
 
         g = Digraph(
             graph_attr=dict(rankdir='LR'),

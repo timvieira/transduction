@@ -71,11 +71,11 @@ class Peekaboo:
         self.target_alphabet = fst.B - {EPSILON}
         self.max_steps = max_steps
 
-    def __call__(self, target):
+    def __call__(self, target, return_strings=True):
         precover = {y: PrecoverDecomp(set(), set()) for y in self.target_alphabet}
         worklist = deque()
         states = set()
-        
+
         dfa = PeekabooPrecover(self.fst, target).det()
         for state in dfa.start():
             worklist.append(state)
@@ -122,13 +122,18 @@ class Peekaboo:
             Q, R = precover[y]
             q = FSA(start=set(dfa.start()), arcs=arcs, stop=Q)
             r = FSA(start=set(dfa.start()), arcs=arcs, stop=R)
-            foo[y] = PrecoverDecomp(
-                set(q.min().language(float('inf'))),
-                set(r.min().language(float('inf'))),
-            )
+            if return_strings:
+                foo[y] = PrecoverDecomp(
+                    set(q.min().language(float('inf'))),
+                    set(r.min().language(float('inf'))),
+                )
+            else:
+                foo[y] = PrecoverDecomp(q.trim(), r.trim())
+
         return foo
 
 
+# TODO: in order to predict EOS, we need to extract the preimage from Q and R
 class PeekabooPrecover(Lazy):
     """NOTE: this is a semi-automaton as it does not have an `is_final` method.
 

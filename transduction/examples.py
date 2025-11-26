@@ -5,12 +5,13 @@ def infinite_quotient(alphabet=('a',), separators=('#',)):
     fst = FST()
 
     fst.add_I(0)
+    fst.add_F(0)
 
     # From start (state 0)
     for x in alphabet:
         fst.add_arc(0, x, EPSILON, 0)
 
-    # Exit parity region
+    # Exit first region after seeing the first separator
     for x in separators:
         fst.add_arc(0, x, EPSILON, 1)
 
@@ -20,10 +21,9 @@ def infinite_quotient(alphabet=('a',), separators=('#',)):
     for x in separators:
         fst.add_arc(1, x, EPSILON, 1)
 
-    fst.add_arc(1, '', '1', 3)
+    fst.add_arc(1, EPSILON, '1', 3)
 
     fst.add_F(3)
-    fst.add_F(0)
 
     return fst
 
