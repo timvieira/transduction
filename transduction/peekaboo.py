@@ -1,13 +1,13 @@
-from transduction.base import EPSILON, PrecoverDecomp
+from transduction.base import PrecoverDecomp
 from transduction.lazy import Lazy
 from transduction.fsa import FSA
 from transduction.fst import FST, EPSILON
-from transduction.eager_nonrecursive import EagerNonrecursive, Precover
+from transduction.eager_nonrecursive import EagerNonrecursive
 from transduction.lazy_recursive import LazyRecursive
-from transduction.lazy_nonrecursive import LazyNonrecursive
+#from transduction.lazy_nonrecursive import LazyNonrecursive
 
 from arsenal import colors
-from collections import deque, defaultdict
+from collections import deque
 
 
 # [2025-11-21 Fri] This version of the next symbold prediction algorithm

@@ -445,6 +445,8 @@ class FSA:
     min = lru_cache(None)(min_faster)
 
     def equal(self, other):
+        if isinstance(other, (frozenset, list, set, tuple)):
+            other = FSA.from_strings(other)
         return self.min()._dfa_isomorphism(other.min())
 
     def _dfa_isomorphism(self, other):
