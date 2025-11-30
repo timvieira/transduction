@@ -87,10 +87,6 @@ class Precover:
         "Optimal remainder automaton"
         return self.decomposition[1]
 
-    def _repr_mimebundle_(self, *args, **kwargs):
-        "For visualization purposes in notebook."
-        return self.min._repr_mimebundle_(*args, **kwargs)
-
     def is_cylinder(self, xs):
         "Is the source string `xs` a cylinder of the precover?"
         return FSA.from_string(xs) * self.U <= self.min
@@ -137,6 +133,22 @@ class Precover:
         print('└─ overall:', colors.mark(ok))
         assert not throw or ok
         return ok
+
+    def graphviz(self):
+        # XXX: this is not the most interpretable state space
+        dfa = self.det
+        universal_states = {i for i in dfa.stop if is_universal(dfa, i, self.source_alphabet)}
+        dead_states = dfa.states - dfa.trim().states
+        def color_node(x):
+            if x in universal_states: return '#E6F0E6'
+            elif dfa.is_final(x): return '#f26fec'
+            elif x in dead_states: return 'white'
+            else: return '#f2d66f'
+        return dfa.graphviz(fmt_node=set, sty_node=lambda x: {'style': 'filled,rounded', 'fillcolor': color_node(x)})
+
+    def _repr_mimebundle_(self, *args, **kwargs):
+        "For visualization purposes in notebook."
+        return self.graphviz()._repr_mimebundle_(*args, **kwargs)
 
 
 def force_start(fsa, start_state):
