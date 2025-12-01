@@ -1,6 +1,7 @@
 from transduction.base import AbstractAlgorithm
 from transduction.fst import FST, EPSILON
 from transduction.fsa import FSA
+from transduction.util import display_table
 
 from arsenal import colors
 from arsenal.cache import memoize
@@ -52,8 +53,6 @@ class Precover:
 
     @cached_property
     def decomposition(self):
-        # make sure that the DFA is minimizd so that we can use the simple
-        # self-loop-elimination strategy on universal state to get the quotient.
         P = self.min
 
         # identify all universal states
@@ -134,8 +133,10 @@ class Precover:
         assert not throw or ok
         return ok
 
+    def show_decomposition(self):
+        display_table([self.decomposition], headings=['quotient', 'remainder'])
+
     def graphviz(self):
-        # XXX: this is not the most interpretable state space
         dfa = self.det
         universal_states = {i for i in dfa.stop if is_universal(dfa, i, self.source_alphabet)}
         dead_states = dfa.states - dfa.trim().states
@@ -163,15 +164,9 @@ def force_start(fsa, start_state):
 
 
 def is_universal(fsa, q, alphabet):
-    # universality test; below we create the force-start machine
-    q_fsa = force_start(fsa, q).min()
-    if len(q_fsa.states) != 1:
-        return False
-    [i] = q_fsa.states
-    for a in alphabet:
-        if set(q_fsa.arcs(i, a)) != {i}:
-            return False
-    return True
+    # universality test; best used on a DFA
+    m = force_start(fsa, q).min()
+    return len(m.states) == 1 and all(set(m.arcs(i, a)) == {i} for i in m.states for a in alphabet)
 
 
 class EagerNonrecursive(AbstractAlgorithm):
