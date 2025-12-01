@@ -467,6 +467,50 @@ class FST:
                     dq.append(t)
         return coreachable
 
+    def transduce(self, xs):
+        outputs = set()
+        worklist = deque()
+
+        # start configurations: (state, input_pos, output_string)
+        for q in self.I:
+            worklist.append((q, 0, ""))
+
+        # visited to avoid infinite epsilon cycles
+        visited = set()
+
+        while worklist:
+            q, i, ys = worklist.popleft()
+
+            key = (q, i, ys)
+            if key in visited:
+                continue
+            visited.add(key)
+
+            # if we've consumed all input and are in a final state, record output
+            if i == len(xs) and q in self.F:
+                outputs.add(ys)
+
+            # try all outgoing arcs
+            for a, b, j in self.arcs(q):
+                # epsilon on input: don't consume a character
+                if a == EPSILON:
+                    new_i = i
+                else:
+                    # need matching input symbol
+                    if i >= len(xs) or a != xs[i]:
+                        continue
+                    new_i = i + 1
+
+                # append output symbol if not epsilon
+                if b == EPSILON:
+                    new_ys = ys
+                else:
+                    new_ys = ys + b
+
+                worklist.append((j, new_i, new_ys))
+
+        return outputs
+
     #___________________________________________________________________________
     #
 

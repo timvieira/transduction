@@ -19,6 +19,20 @@ def logsumexp(log_probs):
     return max_score + math.log(sum(math.exp(x - max_score) for x in log_probs))
 
 
+def extend_output(current_ys: str, output_sym: str) -> str:
+    if output_sym == EPSILON:
+        return current_ys
+    return current_ys + output_sym
+
+
+def is_compatible(ys: str, target_y: str) -> bool:
+    if len(ys) <= len(target_y):
+        return target_y.startswith(ys)
+    return ys.startswith(target_y)
+    
+
+
+
 
 def sample_from_log_probs(tokens, log_probs, log_Z):
     r = math.log(random.random()) + log_Z
@@ -62,9 +76,8 @@ class Particle:
     is_universal: bool = False
     is_complete: bool = False
 
-    @property
     def __str__(self):
-        return "".join(self.x)
+        return self.x
 
     @classmethod
     def initial(cls, start_states, fst, y):
@@ -91,7 +104,7 @@ class SMC:
     def __init__(self, fst, algo_class, tgt_str, lm, resample_threshold=0.7, num_particles=100, max_steps=50):
         self.fst = fst 
         self.algo = algo_class(fst, extend=lambda x, y: x + y)
-        self.particles = [Particle.initial(fst.I, fst, tgt_str)]
+        self.particles = [Particle.initial(fst.I, fst, tgt_str) for _ in range(num_particles)]
         self.lm = lm
         self.tgt_str = tgt_str
         self.num_particles = num_particles
@@ -166,15 +179,17 @@ class SMC:
 
             proposal_dist = self.get_proposal(raw_lm_dist, p)
             if not proposal_dist:
-                continue
-            elif not proposal_dist and p.is_complete:
-                # add the particle back
-                new_particles.append(p)
+                if p.is_complete:
+                    new_particles.append(p)
                 continue
 
-            # we know its a candidate
             sampled_token = self.sample(proposal_dist)
-            new_weight = p.weight + proposal_dist[sampled_token]
+
+            log_p = raw_lm_dist[sampled_token]
+            log_q = proposal_dist[sampled_token]
+
+            new_weight = p.weight + (log_p - log_q)
+
             new_x = self.algo.extend(p.x, sampled_token)            
             # This is more than just a path since it means
             # we check many paths at once.
@@ -198,7 +213,7 @@ class SMC:
             ))
 
         return new_particles
-        
+
     def resample_particles(self, resample_threshold):
         if not self.particles:
             return self.particles
@@ -206,30 +221,27 @@ class SMC:
         log_weights = [p.weight for p in self.particles]
         log_sum_w = logsumexp(log_weights)
         log_sum_sq_w = logsumexp([2 * w for w in log_weights])
-        
+
         log_ess = 2 * log_sum_w - log_sum_sq_w
         ess = math.exp(log_ess)
-        
-        N = len(self.particles)
-        
-        if ess >= resample_threshold * N:
+
+        N = self.num_particles
+
+        if ess >= resample_threshold * len(self.particles):
             return self.particles
-            
-        # sample new to duplicate
-        # todo: consider not uniform
-        # todo: consider old particles for backtracking
+
         max_w = max(log_weights)
         linear_weights = [math.exp(w - max_w) for w in log_weights]
-        
+
         selected_indices = random.choices(
-            population=range(N),
+            population=range(len(self.particles)),
             weights=linear_weights,
-            k=self.num_particles - N
+            k=N,
         )
-        
-        new_particles = []
+
         new_log_weight = log_sum_w - math.log(N)
-        
+        new_particles = []
+
         for idx in selected_indices:
             parent = self.particles[idx]
             new_particles.append(Particle(
@@ -237,9 +249,9 @@ class SMC:
                 states=parent.states,
                 weight=new_log_weight,
                 is_universal=parent.is_universal,
-                is_complete=parent.is_complete
+                is_complete=parent.is_complete,
             ))
-            
+
         return new_particles
     
     def __call__(self, resample_threshold=0.5):
@@ -261,20 +273,22 @@ class SMC:
         return self.particles
 
     def get_probs(self):
-        probs = 0.0
-        samp_cover = self()
-        for p in samp_cover:
-            if p.is_universal:
-                probs += score_sequence(p.x)
-            # todo, add eos and handle remainder
-        return probs
+        particles = self()
+        if not particles:
+            return float('-inf')
+
+        # Use all particles, or restrict to universal ones if that’s what γ encodes.
+        log_ws = [p.weight for p in particles if p.is_universal]
+        if not log_ws:
+            return float('-inf')
+
+        return logsumexp(log_ws) - math.log(len(log_ws))
 
     @classmethod
     def get_dist(cls, fst, algo, tgt_str, lm, nump):
         dist = {}
 
         for symbol in fst.B:
-            # todo, better extend
             ssmc = cls(fst, algo, tgt_str + symbol, lm, num_particles=nump)
             dist[symbol] = ssmc.get_probs()
 
