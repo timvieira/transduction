@@ -28,6 +28,17 @@ def infinite_quotient(alphabet=('a',), separators=('#',)):
     return fst
 
 
+def weird_copy():
+    m = FST()
+    m.add_start(0)
+    m.add_stop(0)
+    m.add_arc(0, 'b', 'b', 1)
+    m.add_arc(0, 'a', 'a', 2)
+    m.add_arc(1, '', '', 0)
+    m.add_arc(2, '', '', 0)
+    return m
+
+
 def samuel_example():
     sam = FST()
 
