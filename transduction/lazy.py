@@ -35,7 +35,7 @@ class Lazy:
     def epsremove(self):
         return EpsilonRemove(self)
 
-    def materialize(self):
+    def materialize(self, max_steps=float('inf')):
         "Materialized this automaton using a depth-first traversal from its initial states."
         m = FSA()
         worklist = deque()
@@ -49,6 +49,7 @@ class Lazy:
             visited.add(i)
             if self.is_final(i):
                 m.add_stop(i)
+            if len(visited) > max_steps: break
             for a, j in self.arcs(i):
                 worklist.append(j)
                 m.add(i,a,j)
