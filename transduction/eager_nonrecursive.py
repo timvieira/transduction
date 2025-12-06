@@ -1,4 +1,4 @@
-from transduction.base import AbstractAlgorithm
+from transduction.base import AbstractAlgorithm, PrecoverDecomp
 from transduction.fst import FST, EPSILON
 from transduction.fsa import FSA
 from transduction.util import display_table
@@ -74,7 +74,7 @@ class Precover:
         # Double-check the remainder through set subtraction
         assert R.equal(P - Q * self.U)
 
-        return (Q, R)
+        return PrecoverDecomp(Q, R)
 
     @cached_property
     def quotient(self):

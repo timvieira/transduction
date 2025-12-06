@@ -313,7 +313,7 @@ class FSA:
 
         def powerarcs(Q):
             for a in self.syms:
-                yield a, frozenset({j for i in Q for j in self.edges[i][a]})
+                yield a, frozenset(j for i in Q for j in self.edges[i][a])
 
         m = dfs([frozenset(self.start)], powerarcs)
 
