@@ -1,6 +1,6 @@
 from transduction.base import PrecoverDecomp
 from transduction.lazy import Lazy
-from transduction.fsa import FSA
+from transduction.fsa import FSA, frozenset
 from transduction.fst import FST, EPSILON
 from transduction.eager_nonrecursive import EagerNonrecursive
 from transduction.lazy_recursive import LazyRecursive
@@ -9,96 +9,174 @@ from transduction.lazy_recursive import LazyRecursive
 from arsenal import colors
 from collections import deque
 
+MAX_STEPS = float('inf')
+
 
 class Peekaboo:
     """
     Recursive, batched computation of next-target-symbol optimal DFA-decomposition.
     """
-
-    def __init__(self, fst, max_steps=float('inf')):
+    def __init__(self, fst):
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
-        self.max_steps = max_steps
-        self._cache = {}
 
     def __call__(self, target):
-        val = self._cache.get(target)
-        if val is None:
-            val = self._cache[target] = self.compute(target)
-        return val
+        s = PeekabooState(self.fst, '', parent=None)
 
-    def compute(self, target):
+        ARCS = [(i,x,j) for j, arcs in s._arcs.items() for x,i in arcs]
+        for x in target:
+            s >>= x
+            ARCS.extend((i,x,j) for j, arcs in s._arcs.items() for x,i in arcs)
+
+        foo = {}
+        for y in self.target_alphabet:
+            q = FSA(start=set(s.dfa.start()), arcs=ARCS, stop=s.foo[y].quotient)
+            r = FSA(start=set(s.dfa.start()), arcs=ARCS, stop=s.foo[y].remainder)
+            foo[y] = PrecoverDecomp(q, r)
+
+        return foo
+
+
+class PeekabooState:
+
+    def __init__(self, fst, target, parent):
+        self.fst = fst
+        self.source_alphabet = fst.A - {EPSILON}
+        self.target_alphabet = fst.B - {EPSILON}
+        self.target = target
+        self.parent = parent
+
+        assert parent is None or parent.target == target[:-1]
+
+        # Warning: The BufferedRelevance machine is not finite state!
+        #
+        # [2025-12-02 Tue] Possible issue: we could do an unbounded amount of
+        #   useless work by enumerating states in the buffered relevance machine
+        #   that are not on track to participate in any relevant target string's
+        #   precover.
+        #
+        # [2025-12-04 Thu] I think we ned to do something similar ot the
+        #   PeekabooPrecover construction so that we can only explore a finite
+        #   number of states and, thus, terminate in finite time.  The key to
+        #   this is going to be to either tweak the state space as in
+        #   PeekabooPrecover or to use something like we did with `refine`.  The
+        #   concert about the PeekabooPrecover strategy is that we might add
+        #   edges to the machine that need to be removed/ignored in the next
+        #   layer. (The picture that I have in my head is something like change
+        #   propagation where we have to invalidate some of the work that we
+        #   done under the assumption that the target string ended here.
+        #   Aesthetically and practically, I would rather not require invalidate
+        #   work.  There is some guiding principle that is lacking here and I
+        #   don't know how to think about it.)  Maybe the best way to move
+        #   forward with this is to make a few visualizations of what I expected
+        #   the layered structure to look like (e.g., by grafting a set of
+        #   correct machines for each next symbol together and seeing where
+        #   things diverge from from that idealization).
 
         dfa = BufferedRelevance(self.fst, target).det()
+#        dfa = PeekabooPrecover(self.fst, target).det()
+
+        self.dfa = dfa
 
         if len(target) == 0:
+            assert parent is None
             worklist = deque()
-            states = set()
-            arcs = []
 
+            self._arcs = {}
             for state in dfa.start():
                 worklist.append(state)
-                states.add(state)
+                self._arcs[state] = set()
 
         else:
 
-            parent = self(target[:-1])[target[-1]]
+            # select the relevant next symbol from the previous computation
+            p = parent.foo[target[-1]]
 
             # put previous and Q and R states on the worklist
             worklist = deque()
-            worklist.extend(parent.quotient.stop)
-            worklist.extend(parent.remainder.stop)
+            worklist.extend(p.quotient)
+            worklist.extend(p.remainder)
+            self._arcs = {} #parent._arcs.copy()
+            for x in worklist:
+                assert x in parent._arcs
+                self._arcs[x] = set()
 
-            # TODO: copying is slow
-            states = parent.quotient.states.copy()
-            arcs = [(i,x,j) for i in states for x, j in parent.quotient.arcs(i)]
-
+            #self._arcs.update(parent._arcs)
 
         precover = {y: PrecoverDecomp(set(), set()) for y in self.target_alphabet}
 
 
-        t = 0
+        def refine(frontier):
+            "For caching and cycle-detection, we truncate the state representation after N+1 target symbols."
+            #return frontier
+            return frozenset((i, ys[:N+1]) for i, ys in frontier)
+
+
         N = len(target)
+        t = 0
+        visited = set()
         while worklist:
             state = worklist.popleft()
             t += 1
-            if t > self.max_steps:
-                print(colors.light.red % 'stopped early')
+#            print(state)
+
+            if t >= MAX_STEPS:
+                print(colors.light.red % 'TOOK TOO LONG')
                 break
 
             relevant_symbols = {ys[N] for _, ys in state if len(ys) > N}
+#            print(f'{relevant_symbols=}')
 
             # Shortcut: At most one of the `relevant_symbols` can be
             # continuous. If we find one, we can stop expanding.
             continuous = set()
             for y in relevant_symbols:
+
+                # XXX: we may have already constructed this machine
                 dfa_truncated = TruncatedDFA(dfa=dfa, fst=self.fst, target=target + y)
-                #assert dfa_filtered.materialize().equal(Precover(self.fst, target + y).min)
-                #print('ok:', repr(target + y))
+
                 if dfa_truncated.accepts_universal(state, self.source_alphabet):
                     precover[y].quotient.add(state)
                     continuous.add(y)
+
                 elif dfa_truncated.is_final(state):
                     precover[y].remainder.add(state)
+
             assert len(continuous) <= 1
+#            print(f'{continuous=}')
             if continuous:
                 continue    # we have found a quotient and can skip
 
             for x, next_state in dfa.arcs(state):
-                if next_state not in states:
+
+                # [2025-12-05 Fri] A possible solution to the infinite running
+                # time is to do memoization/cycle detection on coarse grained
+                # nodes---much like we do the universality test.
+                r = refine(next_state)
+                if r not in visited:
                     worklist.append(next_state)
-                    states.add(next_state)
-                arcs.append((state, x, next_state))
 
-        foo = {y: PrecoverDecomp(set(), set()) for y in self.target_alphabet}
-        for y in precover:
-            Q, R = precover[y]
-            q = FSA(start=set(dfa.start()), arcs=arcs, stop=Q)
-            r = FSA(start=set(dfa.start()), arcs=arcs, stop=R)
-            foo[y] = PrecoverDecomp(q.trim(), r.trim())
+                if next_state not in self._arcs:
+                    self._arcs[next_state] = set()
 
-        return foo
+                self._arcs[next_state].add((x, state))
+
+                # [2025-12-02 Tue] unfortunately, these graphs aren't always
+                # cleanly layered; we can have arcs that go backward (e.g., when
+                # Q and R are cyclical) [TODO: add examples] We can also have
+                # empty layers (these are layers where the nodes are in previous
+                # layers - just imagine a case where Q(abc) = Q(ab)).
+
+                #p = parent
+                #while p is not None:
+                #    assert next_state not in p._arcs
+                #    p = p.parent
+
+        self.foo = precover
+
+    def __rshift__(self, y):
+        return PeekabooState(self.fst, self.target + y, parent=self)
 
 
 # TODO: in order to predict EOS, we need to extract the preimage from Q and R
@@ -112,9 +190,6 @@ class BufferedRelevance(Lazy):
 
     """
 
-    # TODO: this machine is not longer specific to the peekaboo construction it
-    # is just the target-side buffering construction with the target-relevance
-    # filter.
     def __init__(self, fst, target):
         self.fst = fst
         self.target = target
@@ -124,22 +199,94 @@ class BufferedRelevance(Lazy):
         n = len(ys)
         N = len(self.target)
         m = min(n, N)
-        if ys[:m] == self.target[:m]:
-            for x,y,j in self.fst.arcs(i):
-                if y == EPSILON:
-                    yield (x, (j, ys))
-                else:
-                    yield (x, (j, ys + y))
+        assert ys[:m] == self.target[:m]
+
+        for x,y,j in self.fst.arcs(i):
+            if y == EPSILON:
+                yield (x, (j, ys))
+            elif n >= N or y == self.target[n]:
+                yield (x, (j, ys + y))
+
+#        assert n <= N+1
+#        assert ys.startswith(self.target) or self.target.startswith(ys)
+#
+#        #if ys[:m] == self.target[:m]:
+#        for x,y,j in self.fst.arcs(i):
+#            if y == EPSILON:
+#                yield (x, (j, ys))
+#            ######################################################################
+#            # XXX: I think the crux is that we have to insert some temporary
+#            # arcs for the specific ply but then we might have to delete them
+#            # when we move on to the next ply.
+#            elif n > N:
+#                yield (x, (j, ys))
+#            ######################################################################
+#            elif n == N:
+#                yield (x, (j, ys + y))
+#            elif n < N:
+#                if y == self.target[n]:
+#                    yield (x, (j, ys + y))
 
     def start(self):
         for i in self.fst.I:
             yield (i, '')
 
 
+## TODO: in order to predict EOS, we need to extract the preimage from Q and R
+#class PeekabooPrecover(Lazy):
+#    """NOTE: this is a semi-automaton as it does not have an `is_final` method.
+#
+#    It implements a state space that tracks the states of an FST `fst` along
+#    with the target string they generate.  It prunes the state space to just the
+#    states that are relevant to `target` followed by at least additional target
+#    symbol.
+#
+#    """
+#
+#    def __init__(self, fst, target):
+#        self.fst = fst
+#        self.target = target
+#
+#    def arcs(self, state):
+#        (i, ys) = state
+#        n = len(ys)
+#        N = len(self.target)
+#        if ys == self.target and n >= N:
+#            for x,y,j in self.fst.arcs(i):
+#                if y == EPSILON:
+#                    yield (x, (j, ys))
+#                else:
+#                    yield (x, (j, ys + y))
+#
+#        # Note: we truncate the buffer after the (N+1)th symbol
+#        # XXX: In the recursive algorithm, we would not do this!
+#        elif ys.startswith(self.target) and n == N + 1:
+#            for a,b,j in self.fst.arcs(i):
+#                yield (a, (j, ys))
+#
+#        elif self.target.startswith(ys) and n < N:
+#            for x,y,j in self.fst.arcs(i):
+#                if y == EPSILON:
+#                    yield (x, (j, ys))
+#                elif y == self.target[len(ys)]:
+#                    yield (x, (j, ys + y))
+#
+#    def start(self):
+#        for i in self.fst.I:
+#            yield (i, '')
+
+
 class TruncatedDFA(Lazy):
     """NOTE: This class augments a determinized `PeekabooPrecover` semi-automaton by
     adding an appropriate `is_final` method so that it is a valid finite-state
     automaton that encodes `Precover(fst, target)`.
+
+
+    # In other words, for all `target` strings:
+    # dfa_truncated = TruncatedDFA(dfa=dfa, fst=self.fst, target=target)
+    # assert dfa_filtered.materialize().equal(Precover(self.fst, target).dfa)
+
+
     """
 
     def __init__(self, *, dfa, fst, target):
@@ -155,10 +302,10 @@ class TruncatedDFA(Lazy):
         # composition machine that we used in the new lazy, nonrecursive
         # algorithm.
         N = len(self.target)
-        return frozenset({
+        return frozenset(
             (i, ys[:N]) for i, ys in frontier
             if ys[:min(N, len(ys))] == self.target[:min(N, len(ys))]
-        })
+        )
 
     def arcs(self, state):
         for x, next_state in self.dfa.arcs(state):
@@ -288,7 +435,7 @@ def test_number_comma_separator():
 def test_newspeak2():
     from transduction import Precover
     fst = examples.newspeak2()
-    p = Peekaboo(fst, max_steps=500)
+    p = Peekaboo(fst)
     target = ''
     have = p(target)
     tmp = EagerNonrecursive(fst)
@@ -311,6 +458,14 @@ def test_newspeak2():
 #    assert have == want
 
     #recursive_testing(fst, '', depth=5)
+
+
+def test_benchmark():
+    fst = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c'), ('4', 'd'), ('5', 'e')])
+
+    tmp = Peekaboo(fst)
+    tmp('a'*1000)
+
 
 
 if __name__ == '__main__':
