@@ -9,17 +9,17 @@ from transduction.lazy_recursive import LazyRecursive
 from arsenal import colors
 from collections import deque
 
-MAX_STEPS = float('inf')
 
 
 class Peekaboo:
     """
     Recursive, batched computation of next-target-symbol optimal DFA-decomposition.
     """
-    def __init__(self, fst):
+    def __init__(self, fst, max_steps=float('inf')):
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
+        self.max_steps = max_steps
 
     def __call__(self, target):
         s = PeekabooState(self.fst, '', parent=None)
@@ -37,15 +37,123 @@ class Peekaboo:
 
         return foo
 
+    def graphviz(self, target):
+        from graphviz import Digraph
+
+        # TODO: [2025-12-06 Sat] The funny thing about this picture is that the
+        # plates are technical for the wrong target string.  specifically, they are
+        # the precover of the next-target symbol extension of the target target
+        # context thus, we have in each plate the *union* of the precovers
+
+        # TODO: use the integerizer here so that nodes are not improperly
+        # equated with thier string representations.
+        from arsenal import Integerizer
+        m = Integerizer()
+
+        def helper(target, outer):
+            print(repr(target))
+            with outer.subgraph(name="cluster") as inner:
+                inner.attr(label=target,
+                           style='rounded, filled', color='black', fillcolor='#e0ffe0')
+
+                if target == '':
+                    curr = PeekabooState(self.fst, '', parent=None, max_steps=self.max_steps)
+
+                    for j, arcs in curr._arcs.items():
+                        for x,i in arcs:
+                            #inner.node(str(i))
+                            #inner.node(str(j))
+                            inner.edge(str(i), str(j), label=x)
+
+                else:
+
+                    prev = helper(target[:-1], inner)
+
+                    curr = prev >> target[-1]
+                    #ARCS.append([(i,x,j) for j, arcs in curr._arcs.items() for x,i in arcs])
+
+                    for j, arcs in curr._arcs.items():
+                        for x,i in arcs:
+                            #inner.node(str(i))
+                            inner.edge(str(i), str(j), label=x)
+
+                for y in curr.foo:
+                    tmp = curr.foo[y]
+                    for j in tmp.quotient:
+                        inner.node(str(j), fillcolor='red')
+                    for j in tmp.remainder:
+                        inner.node(str(j), fillcolor='magenta')
+
+                return curr
+
+        dot = Digraph(
+            graph_attr=dict(rankdir='LR'),
+            node_attr=dict(
+                fontname='Monospace',
+                fontsize='8',
+                height='.05',
+                width='.05',
+                margin="0.055,0.042",
+                shape='box',
+                style='rounded, filled',
+            ),
+            edge_attr=dict(
+                arrowsize='0.3',
+                fontname='Monospace',
+                fontsize='8'
+            ),
+        )
+
+        with dot.subgraph(name='outer') as outer:
+            helper(target, outer)
+
+        return dot
+
+    def check(self, target):
+        from transduction import Precover, display_table
+        from transduction.dfa_decomp import RecursiveDFADecomposition
+        from IPython.display import HTML
+
+        Have = self(target)
+
+        for y in self.target_alphabet:
+
+            #want = Precover(self.fst, target + y).decomposition
+            want = RecursiveDFADecomposition(self.fst, target + y)
+            have = Have[y]
+
+            q_ok = have.quotient.equal(want.quotient)
+            r_ok = have.remainder.equal(want.remainder)
+
+            if q_ok and r_ok:
+                print(colors.mark(True), 'sym:', repr(y))
+            else:
+                print(colors.mark(False), 'sym:', repr(y), 'q:', colors.mark(q_ok), 'r:', colors.mark(r_ok))
+
+                #display_table([
+                #    ['quotient', have.quotient.min(), want.quotient.min()],
+                #    ['remainder', have.remainder.min(), want.remainder.min()],
+                #], headings=['', 'have', 'want'])
+
+                display_table([
+                    [HTML('<b>quotient</b>'), have.quotient, want.quotient],
+                    [HTML('<b>remainder</b>'), have.remainder, want.remainder],
+                ], headings=['', 'have', 'want'])
+
 
 class PeekabooState:
 
-    def __init__(self, fst, target, parent):
+    def __init__(self, fst, target, parent, max_steps=float('inf')):
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
         self.target = target
         self.parent = parent
+
+        if self.parent is not None:
+            self.max_steps = min(self.parent.max_steps, max_steps)
+        else:
+            self.max_steps = max_steps
 
         assert parent is None or parent.target == target[:-1]
 
@@ -113,20 +221,28 @@ class PeekabooState:
             return frozenset((i, ys[:N+1]) for i, ys in frontier)
 
 
+        def state_relevant_symbols(state):
+            return {ys[N] for _, ys in state if len(ys) > N}
+
+        def debug(*args): pass
+        #debug = print
+
+        verbosity = 0
         N = len(target)
         t = 0
         visited = set()
         while worklist:
             state = worklist.popleft()
             t += 1
-#            print(state)
+            debug()
+            debug(colors.cyan % 'work:', state)
 
-            if t >= MAX_STEPS:
+            if t >= self.max_steps:
                 print(colors.light.red % 'TOOK TOO LONG')
                 break
 
-            relevant_symbols = {ys[N] for _, ys in state if len(ys) > N}
-#            print(f'{relevant_symbols=}')
+            relevant_symbols = state_relevant_symbols(state)
+            debug(f'  {relevant_symbols=}')
 
             # Shortcut: At most one of the `relevant_symbols` can be
             # continuous. If we find one, we can stop expanding.
@@ -137,14 +253,19 @@ class PeekabooState:
                 dfa_truncated = TruncatedDFA(dfa=dfa, fst=self.fst, target=target + y)
 
                 if dfa_truncated.accepts_universal(state, self.source_alphabet):
+                    debug('  universal for', repr(y))
                     precover[y].quotient.add(state)
                     continuous.add(y)
 
                 elif dfa_truncated.is_final(state):
+                    debug('  accepting for', repr(y))
                     precover[y].remainder.add(state)
 
+                else:
+                    debug('  pass on', repr(y))
+
             assert len(continuous) <= 1
-#            print(f'{continuous=}')
+            #debug(f'{continuous=}')
             if continuous:
                 continue    # we have found a quotient and can skip
 
@@ -154,8 +275,18 @@ class PeekabooState:
                 # time is to do memoization/cycle detection on coarse grained
                 # nodes---much like we do the universality test.
                 r = refine(next_state)
+                #debug('  relevant:', state_relevant_symbols(r))
                 if r not in visited:
                     worklist.append(next_state)
+                    visited.add(r)
+                    debug('  pushed', next_state)
+                else:
+                    debug('  already visited')
+                    if r != next_state:
+                        debug('    fine:  ', next_state)
+                        debug('    coarse:', r)
+                    else:
+                        debug('    exact match')
 
                 if next_state not in self._arcs:
                     self._arcs[next_state] = set()

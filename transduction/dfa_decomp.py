@@ -85,7 +85,7 @@ class RecursiveDFADecomposition:
         while worklist:
             i = worklist.pop()
 
-            print(colors.yellow % 'work', i)
+            #print(colors.yellow % 'work', i)
 
             if self.is_final(i, target):
                 if self.is_universal(i, target):
@@ -102,6 +102,15 @@ class RecursiveDFADecomposition:
 
         #assert len(worklist) == 0
         #assert Q.states == R.states == visited
+
+    # TODO: better to rename Q -> quotient and R -> remainder for consistency.
+    @property
+    def quotient(self):
+        return self.Q
+
+    @property
+    def remainder(self):
+        return self.R
 
     @property
     def Q(self):

@@ -251,6 +251,31 @@ class FST:
             A.add_stop(i)
         return A
 
+    # TODO: this function needs testing
+    def make_total(self, marker):
+        "If `self` is a partial function, this method will make it total by extending the range with a failure `marker`."
+        assert marker not in self.B
+
+        d = (self @ FSA.from_strings(self.B - {EPSILON}).star().min()).project(0)
+        other = d.invert(self.A - {EPSILON}).min()
+
+        # TODO: this is not guaranteed to be renamed apart
+        def gensym(i): return ('other', i)
+        m = self.spawn(keep_arcs=True, keep_init=True, keep_stop=True)
+
+        # copy arcs from `other` such that they read the same symbol, but now
+        # emit the empty string.  However, at the end of we generate a `marker`
+        # symbol and terminate.
+        for i in other.start:
+            m.add_I(gensym(i))
+        for i,a,j in other.arcs():
+            m.add_arc(gensym(i), a, EPSILON, gensym(j))
+        for j in other.stop:
+            m.add_arc(gensym(j), EPSILON, marker, gensym(None))
+        m.add_F(gensym(None))
+
+        return m
+
     @cached_property
     def T(self):
         "transpose swap left <-> right"
