@@ -53,7 +53,8 @@ class Precover:
 
     @cached_property
     def decomposition(self):
-        P = self.min
+        #P = self.min
+        P = self.det
 
         # identify all universal states
         universal_states = {i for i in P.stop if is_universal(P, i, self.source_alphabet)}
@@ -68,8 +69,8 @@ class Precover:
             if i in universal_states: continue
             Q.add(i, a, j)
             R.add(i, a, j)
-        Q = Q.min()
-        R = R.min()
+        #Q = Q.min()
+        #R = R.min()
 
         # Double-check the remainder through set subtraction
         assert R.equal(P - Q * self.U)
@@ -133,8 +134,15 @@ class Precover:
         assert not throw or ok
         return ok
 
-    def show_decomposition(self):
-        display_table([self.decomposition], headings=['quotient', 'remainder'])
+    def show_decomposition(self, minimize=True, trim=True):
+        Q,R = self.decomposition
+        if minimize:
+            Q = Q.min()
+            R = R.min()
+        if trim:
+            Q = Q.trim()
+            R = R.trim()
+        display_table([[Q, R]], headings=['quotient', 'remainder'])
 
     def graphviz(self):
         dfa = self.det
