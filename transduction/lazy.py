@@ -1,12 +1,5 @@
 from collections import defaultdict, deque
-from transduction.fsa import FSA, EPSILON
-
-
-_frozenset = frozenset
-class frozenset(_frozenset):
-    "Same as frozenset, but with a nicer printing method."
-    def __repr__(self):
-        return '{%s}' % (','.join(str(x) for x in self))
+from transduction.fsa import FSA, EPSILON, frozenset
 
 
 class Lazy:
