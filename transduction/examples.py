@@ -39,6 +39,63 @@ def weird_copy():
     return m
 
 
+def small():
+    fst = FST()
+    fst.add_I(0)
+    fst.add_F(0)
+
+    fst.add_arc(0, 'a', 'x', 1)
+    fst.add_arc(0, 'b', 'x', 2)
+
+    fst.add_arc(2, 'a', 'a', 3)
+    fst.add_arc(2, 'b', 'b', 3)
+
+    fst.add_arc(3, 'a', 'a', 3)
+    fst.add_arc(3, 'b', 'b', 3)
+
+    fst.add_F(1)
+    fst.add_F(3)
+    return fst
+
+
+def lookahead():
+    fst = FST()
+    fst.add_I(0)
+    fst.add_F(0)
+
+    fst.add_arc(0, 'a', '', 1)
+    fst.add_arc(1, 'a', 'x', 11)
+    fst.add_arc(11, 'a', 'x', 111)
+
+    fst.add_arc(0, 'b', 'x', 2)
+
+    fst.add_arc(2, 'a', 'a', 3)
+    fst.add_arc(2, 'b', 'b', 3)
+
+    fst.add_arc(3, 'a', 'a', 4)
+    fst.add_arc(3, 'b', 'b', 4)
+
+    fst.add_arc(4, 'a', 'a', 4)
+    fst.add_arc(4, 'b', 'b', 4)
+
+    fst.add_F(111)
+    fst.add_F(4)
+    return fst
+
+
+def triplets_of_doom():
+    m = FST()
+    m.add_start(0)
+    m.add_stop(0)
+    m.add_arc(0, 'a', 'a', 1)
+    m.add_arc(0, 'b', 'b', 2)
+    m.add_arc(1, 'a', 'a', 3)
+    m.add_arc(2, 'b', 'b', 4)
+    m.add_arc(3, 'a', 'a', 0)
+    m.add_arc(4, 'b', 'b', 0)
+    return m
+
+
 def samuel_example():
     sam = FST()
 

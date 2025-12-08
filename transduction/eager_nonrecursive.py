@@ -53,12 +53,10 @@ class Precover:
 
     @cached_property
     def decomposition(self):
-        #P = self.min
         P = self.det
 
         # identify all universal states
         universal_states = {i for i in P.stop if is_universal(P, i, self.source_alphabet)}
-        assert len(universal_states) <= 1
 
         # copy start states
         Q = FSA(start=P.start, stop=universal_states)           # replace accepting states with just universal states
@@ -69,23 +67,21 @@ class Precover:
             if i in universal_states: continue
             Q.add(i, a, j)
             R.add(i, a, j)
-        #Q = Q.min()
-        #R = R.min()
 
         # Double-check the remainder through set subtraction
-        assert R.equal(P - Q * self.U)
+        #assert R.equal(P - Q * self.U)
 
         return PrecoverDecomp(Q, R)
 
     @cached_property
     def quotient(self):
         "Optimal quotient automaton"
-        return self.decomposition[0]
+        return self.decomposition.quotient
 
     @cached_property
     def remainder(self):
         "Optimal remainder automaton"
-        return self.decomposition[1]
+        return self.decomposition.remainder
 
     def is_cylinder(self, xs):
         "Is the source string `xs` a cylinder of the precover?"

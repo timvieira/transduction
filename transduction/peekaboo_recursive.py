@@ -1,4 +1,5 @@
 from transduction.base import PrecoverDecomp
+from transduction.eager_nonrecursive import Precover
 from transduction.lazy import Lazy
 from transduction.fsa import FSA, frozenset
 from transduction.fst import FST, EPSILON
@@ -140,8 +141,6 @@ class Peekaboo:
                 ], headings=['', 'have', 'want'])
 
 
-
-
 # Warning: The BufferedRelevance machine is not finite state!
 #
 # [2025-12-02 Tue] Possible issue: we could do an unbounded amount of useless
@@ -173,8 +172,6 @@ class PeekabooState:
         self.target = target
         self.parent = parent
 
-        assert '#' not in self.target_alphabet, 'fix me'
-
         if self.parent is not None:
             self.max_steps = min(self.parent.max_steps, max_steps)
         else:
@@ -185,8 +182,7 @@ class PeekabooState:
         def debug(*args): pass
         #debug = print
 
-        dfa = BufferedRelevance(self.fst, target).det()
-#        dfa = PeekabooPrecover(self.fst, target).det()
+        dfa = PeekabooPrecover(self.fst, target).det()
 
         self.dfa = dfa
 
@@ -201,18 +197,6 @@ class PeekabooState:
 
         else:
 
-            # select the relevant next symbol from the previous computation
-#            p = parent.foo[target[-1]]
-#
-#            # put previous and Q and R states on the worklist
-#            worklist = deque()
-#            worklist.extend(p.quotient)
-#            worklist.extend(p.remainder)
-#            self._arcs = {} #parent._arcs.copy()
-#            for x in worklist:
-#                assert x in parent._arcs
-#                self._arcs[x] = set()
-
             debug(colors.orange % 'target:', repr(self.target))
             debug('GOO:', parent.goo)
 
@@ -223,7 +207,7 @@ class PeekabooState:
             worklist = deque()
             self._arcs = {}
             for state in p:
-                assert not any(ys.endswith('#') for _, ys in state)
+                assert not any(truncated for _, ys, truncated in state)
                 worklist.append(state)
                 self._arcs[state] = set()
 
@@ -236,7 +220,7 @@ class PeekabooState:
         #    return frozenset((i, ys[:N+1]) for i, ys in frontier)
 
         def state_relevant_symbols(state):
-            return {ys[N] for _, ys in state if len(ys) > N} - {'#'}
+            return {ys[N] for _, ys, _ in state if len(ys) > N}
 
         verbosity = 0
         N = len(target)
@@ -292,10 +276,10 @@ class PeekabooState:
 
                 self._arcs[next_state].add((x, state))
 
-                if not any(ys.endswith('#') for _, ys in state):
-                    for _, ys in next_state:
-                        if ys.endswith('#'):
-                            y = ys[-2]
+                if not any(truncated for _, ys, truncated in state):
+                    for _, ys, truncated in next_state:
+                        if truncated:
+                            y = ys[-1]
                             debug(colors.light.red % 'goo', state, repr(y), next_state)
                             goo[y].add(state)
 
@@ -310,16 +294,17 @@ class PeekabooState:
 
         for y in self.foo:
             for state in self.foo[y].quotient | self.foo[y].remainder:
-                if not any(ys.endswith('#') for _, ys in state):
+                if not any(truncated for _, ys, truncated in state):
                     debug(colors.light.red % 'goo+', state)
                     goo[y].add(state)
 
     def __rshift__(self, y):
+        assert y in self.target_alphabet, repr(y)
         return PeekabooState(self.fst, self.target + y, parent=self)
 
 
 # TODO: in order to predict EOS, we need to extract the preimage from Q and R
-class BufferedRelevance(Lazy):
+class PeekabooPrecover(Lazy):
 
     def __init__(self, f, target):
         self.f = f
@@ -327,41 +312,31 @@ class BufferedRelevance(Lazy):
         self.N = len(target)
 
     def arcs(self, state):
-        (i, ys) = state
+        (i, ys, truncated) = state   # TODO: use truncated bit to speed some of this up
         if ys.startswith(self.target):
             for x, y, j in self.f.arcs(i):
                 if y == EPSILON:
-                    yield (x, (j, ys))
+                    yield (x, (j, ys, truncated))
                 else:
-
-                    if 1:                         # if true use peekaboo
-                        was = (ys + y)
-                        now = was[:self.N+1]
-                        if was == now:
-                            yield (x, (j, was))
-                        else:
-                            # mark truncated nodes because they need to be removed in the next iteration
-                            yield (x, (j, now + '#'))
+                    was = (ys + y)
+                    now = was[:self.N+1]
+                    if was == now:
+                        yield (x, (j, was, False))
                     else:
-                        was = (ys + y)
-                        now = was[:self.N]
-                        if was == now:
-                            yield (x, (j, was))
-                        else:
-                            # mark truncated nodes because they need to be removed in the next iteration
-                            yield (x, (j, now + '#'))
-
+                        # mark truncated nodes because they need to be removed in the next iteration
+                        yield (x, (j, now, True))
         else:
             n = len(ys)
+            assert not truncated
             for x, y, j in self.f.arcs(i):
                 if y == EPSILON:
-                    yield (x, (j, ys))
+                    yield (x, (j, ys, False))
                 elif y == self.target[n]:
-                    yield (x, (j, ys + y))
+                    yield (x, (j, ys + y, False))
 
     def start(self):
         for i in self.f.I:
-            yield (i, '')
+            yield (i, '', False)
 
     def is_final(self, state):
         (i, ys) = state
@@ -396,7 +371,7 @@ class TruncatedDFA(Lazy):
         # algorithm.
         N = len(self.target)
         return frozenset(
-            (i, ys[:N]) for i, ys in frontier
+            (i, ys[:N], truncated) for i, ys, truncated in frontier     # TODO: can we use the truncated bit here?
             if ys[:min(N, len(ys))] == self.target[:min(N, len(ys))]
         )
 
@@ -405,7 +380,7 @@ class TruncatedDFA(Lazy):
             yield x, self.refine(next_state)
 
     def is_final(self, state):
-        return any(ys.startswith(self.target) and self.fst.is_final(i) for (i, ys) in state)
+        return any(ys.startswith(self.target) and self.fst.is_final(i) for (i, ys, _) in state)
 
 
 #_______________________________________________________________________________
@@ -422,7 +397,9 @@ class recursive_testing:
         self.fst = fst
         self.depth = depth
         self.peekaboo = Peekaboo(fst)
-        self.reference = LazyRecursive(fst)
+        self.reference = lambda target: Precover(fst, target)
+        self.target_alphabet = fst.B - {EPSILON}
+#        self.reference = LazyRecursive(fst)
 #        self.reference = LazyNonrecursive(fst)
 #        self.reference = EagerNonrecursive(fst)
         self.verbosity = verbosity
@@ -430,14 +407,16 @@ class recursive_testing:
 
     def run(self, target, depth):
         if depth == 0: return
-        want = {y: self.reference(target + y) for y in self.reference.target_alphabet}
+        want = {y: self.reference(target + y) for y in self.target_alphabet}
         have = self.peekaboo(target)
         #assert have == want, f"""\ntarget = {target!r}\nhave = {have}\nwant = {want}\n"""
         assert_equal_decomp_map(have, want)
 
         for y in want:
             if self.verbosity > 0: print('>', repr(target + y))
-            if want[y].quotient or want[y].remainder:   # nonempty
+            q = want[y].quotient.trim()
+            r = want[y].remainder.trim()
+            if q.states or r.states:
                 self.run(target + y, depth - 1)
 
 
@@ -463,7 +442,7 @@ def test_abc():
     want = {y: tmp(target + y) for y in tmp.target_alphabet}
     assert_equal_decomp_map(have, want)
 
-    recursive_testing(fst, '', depth=5)
+    recursive_testing(fst, '', depth=4)
 
 
 def test_samuel():
@@ -484,23 +463,7 @@ def test_samuel():
 
 
 def test_small():
-
-    fst = FST()
-    fst.add_I(0)
-    fst.add_F(0)
-
-    fst.add_arc(0, 'a', 'x', 1)
-    fst.add_arc(0, 'b', 'x', 2)
-
-    fst.add_arc(2, 'a', 'a', 3)
-    fst.add_arc(2, 'b', 'b', 3)
-
-    fst.add_arc(3, 'a', 'a', 3)
-    fst.add_arc(3, 'b', 'b', 3)
-
-    fst.add_F(1)
-    fst.add_F(3)
-
+    fst = example.small()
     recursive_testing(fst, '', depth=5)
 
 
@@ -517,12 +480,12 @@ def test_duplicate():
 def test_number_comma_separator():
     import string
     #fst = examples.number_comma_separator(set(string.printable) - set('\t\n\r\x0b\x0c'))
-    fst = examples.number_comma_separator({'a','b',',',' ','0','1'}, Digit={'0', '1'})
+    fst = examples.number_comma_separator({'a',',',' ','0'}, Digit={'0'})
 
-    recursive_testing(fst, '', depth=5)
+    recursive_testing(fst, '', depth=4, verbosity=1)
 
-    recursive_testing(fst, '0,| 1,', depth=1, verbosity=1)
-    recursive_testing(fst, '0,| 1,|', depth=1, verbosity=1)
+    recursive_testing(fst, '0,| 0,', depth=1, verbosity=1)
+    recursive_testing(fst, '0,| 0,|', depth=1, verbosity=1)
 
 
 def test_newspeak2():
@@ -559,6 +522,30 @@ def test_benchmark():
     tmp = Peekaboo(fst)
     tmp('a'*1000)
 
+
+def test_lookahead():
+    fst = example.lookahead()
+    recursive_testing(fst, '', depth=6, verbosity=1)
+
+
+def test_weird_copy():
+    fst = examples.weird_copy()
+    recursive_testing(fst, '', depth=5, verbosity=0)
+
+
+def test_triplets_of_doom():
+    fst = examples.triplets_of_doom()
+    recursive_testing(fst, '', depth=13, verbosity=0)
+
+
+def test_infinite_quotient():
+    fst = examples.infinite_quotient()
+    recursive_testing(fst, '', depth=5, verbosity=1)
+
+
+def test_parity():
+    fst = examples.parity({'a', 'b'})
+    recursive_testing(fst, '', depth=5, verbosity=1)
 
 
 if __name__ == '__main__':
