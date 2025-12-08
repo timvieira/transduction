@@ -10,7 +10,6 @@ from arsenal import colors
 from collections import deque
 
 
-
 class Peekaboo:
     """
     Recursive, batched computation of next-target-symbol optimal DFA-decomposition.
@@ -141,6 +140,30 @@ class Peekaboo:
                 ], headings=['', 'have', 'want'])
 
 
+
+
+# Warning: The BufferedRelevance machine is not finite state!
+#
+# [2025-12-02 Tue] Possible issue: we could do an unbounded amount of useless
+#   work by enumerating states in the buffered relevance machine that are not on
+#   track to participate in any relevant target string's precover.
+#
+# [2025-12-04 Thu] I think we ned to do something similar ot the
+#   PeekabooPrecover construction so that we can only explore a finite number of
+#   states and, thus, terminate in finite time.  The key to this is going to be
+#   to either tweak the state space as in PeekabooPrecover or to use something
+#   like we did with `refine`.  The concert about the PeekabooPrecover strategy
+#   is that we might add edges to the machine that need to be removed/ignored in
+#   the next layer. (The picture that I have in my head is something like change
+#   propagation where we have to invalidate some of the work that we done under
+#   the assumption that the target string ended here.  Aesthetically and
+#   practically, I would rather not require invalidate work.  There is some
+#   guiding principle that is lacking here and I don't know how to think about
+#   it.)  Maybe the best way to move forward with this is to make a few
+#   visualizations of what I expected the layered structure to look like (e.g.,
+#   by grafting a set of correct machines for each next symbol together and
+#   seeing where things diverge from from that idealization).
+
 class PeekabooState:
 
     def __init__(self, fst, target, parent, max_steps=float('inf')):
@@ -150,6 +173,8 @@ class PeekabooState:
         self.target = target
         self.parent = parent
 
+        assert '#' not in self.target_alphabet, 'fix me'
+
         if self.parent is not None:
             self.max_steps = min(self.parent.max_steps, max_steps)
         else:
@@ -157,30 +182,8 @@ class PeekabooState:
 
         assert parent is None or parent.target == target[:-1]
 
-        # Warning: The BufferedRelevance machine is not finite state!
-        #
-        # [2025-12-02 Tue] Possible issue: we could do an unbounded amount of
-        #   useless work by enumerating states in the buffered relevance machine
-        #   that are not on track to participate in any relevant target string's
-        #   precover.
-        #
-        # [2025-12-04 Thu] I think we ned to do something similar ot the
-        #   PeekabooPrecover construction so that we can only explore a finite
-        #   number of states and, thus, terminate in finite time.  The key to
-        #   this is going to be to either tweak the state space as in
-        #   PeekabooPrecover or to use something like we did with `refine`.  The
-        #   concert about the PeekabooPrecover strategy is that we might add
-        #   edges to the machine that need to be removed/ignored in the next
-        #   layer. (The picture that I have in my head is something like change
-        #   propagation where we have to invalidate some of the work that we
-        #   done under the assumption that the target string ended here.
-        #   Aesthetically and practically, I would rather not require invalidate
-        #   work.  There is some guiding principle that is lacking here and I
-        #   don't know how to think about it.)  Maybe the best way to move
-        #   forward with this is to make a few visualizations of what I expected
-        #   the layered structure to look like (e.g., by grafting a set of
-        #   correct machines for each next symbol together and seeing where
-        #   things diverge from from that idealization).
+        def debug(*args): pass
+        #debug = print
 
         dfa = BufferedRelevance(self.fst, target).det()
 #        dfa = PeekabooPrecover(self.fst, target).det()
@@ -190,42 +193,50 @@ class PeekabooState:
         if len(target) == 0:
             assert parent is None
             worklist = deque()
-
             self._arcs = {}
             for state in dfa.start():
                 worklist.append(state)
                 self._arcs[state] = set()
+                debug(colors.orange % 'init:', state)
 
         else:
 
             # select the relevant next symbol from the previous computation
-            p = parent.foo[target[-1]]
+#            p = parent.foo[target[-1]]
+#
+#            # put previous and Q and R states on the worklist
+#            worklist = deque()
+#            worklist.extend(p.quotient)
+#            worklist.extend(p.remainder)
+#            self._arcs = {} #parent._arcs.copy()
+#            for x in worklist:
+#                assert x in parent._arcs
+#                self._arcs[x] = set()
+
+            debug(colors.orange % 'target:', repr(self.target))
+            debug('GOO:', parent.goo)
+
+            p = parent.goo[target[-1]]
+            debug('we need to pick up from the following states:', p)
 
             # put previous and Q and R states on the worklist
             worklist = deque()
-            worklist.extend(p.quotient)
-            worklist.extend(p.remainder)
-            self._arcs = {} #parent._arcs.copy()
-            for x in worklist:
-                assert x in parent._arcs
-                self._arcs[x] = set()
-
-            #self._arcs.update(parent._arcs)
+            self._arcs = {}
+            for state in p:
+                assert not any(ys.endswith('#') for _, ys in state)
+                worklist.append(state)
+                self._arcs[state] = set()
 
         precover = {y: PrecoverDecomp(set(), set()) for y in self.target_alphabet}
+        goo = {y: set() for y in self.target_alphabet}
 
-
-        def refine(frontier):
-            "For caching and cycle-detection, we truncate the state representation after N+1 target symbols."
-            #return frontier
-            return frozenset((i, ys[:N+1]) for i, ys in frontier)
-
+        #def refine(frontier):
+        #    "For caching and cycle-detection, we truncate the state representation after N+1 target symbols."
+        #    #return frontier
+        #    return frozenset((i, ys[:N+1]) for i, ys in frontier)
 
         def state_relevant_symbols(state):
-            return {ys[N] for _, ys in state if len(ys) > N}
-
-        def debug(*args): pass
-        #debug = print
+            return {ys[N] for _, ys in state if len(ys) > N} - {'#'}
 
         verbosity = 0
         N = len(target)
@@ -271,27 +282,22 @@ class PeekabooState:
 
             for x, next_state in dfa.arcs(state):
 
-                # [2025-12-05 Fri] A possible solution to the infinite running
-                # time is to do memoization/cycle detection on coarse grained
-                # nodes---much like we do the universality test.
-                r = refine(next_state)
-                #debug('  relevant:', state_relevant_symbols(r))
-                if r not in visited:
+                if next_state not in self._arcs:
+                    assert isinstance(next_state, frozenset), [type(x), x]
                     worklist.append(next_state)
-                    visited.add(r)
+                    self._arcs[next_state] = set()
                     debug('  pushed', next_state)
                 else:
-                    debug('  already visited')
-                    if r != next_state:
-                        debug('    fine:  ', next_state)
-                        debug('    coarse:', r)
-                    else:
-                        debug('    exact match')
-
-                if next_state not in self._arcs:
-                    self._arcs[next_state] = set()
+                    debug('  pushed-repeat', next_state)
 
                 self._arcs[next_state].add((x, state))
+
+                if not any(ys.endswith('#') for _, ys in state):
+                    for _, ys in next_state:
+                        if ys.endswith('#'):
+                            y = ys[-2]
+                            debug(colors.light.red % 'goo', state, repr(y), next_state)
+                            goo[y].add(state)
 
                 # [2025-12-02 Tue] unfortunately, these graphs aren't always
                 # cleanly layered; we can have arcs that go backward (e.g., when
@@ -299,12 +305,14 @@ class PeekabooState:
                 # empty layers (these are layers where the nodes are in previous
                 # layers - just imagine a case where Q(abc) = Q(ab)).
 
-                #p = parent
-                #while p is not None:
-                #    assert next_state not in p._arcs
-                #    p = p.parent
-
         self.foo = precover
+        self.goo = goo
+
+        for y in self.foo:
+            for state in self.foo[y].quotient | self.foo[y].remainder:
+                if not any(ys.endswith('#') for _, ys in state):
+                    debug(colors.light.red % 'goo+', state)
+                    goo[y].add(state)
 
     def __rshift__(self, y):
         return PeekabooState(self.fst, self.target + y, parent=self)
@@ -312,99 +320,53 @@ class PeekabooState:
 
 # TODO: in order to predict EOS, we need to extract the preimage from Q and R
 class BufferedRelevance(Lazy):
-    """NOTE: this is a semi-automaton as it does not have an `is_final` method.
 
-    It implements a state space that tracks the states of an FST `fst` along
-    with the target string they generate.  It prunes the state space to just the
-    states that are relevant to `target` followed by at least additional target
-    symbol.
-
-    """
-
-    def __init__(self, fst, target):
-        self.fst = fst
+    def __init__(self, f, target):
+        self.f = f
         self.target = target
+        self.N = len(target)
 
     def arcs(self, state):
         (i, ys) = state
-        n = len(ys)
-        N = len(self.target)
-        m = min(n, N)
-        assert ys[:m] == self.target[:m]
+        if ys.startswith(self.target):
+            for x, y, j in self.f.arcs(i):
+                if y == EPSILON:
+                    yield (x, (j, ys))
+                else:
 
-        for x,y,j in self.fst.arcs(i):
-            if y == EPSILON:
-                yield (x, (j, ys))
-            elif n >= N or y == self.target[n]:
-                yield (x, (j, ys + y))
+                    if 1:                         # if true use peekaboo
+                        was = (ys + y)
+                        now = was[:self.N+1]
+                        if was == now:
+                            yield (x, (j, was))
+                        else:
+                            # mark truncated nodes because they need to be removed in the next iteration
+                            yield (x, (j, now + '#'))
+                    else:
+                        was = (ys + y)
+                        now = was[:self.N]
+                        if was == now:
+                            yield (x, (j, was))
+                        else:
+                            # mark truncated nodes because they need to be removed in the next iteration
+                            yield (x, (j, now + '#'))
 
-#        assert n <= N+1
-#        assert ys.startswith(self.target) or self.target.startswith(ys)
-#
-#        #if ys[:m] == self.target[:m]:
-#        for x,y,j in self.fst.arcs(i):
-#            if y == EPSILON:
-#                yield (x, (j, ys))
-#            ######################################################################
-#            # XXX: I think the crux is that we have to insert some temporary
-#            # arcs for the specific ply but then we might have to delete them
-#            # when we move on to the next ply.
-#            elif n > N:
-#                yield (x, (j, ys))
-#            ######################################################################
-#            elif n == N:
-#                yield (x, (j, ys + y))
-#            elif n < N:
-#                if y == self.target[n]:
-#                    yield (x, (j, ys + y))
+        else:
+            n = len(ys)
+            for x, y, j in self.f.arcs(i):
+                if y == EPSILON:
+                    yield (x, (j, ys))
+                elif y == self.target[n]:
+                    yield (x, (j, ys + y))
 
     def start(self):
-        for i in self.fst.I:
+        for i in self.f.I:
             yield (i, '')
 
+    def is_final(self, state):
+        (i, ys) = state
+        return self.f.is_final(i) and ys.startswith(self.target)
 
-## TODO: in order to predict EOS, we need to extract the preimage from Q and R
-#class PeekabooPrecover(Lazy):
-#    """NOTE: this is a semi-automaton as it does not have an `is_final` method.
-#
-#    It implements a state space that tracks the states of an FST `fst` along
-#    with the target string they generate.  It prunes the state space to just the
-#    states that are relevant to `target` followed by at least additional target
-#    symbol.
-#
-#    """
-#
-#    def __init__(self, fst, target):
-#        self.fst = fst
-#        self.target = target
-#
-#    def arcs(self, state):
-#        (i, ys) = state
-#        n = len(ys)
-#        N = len(self.target)
-#        if ys == self.target and n >= N:
-#            for x,y,j in self.fst.arcs(i):
-#                if y == EPSILON:
-#                    yield (x, (j, ys))
-#                else:
-#                    yield (x, (j, ys + y))
-#
-#        # Note: we truncate the buffer after the (N+1)th symbol
-#        # XXX: In the recursive algorithm, we would not do this!
-#        elif ys.startswith(self.target) and n == N + 1:
-#            for a,b,j in self.fst.arcs(i):
-#                yield (a, (j, ys))
-#
-#        elif self.target.startswith(ys) and n < N:
-#            for x,y,j in self.fst.arcs(i):
-#                if y == EPSILON:
-#                    yield (x, (j, ys))
-#                elif y == self.target[len(ys)]:
-#                    yield (x, (j, ys + y))
-#
-#    def start(self):
-#        for i in self.fst.I:
-#            yield (i, '')
 
 
 class TruncatedDFA(Lazy):
