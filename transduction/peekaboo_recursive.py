@@ -426,33 +426,11 @@ def assert_equal_decomp_map(have, want):
 
 def test_abc():
     fst = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c'), ('4', 'd'), ('5', 'e')])
-
-    p = Peekaboo(fst)
-    target = ''
-    have = p(target)
-    tmp = EagerNonrecursive(fst)
-    want = {y: tmp(target + y) for y in tmp.target_alphabet}
-    assert_equal_decomp_map(have, want)
-
-    target = 'abc'
-    have = p(target)
-    tmp = EagerNonrecursive(fst)
-    want = {y: tmp(target + y) for y in tmp.target_alphabet}
-    assert_equal_decomp_map(have, want)
-
     recursive_testing(fst, '', depth=4)
 
 
 def test_samuel():
     fst = examples.samuel_example()
-
-    p = Peekaboo(fst)
-    target = 'y'
-    have = p(target)
-    tmp = EagerNonrecursive(fst)
-    want = {y: tmp(target + y) for y in tmp.target_alphabet}
-    assert_equal_decomp_map(have, want)
-
     recursive_testing(fst, '', depth=5)
 
 
@@ -472,10 +450,9 @@ def test_duplicate():
 
 
 def test_number_comma_separator():
-    import string
+    #import string
     #fst = examples.number_comma_separator(set(string.printable) - set('\t\n\r\x0b\x0c'))
     fst = examples.number_comma_separator({'a', ',', ' ', '0'}, Digit={'0'})
-
     recursive_testing(fst, '', depth=4, verbosity=1)
     recursive_testing(fst, '0,| 0,', depth=1, verbosity=1)
     recursive_testing(fst, '0,| 0,|', depth=1, verbosity=1)
