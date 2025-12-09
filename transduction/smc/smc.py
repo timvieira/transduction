@@ -1,14 +1,14 @@
 import math
 import random
 from dataclasses import dataclass
-from typing import FrozenSet, Tuple, Any
-from transduction import FST, EPSILON, Precover
+from typing import FrozenSet, Tuple
 
-# TODO: put in constructor
-from transduction.smc.aa import score_sequence
+import tqdm
+from transduction import EPSILON
+from arsenal.maths import logsumexp
 
 
-def logsumexp(log_probs):
+def old_logsumexp(log_probs):
     if not log_probs:
         return float('-inf')
     
@@ -31,14 +31,12 @@ def is_compatible(ys: str, target_y: str) -> bool:
     return ys.startswith(target_y)
     
 
-
-
-
 def sample_from_log_probs(tokens, log_probs, log_Z):
     r = math.log(random.random()) + log_Z
     
     cumulative = float('-inf')
     for t, lp in zip(tokens, log_probs):
+        
         cumulative = logsumexp([cumulative, lp])
         if r < cumulative:
             return t
@@ -101,7 +99,7 @@ class Particle:
 
 
 class SMC:
-    def __init__(self, fst, algo_class, tgt_str, lm, resample_threshold=0.7, num_particles=100, max_steps=50):
+    def __init__(self, fst, algo_class, tgt_str, lm, resample_threshold=0.7, num_particles=100, max_steps=None):
         self.fst = fst 
         self.algo = algo_class(fst, extend=lambda x, y: x + y)
         self.particles = [Particle.initial(fst.I, fst, tgt_str) for _ in range(num_particles)]
@@ -109,6 +107,9 @@ class SMC:
         self.tgt_str = tgt_str
         self.num_particles = num_particles
         self.max_steps = max_steps
+        if self.max_steps is None:
+            self.max_steps = 4 * len(tgt_str)
+
         self.resample_threshold = resample_threshold
 
     def get_valid_proposal_tokens(self, p):
@@ -135,6 +136,8 @@ class SMC:
         """
         valid_dist = {}
         valid_cands = self.get_valid_proposal_tokens(p)
+        assert len(valid_cands) > 0, "No valid candidates"
+
         for token, log_p in dist.items():
             if log_p == float('-inf'): 
                 continue
@@ -147,7 +150,7 @@ class SMC:
         if not valid_dist:
             return {}
             
-        log_Z = logsumexp(valid_dist.values())
+        log_Z = logsumexp(list(valid_dist.values()))
         proposal_dist = {
             t: lp - log_Z 
             for t, lp in valid_dist.items()
@@ -167,6 +170,10 @@ class SMC:
     def smc_step(self):
         new_particles = []
 
+        # todo: batch or move to the other repo
+        particle_weights = []
+        to_score = []
+        
         for p in self.particles:
             if p.is_universal and p.is_complete:
                 # since universal and extends,
@@ -193,17 +200,19 @@ class SMC:
             new_x = self.algo.extend(p.x, sampled_token)            
             # This is more than just a path since it means
             # we check many paths at once.
-            # todo: make optional
+            # todo: make optional?
             is_univ = self.algo.continuity(new_x, self.tgt_str)
 
             states = {s for s, _ in p.states}
             is_final = not self.fst.F.isdisjoint(states)
-            new_y = next(iter(self.fst.transduce(new_x)))
+            ys = list(self.fst.transduce(new_x))
+            # Assumes single output, true for dna -> aa
+            new_y = ys[0]
             is_complete = new_y.startswith(self.tgt_str) and is_final
 
             new_states = self.algo.next_frontier(
                 p.states, sampled_token)
-            
+             
             new_particles.append(Particle(
                 x=new_x,
                 states=new_states,
@@ -216,6 +225,7 @@ class SMC:
 
     def resample_particles(self, resample_threshold):
         if not self.particles:
+            print("All particles died")
             return self.particles
 
         log_weights = [p.weight for p in self.particles]
@@ -254,11 +264,16 @@ class SMC:
 
         return new_particles
     
-    def __call__(self, resample_threshold=0.5):
+    def __call__(self, resample_threshold=0.5, no_pbar=False):
         
         self.resample_threshold = resample_threshold
 
-        for t in range(self.max_steps):
+        if not no_pbar:
+            steps = tqdm.tqdm(range(self.max_steps), desc="Transducing...")
+        else:
+            steps = range(self.max_steps)
+            
+        for t in steps:
             if not self.particles:
                 print(f"All particles died at step {t}")
                 break
@@ -267,30 +282,32 @@ class SMC:
                 break
                 
             self.particles = self.smc_step()
-            # Resample
             self.particles = self.resample_particles(resample_threshold)
 
         return self.particles
 
-    def get_probs(self):
-        particles = self()
+    def get_probs(self, no_pbar=False):
+        particles = self(no_pbar=no_pbar)
         if not particles:
             return float('-inf')
 
-        # Use all particles, or restrict to universal ones if that’s what γ encodes.
-        log_ws = [p.weight for p in particles if p.is_universal]
+        log_ws = [p.weight for p in particles if p.is_universal or p.is_complete]
+
         if not log_ws:
             return float('-inf')
 
         return logsumexp(log_ws) - math.log(len(log_ws))
 
     @classmethod
-    def get_dist(cls, fst, algo, tgt_str, lm, nump):
+    def get_dist(cls, fst, algo, tgt_str, lm, nump, max_steps=None):
+        if max_steps is None:
+            max_steps = 4 * len(tgt_str)
+
         dist = {}
 
-        for symbol in fst.B:
+        for symbol in tqdm.tqdm(fst.B, desc="Transducing...", total=len(fst.B) * max_steps):
             ssmc = cls(fst, algo, tgt_str + symbol, lm, num_particles=nump)
-            dist[symbol] = ssmc.get_probs()
+            dist[symbol] = ssmc.get_probs(no_pbar=True)
 
-        Z = logsumexp(dist.values())
+        Z = logsumexp(list(dist.values()))
         return {k: v - Z for k, v in dist.items()}

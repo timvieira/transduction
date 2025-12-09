@@ -1,6 +1,6 @@
-from transduction import FST, EPSILON, Precover
 import math
 
+from transduction import EPSILON, FST
 
 CODON_TABLE = {
     'ATA':'I', 'ATC':'I', 'ATT':'I', 'ATG':'M',
