@@ -78,13 +78,13 @@ class RecursiveDFADecomposition:
             # TODO: copying is slow
             self._states = self.parent._states.copy()
             self._arcs = parent._arcs[:]
+            #self._arcs = [(i,x,j) for (i,x,j) in parent._arcs if i in parent.R.stop]
 
         self._stop_Q = set()
         self._stop_R = set()
 
         while worklist:
             i = worklist.pop()
-
             #print(colors.yellow % 'work', i)
 
             if self.is_final(i, target):
@@ -166,70 +166,110 @@ class RecursiveDFADecomposition:
         return format_table([self], headings=['quotient', 'remainder'])
 
 
-def check(a):
-    Q, R = Precover(a.fst, a.target).decomposition
-    assert Q.equal(a.Q) and R.equal(a.R)
-    print(colors.mark(True), 'pass')
+#_______________________________________________________________________________
+# TESTING CODE BELOW
+
+from transduction import examples
+
+
+class recursive_testing:
+    """
+    Utility function for testing the `Peekaboo` method against a slower method.
+    """
+    def __init__(self, fst, target, depth, verbosity=0):
+        self.fst = fst
+        self.target_alphabet = self.fst.B - {EPSILON}
+        self.depth = depth
+        self.reference = lambda target: Precover(fst, target)
+#        self.reference = LazyNonrecursive(fst)
+#        self.reference = EagerNonrecursive(fst)
+        self.verbosity = verbosity
+        self.run(target, depth, RecursiveDFADecomposition(fst, target))
+
+    def run(self, target, depth, state):
+        if depth == 0: return
+        want = {y: self.reference(target + y) for y in self.target_alphabet}
+        have = {y: state >> y for y in self.target_alphabet}
+        assert_equal_decomp_map(have, want)
+        for y in want:
+            if self.verbosity > 0: print('>', repr(target + y))
+            q = want[y].quotient.trim()
+            r = want[y].remainder.trim()
+            if q.states or r.states:
+                self.run(target + y, depth - 1, have[y])
+
+
+def assert_equal_decomp_map(have, want):
+    for y in have | want:
+        assert have[y].quotient.equal(want[y].quotient)
+        assert have[y].remainder.equal(want[y].remainder)
+
+
+def test_abc():
+    fst = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c'), ('4', 'd'), ('5', 'e')])
+    recursive_testing(fst, '', depth=4)
 
 
 def test_samuel():
-    f = examples.samuel_example()
-    target = 'cxx'
+    fst = examples.samuel_example()
+    recursive_testing(fst, '', depth=5)
 
-    start = RecursiveDFADecomposition(f, target[:0])
-    check(start)
 
-    a = (start >> target[0])
-    check(a)
+def test_small():
+    fst = examples.small()
+    recursive_testing(fst, '', depth=5)
 
-    ab = (a >> target[1])
-    check(ab)
 
-    abc = (ab >> target[2])
-    check(abc)
+def test_sdd1():
+    fst = examples.sdd1_fst()
+    recursive_testing(fst, '', depth=5)
+
+
+def test_duplicate():
+    fst = examples.duplicate(set('12345'))
+    recursive_testing(fst, '', depth=5)
+
+
+def test_number_comma_separator():
+    #import string
+    #fst = examples.number_comma_separator(set(string.printable) - set('\t\n\r\x0b\x0c'))
+    fst = examples.number_comma_separator({'a', ',', ' ', '0'}, Digit={'0'})
+    recursive_testing(fst, '', depth=4, verbosity=1)
+    recursive_testing(fst, '0,| 0,', depth=1, verbosity=1)
+    recursive_testing(fst, '0,| 0,|', depth=1, verbosity=1)
 
 
 def test_newspeak2():
-
-    f = examples.newspeak2()
-    target = 'bad'
-
-    start = RecursiveDFADecomposition(f, target[:0])
-    check(start)
-
-    a = (start >> target[0])
-    check(a)
-
-    ab = (a >> target[1])
-    check(ab)
-
-    abc = (ab >> target[2])
-    check(abc)
+    fst = examples.newspeak2()
+    recursive_testing(fst, '', depth=1)
+    recursive_testing(fst, 'ba', depth=1)
+    recursive_testing(fst, 'bad', depth=1)
 
 
-def test_simple_replace():
-    f = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c'), ('4', 'd'), ('5', 'e')])
-    target = 'abc'
+def test_lookahead():
+    fst = examples.lookahead()
+    recursive_testing(fst, '', depth=6, verbosity=1)
 
-    start = RecursiveDFADecomposition(f, target[:0])
-    check(start)
 
-    a = (start >> target[0])
-    check(a)
+def test_weird_copy():
+    fst = examples.weird_copy()
+    recursive_testing(fst, '', depth=5, verbosity=0)
 
-    ab = (a >> target[1])
-    check(ab)
 
-    abc = (ab >> target[2])
-    check(abc)
+def test_triplets_of_doom():
+    #fst = examples.triplets_of_doom()
+    #recursive_testing(fst, '', depth=13, verbosity=0)
+    assert False, 'this test does not terminate'
 
+
+def test_infinite_quotient():
+    fst = examples.infinite_quotient()
+    recursive_testing(fst, '', depth=5, verbosity=1)
 
 
 def test_parity():
-    # Note: this doesn't really test the recursion.
-    f = examples.parity({'a'})
-    s = RecursiveDFADecomposition(f, '')
-    check(s)
+    fst = examples.parity({'a', 'b'})
+    recursive_testing(fst, '', depth=5, verbosity=1)
 
 
 if __name__ == '__main__':
