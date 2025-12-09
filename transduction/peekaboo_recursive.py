@@ -396,11 +396,10 @@ class recursive_testing:
     """
     def __init__(self, fst, target, depth, verbosity=0):
         self.fst = fst
+        self.target_alphabet = self.fst.B - {EPSILON}
         self.depth = depth
         self.peekaboo = Peekaboo(fst)
         self.reference = lambda target: Precover(fst, target)
-        self.target_alphabet = fst.B - {EPSILON}
-#        self.reference = LazyRecursive(fst)
 #        self.reference = LazyNonrecursive(fst)
 #        self.reference = EagerNonrecursive(fst)
         self.verbosity = verbosity
@@ -410,9 +409,7 @@ class recursive_testing:
         if depth == 0: return
         want = {y: self.reference(target + y) for y in self.target_alphabet}
         have = self.peekaboo(target)
-        #assert have == want, f"""\ntarget = {target!r}\nhave = {have}\nwant = {want}\n"""
         assert_equal_decomp_map(have, want)
-
         for y in want:
             if self.verbosity > 0: print('>', repr(target + y))
             q = want[y].quotient.trim()
@@ -454,10 +451,6 @@ def test_samuel():
     have = p(target)
     tmp = EagerNonrecursive(fst)
     want = {y: tmp(target + y) for y in tmp.target_alphabet}
-
-    #print(have)
-    #print(want)
-
     assert_equal_decomp_map(have, want)
 
     recursive_testing(fst, '', depth=5)
@@ -481,47 +474,19 @@ def test_duplicate():
 def test_number_comma_separator():
     import string
     #fst = examples.number_comma_separator(set(string.printable) - set('\t\n\r\x0b\x0c'))
-    fst = examples.number_comma_separator({'a',',',' ','0'}, Digit={'0'})
+    fst = examples.number_comma_separator({'a', ',', ' ', '0'}, Digit={'0'})
 
     recursive_testing(fst, '', depth=4, verbosity=1)
-
     recursive_testing(fst, '0,| 0,', depth=1, verbosity=1)
     recursive_testing(fst, '0,| 0,|', depth=1, verbosity=1)
 
 
 def test_newspeak2():
-    from transduction import Precover
     fst = examples.newspeak2()
-    p = Peekaboo(fst)
-    target = ''
-    have = p(target)
-    tmp = EagerNonrecursive(fst)
-    want = {y: tmp(target + y) for y in tmp.target_alphabet}
-
-    assert_equal_decomp_map(have, want)
-
-    #print('have=', have)
-    #print('want=', want)
-
-#    for y in have | want:
-#        if have.get(y) == want.get(y):
-#            print(colors.mark(True), repr(y))
-#        else:
-#            print(colors.mark(False), repr(y))
-#            print('  have=', have.get(y))
-#            print('  want=', want.get(y))
-#            #Precover(fst, target + y).check_decomposition(*want[y], throw=True)
-#            Precover(fst, target + y).check_decomposition(*have[y], throw=False)
-#    assert have == want
-
-    #recursive_testing(fst, '', depth=5)
-
-
-def test_benchmark():
-    fst = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c'), ('4', 'd'), ('5', 'e')])
-
-    tmp = Peekaboo(fst)
-    tmp('a'*1000)
+    p = Peekaboo(fst, max_steps=500)
+    recursive_testing(fst, '', depth=1)
+    recursive_testing(fst, 'ba', depth=1)
+    recursive_testing(fst, 'bad', depth=1)
 
 
 def test_lookahead():

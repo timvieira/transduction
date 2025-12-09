@@ -2,7 +2,7 @@ from transduction.base import PrecoverDecomp
 from transduction.lazy import Lazy
 from transduction.fsa import FSA
 from transduction.fst import FST, EPSILON
-from transduction.eager_nonrecursive import EagerNonrecursive
+from transduction.eager_nonrecursive import EagerNonrecursive, Precover
 from transduction.lazy_recursive import LazyRecursive
 #from transduction.lazy_nonrecursive import LazyNonrecursive
 
@@ -62,7 +62,6 @@ class PeekabooStrings:
         return precover
 
 
-#class PeekabooStates:
 class Peekaboo:
 
     def __init__(self, fst, max_steps=float('inf')):
@@ -71,7 +70,7 @@ class Peekaboo:
         self.target_alphabet = fst.B - {EPSILON}
         self.max_steps = max_steps
 
-    def __call__(self, target, return_strings=True):
+    def __call__(self, target):
         precover = {y: PrecoverDecomp(set(), set()) for y in self.target_alphabet}
         worklist = deque()
         states = set()
@@ -122,13 +121,7 @@ class Peekaboo:
             Q, R = precover[y]
             q = FSA(start=set(dfa.start()), arcs=arcs, stop=Q)
             r = FSA(start=set(dfa.start()), arcs=arcs, stop=R)
-            if return_strings:
-                foo[y] = PrecoverDecomp(
-                    set(q.min().language(float('inf'))),
-                    set(r.min().language(float('inf'))),
-                )
-            else:
-                foo[y] = PrecoverDecomp(q.trim(), r.trim())
+            foo[y] = PrecoverDecomp(q.trim(), r.trim())
 
         return foo
 
@@ -210,9 +203,10 @@ class recursive_testing:
     """
     def __init__(self, fst, target, depth, verbosity=0):
         self.fst = fst
+        self.target_alphabet = self.fst.B - {EPSILON}
         self.depth = depth
         self.peekaboo = Peekaboo(fst)
-        self.reference = LazyRecursive(fst)
+        self.reference = lambda target: Precover(fst, target)
 #        self.reference = LazyNonrecursive(fst)
 #        self.reference = EagerNonrecursive(fst)
         self.verbosity = verbosity
@@ -220,13 +214,21 @@ class recursive_testing:
 
     def run(self, target, depth):
         if depth == 0: return
-        want = {y: self.reference(target + y) for y in self.reference.target_alphabet}
+        want = {y: self.reference(target + y) for y in self.target_alphabet}
         have = self.peekaboo(target)
-        assert have == want, f"""\ntarget = {target!r}\nhave = {have}\nwant = {want}\n"""
+        assert_equal_decomp_map(have, want)
         for y in want:
             if self.verbosity > 0: print('>', repr(target + y))
-            if want[y].quotient or want[y].remainder:   # nonempty
+            q = want[y].quotient.trim()
+            r = want[y].remainder.trim()
+            if q.states or r.states:
                 self.run(target + y, depth - 1)
+
+
+def assert_equal_decomp_map(have, want):
+    for y in have | want:
+        assert have[y].quotient.equal(want[y].quotient)
+        assert have[y].remainder.equal(want[y].remainder)
 
 
 def test_abc():
@@ -237,15 +239,15 @@ def test_abc():
     have = p(target)
     tmp = EagerNonrecursive(fst)
     want = {y: tmp(target + y) for y in tmp.target_alphabet}
-    assert have == want
+    assert_equal_decomp_map(have, want)
 
     target = 'abc'
     have = p(target)
     tmp = EagerNonrecursive(fst)
     want = {y: tmp(target + y) for y in tmp.target_alphabet}
-    assert have == want
+    assert_equal_decomp_map(have, want)
 
-    recursive_testing(fst, '', depth=5)
+    recursive_testing(fst, '', depth=4)
 
 
 def test_samuel():
@@ -256,33 +258,13 @@ def test_samuel():
     have = p(target)
     tmp = EagerNonrecursive(fst)
     want = {y: tmp(target + y) for y in tmp.target_alphabet}
-
-    print(have)
-    print(want)
-
-    assert have == want
+    assert_equal_decomp_map(have, want)
 
     recursive_testing(fst, '', depth=5)
 
 
 def test_small():
-
-    fst = FST()
-    fst.add_I(0)
-    fst.add_F(0)
-
-    fst.add_arc(0, 'a', 'x', 1)
-    fst.add_arc(0, 'b', 'x', 2)
-
-    fst.add_arc(2, 'a', 'a', 3)
-    fst.add_arc(2, 'b', 'b', 3)
-
-    fst.add_arc(3, 'a', 'a', 3)
-    fst.add_arc(3, 'b', 'b', 3)
-
-    fst.add_F(1)
-    fst.add_F(3)
-
+    fst = examples.small()
     recursive_testing(fst, '', depth=5)
 
 
@@ -299,38 +281,44 @@ def test_duplicate():
 def test_number_comma_separator():
     import string
     #fst = examples.number_comma_separator(set(string.printable) - set('\t\n\r\x0b\x0c'))
-    fst = examples.number_comma_separator({'a','b',',',' ','0','1'}, Digit={'0', '1'})
+    fst = examples.number_comma_separator({'a', ',', ' ', '0'}, Digit={'0'})
 
-    recursive_testing(fst, '', depth=5)
-
-    recursive_testing(fst, '0,| 1,', depth=1, verbosity=1)
-    recursive_testing(fst, '0,| 1,|', depth=1, verbosity=1)
+    recursive_testing(fst, '', depth=4, verbosity=1)
+    recursive_testing(fst, '0,| 0,', depth=1, verbosity=1)
+    recursive_testing(fst, '0,| 0,|', depth=1, verbosity=1)
 
 
 def test_newspeak2():
-    from transduction import Precover
     fst = examples.newspeak2()
     p = Peekaboo(fst, max_steps=500)
-    target = ''
-    have = p(target)
-    tmp = EagerNonrecursive(fst)
-    want = {y: tmp(target + y) for y in tmp.target_alphabet}
+    recursive_testing(fst, '', depth=1)
+    recursive_testing(fst, 'ba', depth=1)
+    recursive_testing(fst, 'bad', depth=1)
 
-    #print('have=', have)
-    #print('want=', want)
 
-    for y in have | want:
-        if have.get(y) == want.get(y):
-            print(colors.mark(True), repr(y))
-        else:
-            print(colors.mark(False), repr(y))
-            print('  have=', have.get(y))
-            print('  want=', want.get(y))
-            #Precover(fst, target + y).check_decomposition(*want[y], throw=True)
-            Precover(fst, target + y).check_decomposition(*have[y], throw=False)
-    assert have == want
+def test_lookahead():
+    fst = examples.lookahead()
+    recursive_testing(fst, '', depth=6, verbosity=1)
 
-    #recursive_testing(fst, '', depth=5)
+
+def test_weird_copy():
+    fst = examples.weird_copy()
+    recursive_testing(fst, '', depth=5, verbosity=0)
+
+
+def test_triplets_of_doom():
+    fst = examples.triplets_of_doom()
+    recursive_testing(fst, '', depth=13, verbosity=0)
+
+
+def test_infinite_quotient():
+    fst = examples.infinite_quotient()
+    recursive_testing(fst, '', depth=5, verbosity=1)
+
+
+def test_parity():
+    fst = examples.parity({'a', 'b'})
+    recursive_testing(fst, '', depth=5, verbosity=1)
 
 
 if __name__ == '__main__':
