@@ -1,12 +1,5 @@
 from collections import defaultdict, deque
-from transduction.fsa import FSA, EPSILON
-
-
-_frozenset = frozenset
-class frozenset(_frozenset):
-    "Same as frozenset, but with a nicer printing method."
-    def __repr__(self):
-        return '{%s}' % (','.join(str(x) for x in self))
+from transduction.fsa import FSA, EPSILON, frozenset
 
 
 class Lazy:
@@ -35,7 +28,7 @@ class Lazy:
     def epsremove(self):
         return EpsilonRemove(self)
 
-    def materialize(self):
+    def materialize(self, max_steps=float('inf')):
         "Materialized this automaton using a depth-first traversal from its initial states."
         m = FSA()
         worklist = deque()
@@ -49,6 +42,7 @@ class Lazy:
             visited.add(i)
             if self.is_final(i):
                 m.add_stop(i)
+            if len(visited) > max_steps: break
             for a, j in self.arcs(i):
                 worklist.append(j)
                 m.add(i,a,j)

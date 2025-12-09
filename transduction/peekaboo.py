@@ -1,15 +1,19 @@
-from transduction.base import AbstractAlgorithm, EPSILON, PrecoverDecomp
+from transduction.base import PrecoverDecomp
 from transduction.lazy import Lazy
+from transduction.fsa import FSA
 from transduction.fst import FST, EPSILON
-from transduction.eager_nonrecursive import EagerNonrecursive, Precover
+from transduction.eager_nonrecursive import EagerNonrecursive
 from transduction.lazy_recursive import LazyRecursive
-from transduction.lazy_nonrecursive import LazyNonrecursive
+#from transduction.lazy_nonrecursive import LazyNonrecursive
 
 from arsenal import colors
-from collections import deque, defaultdict
+from collections import deque
 
 
-class Peekaboo(AbstractAlgorithm):
+# [2025-11-21 Fri] This version of the next symbold prediction algorithm
+# enumerates strings (and states).  We also have a version that enumrates just
+# the states.
+class PeekabooStrings:
 
     def __init__(self, fst, max_steps=float('inf')):
         self.fst = fst
@@ -41,10 +45,8 @@ class Peekaboo(AbstractAlgorithm):
             continuous = set()
             for y in relevant_symbols:
                 dfa_filtered = FilteredDFA(dfa=dfa, fst=self.fst, target=target + y)
-
                 #assert dfa_filtered.materialize().equal(Precover(self.fst, target + y).min)
                 #print('ok:', repr(target + y))
-
                 if dfa_filtered.accepts_universal(state, self.source_alphabet):
                     precover[y].quotient.add(xs)
                     continuous.add(y)
@@ -60,6 +62,78 @@ class Peekaboo(AbstractAlgorithm):
         return precover
 
 
+#class PeekabooStates:
+class Peekaboo:
+
+    def __init__(self, fst, max_steps=float('inf')):
+        self.fst = fst
+        self.source_alphabet = fst.A - {EPSILON}
+        self.target_alphabet = fst.B - {EPSILON}
+        self.max_steps = max_steps
+
+    def __call__(self, target, return_strings=True):
+        precover = {y: PrecoverDecomp(set(), set()) for y in self.target_alphabet}
+        worklist = deque()
+        states = set()
+
+        dfa = PeekabooPrecover(self.fst, target).det()
+        for state in dfa.start():
+            worklist.append(state)
+            states.add(state)
+
+        arcs = []
+
+        t = 0
+        N = len(target)
+        while worklist:
+            state = worklist.popleft()
+            t += 1
+            if t > self.max_steps:
+                print(colors.light.red % 'stopped early')
+                break
+
+            relevant_symbols = {ys[N] for _, ys in state if len(ys) > N}
+
+            # Shortcut: At most one of the `relevant_symbols` can be
+            # continuous. If we find one, we can stop expanding.
+            continuous = set()
+            for y in relevant_symbols:
+                dfa_filtered = FilteredDFA(dfa=dfa, fst=self.fst, target=target + y)
+                #assert dfa_filtered.materialize().equal(Precover(self.fst, target + y).min)
+                #print('ok:', repr(target + y))
+                if dfa_filtered.accepts_universal(state, self.source_alphabet):
+                    precover[y].quotient.add(state)
+                    continuous.add(y)
+                elif dfa_filtered.is_final(state):
+                    precover[y].remainder.add(state)
+            assert len(continuous) <= 1
+            if continuous:
+                continue    # we have found a quotient and can skip
+
+            for x, next_state in dfa.arcs(state):
+                if next_state not in states:
+                    worklist.append(next_state)
+                    states.add(next_state)
+
+                arcs.append((state, x, next_state))
+
+        foo = {y: PrecoverDecomp(set(), set()) for y in self.target_alphabet}
+        for y in precover:
+            Q, R = precover[y]
+            q = FSA(start=set(dfa.start()), arcs=arcs, stop=Q)
+            r = FSA(start=set(dfa.start()), arcs=arcs, stop=R)
+            if return_strings:
+                foo[y] = PrecoverDecomp(
+                    set(q.min().language(float('inf'))),
+                    set(r.min().language(float('inf'))),
+                )
+            else:
+                foo[y] = PrecoverDecomp(q.trim(), r.trim())
+
+        return foo
+
+
+# TODO: in order to predict EOS, we need to extract the preimage from Q and R
 class PeekabooPrecover(Lazy):
     """NOTE: this is a semi-automaton as it does not have an `is_final` method.
 
@@ -86,6 +160,7 @@ class PeekabooPrecover(Lazy):
                     yield (x, (j, ys + y))
 
         # Note: we truncate the buffer after the (N+1)th symbol
+        # XXX: In the recursive algorithm, we would not do this!
         elif ys.startswith(self.target) and n == N + 1:
             for a,b,j in self.fst.arcs(i):
                 yield (a, (j, ys))

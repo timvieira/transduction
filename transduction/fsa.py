@@ -20,6 +20,7 @@ def dfs(Ps, arcs):
 
 _frozenset = frozenset
 class frozenset(_frozenset):
+    "Same as frozenset, but with a nicer printing method."
     def __repr__(self):
         return '{%s}' % (','.join(str(x) for x in self))
 
@@ -69,6 +70,8 @@ class FSA:
         return '\n'.join(x)
 
     def _repr_mimebundle_(self, *args, **kwargs):
+        if not self.states:
+            return {'image/svg+xml': '<center>∅</center>'}
         return self.graphviz()._repr_mimebundle_(*args, **kwargs)
 
     def graphviz(self, fmt_node=lambda x: x, sty_node=lambda x: {}, fmt_edge=lambda i,a,j: 'ε' if a == EPSILON else a):
@@ -311,7 +314,7 @@ class FSA:
 
         def powerarcs(Q):
             for a in self.syms:
-                yield a, frozenset({j for i in Q for j in self.edges[i][a]})
+                yield a, frozenset(j for i in Q for j in self.edges[i][a])
 
         m = dfs([frozenset(self.start)], powerarcs)
 
@@ -443,6 +446,8 @@ class FSA:
     min = lru_cache(None)(min_faster)
 
     def equal(self, other):
+        if isinstance(other, (frozenset, list, set, tuple)):
+            other = FSA.from_strings(other)
         return self.min()._dfa_isomorphism(other.min())
 
     def _dfa_isomorphism(self, other):
