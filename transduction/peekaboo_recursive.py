@@ -112,15 +112,13 @@ class Peekaboo:
 
     def check(self, target):
         from transduction import Precover, display_table
-        from transduction.dfa_decomp import RecursiveDFADecomposition
         from IPython.display import HTML
 
         Have = self(target)
 
         for y in self.target_alphabet:
 
-            #want = Precover(self.fst, target + y).decomposition
-            want = RecursiveDFADecomposition(self.fst, target + y)
+            want = Precover(self.fst, target + y)
             have = Have[y]
 
             q_ok = have.quotient.equal(want.quotient)

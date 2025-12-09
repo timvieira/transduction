@@ -1,6 +1,5 @@
 from transduction import (
-    FSA, FST, EPSILON, PrecoverDecomp, examples, Precover,
-    display_table, format_table, HTML, colors, LazyPrecoverNFA
+    FSA, EPSILON, examples, Precover, format_table, colors
 )
 
 
@@ -49,6 +48,8 @@ class Relevance(Lazy):
         raise NotImplementedError()
 
 
+# XXX: Warning: this algorithm doesn't work in all cases.  It currently fails to
+# terminate on the `triplets_of_doom` test case.
 class RecursiveDFADecomposition:
 
     def __init__(self, fst, target, parent=None):
@@ -170,6 +171,11 @@ class RecursiveDFADecomposition:
     # types.
     def _repr_html_(self, *args, **kwargs):
         return format_table([self], headings=['quotient', 'remainder'])
+
+    def check(self):
+        P = Precover(self.fst, self.target)
+        assert self.quotient.equal(P.quotient)
+        assert self.remainder.equal(P.remainder)
 
 
 #_______________________________________________________________________________
