@@ -6,10 +6,12 @@ from transduction.util import display_table
 from arsenal import colors
 from arsenal.cache import memoize
 from functools import cached_property
+from collections import deque
 
 
 class Precover:
-    """Representation of the precover of target string `target` in the FST `fst`.
+    """
+    Representation of the precover of target string `target` in the FST `fst`.
 
     Supports factoring into an optimal quotient--remainder pair, even when they
     may be infinite.  The key is to represent them each as automata.
@@ -41,6 +43,7 @@ class Precover:
 
     @cached_property
     def target_prefixes(self):
+        "An automaton that denotes the `target` string's cylinder set."
         m = FST()
         m.add_I(self.target[:0])
         N = len(self.target)
@@ -53,6 +56,7 @@ class Precover:
 
     @cached_property
     def decomposition(self):
+        "Produce a quotient--remainder pair each represented as automata."
         P = self.det
 
         # identify all universal states
@@ -96,7 +100,9 @@ class Precover:
                 yield xss
 
     def check_decomposition(self, Q, R, throw=False):
-        "Analyze the decompositions Q and R: is it valid? optimal?"
+        "Analyze the decompositions Q and R: is it valid? optimal?  Note that these tests only terminal each Q and R are finite sets."
+        if isinstance(Q, FSA): Q = Q.language(np.inf)
+        if isinstance(R, FSA): R = R.language(np.inf)
         ok = True
         z = self.is_valid(Q, R)   # check validity of the decomposition
         ok &= z
@@ -128,16 +134,14 @@ class Precover:
         return ok
 
     def show_decomposition(self, minimize=True, trim=True):
+        "A simple visualization of the decomposition for IPython notebooks."
         Q,R = self.decomposition
-        if minimize:
-            Q = Q.min()
-            R = R.min()
-        if trim:
-            Q = Q.trim()
-            R = R.trim()
+        if minimize: Q, R = Q.min(), R.min()
+        if trim:     Q, R = Q.trim(), R.trim()
         display_table([[Q, R]], headings=['quotient', 'remainder'])
 
     def graphviz(self):
+        "Stylized graphviz representation of the precover DFA where colors denotes properties of the state (green: quotient, magenta: remainder, white: useless)"
         dfa = self.det
         universal_states = {i for i in dfa.stop if is_universal(dfa, i, self.source_alphabet)}
         dead_states = dfa.states - dfa.trim().states
@@ -164,10 +168,53 @@ def force_start(fsa, start_state):
     return new
 
 
-def is_universal(fsa, q, alphabet):
-    # universality test; best used on a DFA
-    m = force_start(fsa, q).min()
-    return len(m.states) == 1 and all(set(m.arcs(i, a)) == {i} for i in m.states for a in alphabet)
+#def is_universal(fsa, q, alphabet):
+#    # universality test; best used on a DFA
+#    m = force_start(fsa, q).min()
+#    return len(m.states) == 1 and all(set(m.arcs(i, a)) == {i} for i in m.states for a in alphabet)
+
+
+def is_universal(dfa, state, alphabet):
+    "[True/False] This `state` accepts the universal language (alphabet$^*$)."
+    #
+    # Rationale: a DFA accepts `alphabet`$^*$ iff all reachable states are
+    # accepting and complete (i.e., has a transition for each symbol in
+    # `alphabet`).
+    #
+    # Warning: If the reachable subset automaton is infinite, the search may
+    # not terminate (as expected, NFA universality is PSPACE-complete in
+    # general), but in many practical FSAs this halts quickly.
+    #
+
+    visited = set()
+    worklist = deque()
+
+    # DFA start state
+    visited.add(state)
+    worklist.append(state)
+
+    while worklist:
+        i = worklist.popleft()
+
+        # All-final check in the DFA view
+        if not dfa.is_final(i):
+            return False
+
+        # Build a symbol-to-destination mapping
+        dest = dict(dfa.arcs(i))
+
+        # Completeness on Σ
+        for a in alphabet:
+            # if we're missing an arc labeled `a` in state `i`, then state
+            # `i` is not universal!  Moreover, `state` is not universal.
+            if a not in dest:
+                return False
+            j = dest[a]
+            if j not in visited:
+                visited.add(j)
+                worklist.append(j)
+
+    return True
 
 
 class EagerNonrecursive(AbstractAlgorithm):

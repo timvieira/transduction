@@ -41,9 +41,10 @@ class Peekaboo:
         from graphviz import Digraph
 
         # TODO: [2025-12-06 Sat] The funny thing about this picture is that the
-        # plates are technical for the wrong target string.  specifically, they are
-        # the precover of the next-target symbol extension of the target target
-        # context thus, we have in each plate the *union* of the precovers
+        # "plates" are technically for the wrong target string.  specifically,
+        # they are the precover of the next-target symbol extension of the
+        # target target context thus, we have in each plate the *union* of the
+        # precovers
 
         # TODO: use the integerizer here so that nodes are not improperly
         # equated with thier string representations.
@@ -463,7 +464,7 @@ def test_samuel():
 
 
 def test_small():
-    fst = example.small()
+    fst = examples.small()
     recursive_testing(fst, '', depth=5)
 
 
@@ -524,7 +525,7 @@ def test_benchmark():
 
 
 def test_lookahead():
-    fst = example.lookahead()
+    fst = examples.lookahead()
     recursive_testing(fst, '', depth=6, verbosity=1)
 
 
