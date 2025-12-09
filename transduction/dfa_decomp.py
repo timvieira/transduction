@@ -36,6 +36,12 @@ class Relevance(Lazy):
             if self.target.startswith(ys) or ys.startswith(self.target):
                 yield x, (i, ys)
 
+#    def arcs(self, state):
+#        N = len(self.target)
+#        for x, (i, ys) in self.base.arcs(state):
+#            if self.target.startswith(ys) or ys.startswith(self.target):
+#                yield x, (i, ys[:N])
+
     def start(self):
         yield from self.base.start()
 
@@ -77,8 +83,8 @@ class RecursiveDFADecomposition:
 
             # TODO: copying is slow
             self._states = self.parent._states.copy()
-            self._arcs = parent._arcs[:]
-            #self._arcs = [(i,x,j) for (i,x,j) in parent._arcs if i in parent.R.stop]
+            #self._arcs = parent._arcs[:]
+            self._arcs = [(i,x,j) for (i,x,j) in parent._arcs if i not in parent.R.stop]
 
         self._stop_Q = set()
         self._stop_R = set()
@@ -257,9 +263,11 @@ def test_weird_copy():
 
 
 def test_triplets_of_doom():
-    #fst = examples.triplets_of_doom()
-    #recursive_testing(fst, '', depth=13, verbosity=0)
-    assert False, 'this test does not terminate'
+    from arsenal import timelimit
+    fst = examples.triplets_of_doom()
+    with timelimit(5):
+        #assert False, 'this test does not terminate'
+        recursive_testing(fst, '', depth=13, verbosity=0)
 
 
 def test_infinite_quotient():
