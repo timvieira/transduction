@@ -10,6 +10,19 @@ from transduction.lazy_recursive import LazyRecursive
 from arsenal import colors
 from collections import deque
 
+# [2025-12-09 Tue] TRUNCATION STRATEGIES: COST-BENEFIT ANALYSIS - The strategy
+# that we have taken in the current implementation is truncate as early as
+# possible this minimizes the work in the current iteration.  However, it might
+# lead to more work in a later iteration because more nodes are marked as
+# trauncated, meaning that they cannot be used in the later iterations.  If we
+# used a different truncation policy it might be the case that we could share
+# more work.  For example, if there is a small number of nodes that we could in
+# principle enumerate now (like the dfa_decomp strategy does) then we could get
+# away with that.  It is not possible, in general, to never truncate if we want
+# to terminate.  However, the truncation strategy has a cost-benefit analysis,
+# which I am trying to elucidate a bit.  The knob that controls this is the
+# "truncation policy" and there are smarter things than truncating at N+1 (even
+# for the triplets of doom example).
 
 class Peekaboo:
     """
@@ -111,7 +124,7 @@ class Peekaboo:
         return dot
 
     def check(self, target):
-        from transduction import Precover, display_table
+        from transduction import display_table
         from IPython.display import HTML
 
         Have = self(target)
@@ -312,7 +325,11 @@ class PeekabooPrecover(Lazy):
 
     def arcs(self, state):
         (i, ys, truncated) = state   # TODO: use truncated bit to speed some of this up
-        if ys.startswith(self.target):
+        n = len(ys)
+        m = min(self.N, n)
+        if self.target[:m] != ys[:m]:      # target and ys are not prefixes of one another.
+            return
+        if m == self.N:                    # i.e, target <= ys
             for x, y, j in self.f.arcs(i):
                 if y == EPSILON:
                     yield (x, (j, ys, truncated))
@@ -324,8 +341,7 @@ class PeekabooPrecover(Lazy):
                     else:
                         # mark truncated nodes because they need to be removed in the next iteration
                         yield (x, (j, now, True))
-        else:
-            n = len(ys)
+        else:                              # i.e, ys < target)
             assert not truncated
             for x, y, j in self.f.arcs(i):
                 if y == EPSILON:
@@ -340,7 +356,6 @@ class PeekabooPrecover(Lazy):
     def is_final(self, state):
         (i, ys) = state
         return self.f.is_final(i) and ys.startswith(self.target)
-
 
 
 class TruncatedDFA(Lazy):
