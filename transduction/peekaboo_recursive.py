@@ -10,19 +10,46 @@ from transduction.lazy_recursive import LazyRecursive
 from arsenal import colors
 from collections import deque
 
+#_______________________________________________________________________________
+#
 # [2025-12-09 Tue] TRUNCATION STRATEGIES: COST-BENEFIT ANALYSIS - The strategy
-# that we have taken in the current implementation is truncate as early as
-# possible this minimizes the work in the current iteration.  However, it might
-# lead to more work in a later iteration because more nodes are marked as
-# trauncated, meaning that they cannot be used in the later iterations.  If we
-# used a different truncation policy it might be the case that we could share
-# more work.  For example, if there is a small number of nodes that we could in
-# principle enumerate now (like the dfa_decomp strategy does) then we could get
-# away with that.  It is not possible, in general, to never truncate if we want
-# to terminate.  However, the truncation strategy has a cost-benefit analysis,
-# which I am trying to elucidate a bit.  The knob that controls this is the
-# "truncation policy" and there are smarter things than truncating at N+1 (even
-# for the triplets of doom example).
+#   that we have taken in the current implementation is truncate as early as
+#   possible this minimizes the work in the current iteration.  However, it
+#   might lead to more work in a later iteration because more nodes are marked
+#   as trauncated, meaning that they cannot be used in the later iterations.  If
+#   we used a different truncation policy it might be the case that we could
+#   share more work.  For example, if there is a small number of nodes that we
+#   could in principle enumerate now (like the dfa_decomp strategy does) then we
+#   could get away with that.  It is not possible, in general, to never truncate
+#   if we want to terminate.  However, the truncation strategy has a
+#   cost-benefit analysis, which I am trying to elucidate a bit.  The knob that
+#   controls this is the "truncation policy" and there are smarter things than
+#   truncating at N+1 (even for the triplets of doom example).
+#_______________________________________________________________________________
+#
+# Warning: The BufferedRelevance machine is not finite state!
+#
+# [2025-12-02 Tue] Possible issue: we could do an unbounded amount of useless
+#   work by enumerating states in the buffered relevance machine that are not on
+#   track to participate in any relevant target string's precover.
+#
+# [2025-12-04 Thu] I think we ned to do something similar ot the
+#   PeekabooPrecover construction so that we can only explore a finite number of
+#   states and, thus, terminate in finite time.  The key to this is going to be
+#   to either tweak the state space as in PeekabooPrecover or to use something
+#   like we did with `refine`.  The concert about the PeekabooPrecover strategy
+#   is that we might add edges to the machine that need to be removed/ignored in
+#   the next layer. (The picture that I have in my head is something like change
+#   propagation where we have to invalidate some of the work that we done under
+#   the assumption that the target string ended here.  Aesthetically and
+#   practically, I would rather not require invalidate work.  There is some
+#   guiding principle that is lacking here and I don't know how to think about
+#   it.)  Maybe the best way to move forward with this is to make a few
+#   visualizations of what I expected the layered structure to look like (e.g.,
+#   by grafting a set of correct machines for each next symbol together and
+#   seeing where things diverge from from that idealization).
+#_______________________________________________________________________________
+#
 
 class Peekaboo:
     """
@@ -51,24 +78,36 @@ class Peekaboo:
         return foo
 
     def graphviz(self, target):
-        from graphviz import Digraph
-
+        #
         # TODO: [2025-12-06 Sat] The funny thing about this picture is that the
         # "plates" are technically for the wrong target string.  specifically,
         # they are the precover of the next-target symbol extension of the
         # target target context thus, we have in each plate the *union* of the
-        # precovers
-
+        # precovers.
+        #
         # TODO: use the integerizer here so that nodes are not improperly
         # equated with thier string representations.
+        #
+        # TODO: show the active nodes in the graph of the outer most plate
+        # (e.g., by coloring them yellow (#f2d66f), as in the precover
+        # visualization); inactive node are white.  An additional option would
+        # be to color the active vs. inactive edges differently as there is some
+        # possibility of misinterpretation.
+        #
+        # TODO: another useful option would be for each plate to have "output
+        # ports" for the nodes that should be expose to the next plate.  (I did
+        # something like this in my dissertation code base, which was based on
+        # using HTML tables inside node internals.)
+        #
         from arsenal import Integerizer
+        from graphviz import Digraph
         m = Integerizer()
 
         def helper(target, outer):
             print(repr(target))
             with outer.subgraph(name="cluster") as inner:
                 inner.attr(label=target,
-                           style='rounded, filled', color='black', fillcolor='#e0ffe0')
+                           style='rounded, filled', color='black', fillcolor='white')
 
                 if target == '':
                     curr = PeekabooState(self.fst, '', parent=None, max_steps=self.max_steps)
@@ -94,9 +133,9 @@ class Peekaboo:
                 for y in curr.foo:
                     tmp = curr.foo[y]
                     for j in tmp.quotient:
-                        inner.node(str(j), fillcolor='red')
+                        inner.node(str(j), fillcolor='#E6F0E6')
                     for j in tmp.remainder:
-                        inner.node(str(j), fillcolor='magenta')
+                        inner.node(str(j), fillcolor='#f26fec')
 
                 return curr
 
@@ -152,28 +191,6 @@ class Peekaboo:
                     [HTML('<b>remainder</b>'), have.remainder, want.remainder],
                 ], headings=['', 'have', 'want'])
 
-
-# Warning: The BufferedRelevance machine is not finite state!
-#
-# [2025-12-02 Tue] Possible issue: we could do an unbounded amount of useless
-#   work by enumerating states in the buffered relevance machine that are not on
-#   track to participate in any relevant target string's precover.
-#
-# [2025-12-04 Thu] I think we ned to do something similar ot the
-#   PeekabooPrecover construction so that we can only explore a finite number of
-#   states and, thus, terminate in finite time.  The key to this is going to be
-#   to either tweak the state space as in PeekabooPrecover or to use something
-#   like we did with `refine`.  The concert about the PeekabooPrecover strategy
-#   is that we might add edges to the machine that need to be removed/ignored in
-#   the next layer. (The picture that I have in my head is something like change
-#   propagation where we have to invalidate some of the work that we done under
-#   the assumption that the target string ended here.  Aesthetically and
-#   practically, I would rather not require invalidate work.  There is some
-#   guiding principle that is lacking here and I don't know how to think about
-#   it.)  Maybe the best way to move forward with this is to make a few
-#   visualizations of what I expected the layered structure to look like (e.g.,
-#   by grafting a set of correct machines for each next symbol together and
-#   seeing where things diverge from from that idealization).
 
 class PeekabooState:
 
@@ -354,7 +371,7 @@ class PeekabooPrecover(Lazy):
             yield (i, '', False)
 
     def is_final(self, state):
-        (i, ys) = state
+        (i, ys, _) = state
         return self.f.is_final(i) and ys.startswith(self.target)
 
 
@@ -379,6 +396,7 @@ class TruncatedDFA(Lazy):
     def start(self):
         return self.dfa.start()
 
+    # TODO: I think this is optional, but possible less efficient
     def refine(self, frontier):
         # clip the target side side to `y` in order to mimick the states of the
         # composition machine that we used in the new lazy, nonrecursive
@@ -388,6 +406,7 @@ class TruncatedDFA(Lazy):
             (i, ys[:N], truncated) for i, ys, truncated in frontier     # TODO: can we use the truncated bit here?
             if ys[:min(N, len(ys))] == self.target[:min(N, len(ys))]
         )
+#        return frontier
 
     def arcs(self, state):
         for x, next_state in self.dfa.arcs(state):
