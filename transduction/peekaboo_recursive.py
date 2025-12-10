@@ -133,7 +133,7 @@ class Peekaboo:
                 for y in curr.foo:
                     tmp = curr.foo[y]
                     for j in tmp.quotient:
-                        inner.node(str(j), fillcolor='#E6F0E6')
+                        inner.node(str(j), fillcolor='#90EE90')
                     for j in tmp.remainder:
                         inner.node(str(j), fillcolor='#f26fec')
 
@@ -348,23 +348,27 @@ class PeekabooPrecover(Lazy):
             return
         if m == self.N:                    # i.e, target <= ys
             for x, y, j in self.f.arcs(i):
-                if y == EPSILON:
+
+                if y == EPSILON or truncated:
                     yield (x, (j, ys, truncated))
+
                 else:
                     was = (ys + y)
+
+                    # XXX: truncation policy
                     now = was[:self.N+1]
-                    if was == now:
-                        yield (x, (j, was, False))
-                    else:
-                        # mark truncated nodes because they need to be removed in the next iteration
-                        yield (x, (j, now, True))
+                    #now = was[:self.N+2]
+
+                    # mark truncated nodes because they need to be removed in the next iteration
+                    yield (x, (j, now, truncated or (was != now)))
+
         else:                              # i.e, ys < target)
             assert not truncated
             for x, y, j in self.f.arcs(i):
                 if y == EPSILON:
-                    yield (x, (j, ys, False))
+                    yield (x, (j, ys, truncated))
                 elif y == self.target[n]:
-                    yield (x, (j, ys + y, False))
+                    yield (x, (j, ys + y, truncated))
 
     def start(self):
         for i in self.f.I:

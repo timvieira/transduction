@@ -146,7 +146,7 @@ class Precover:
         universal_states = {i for i in dfa.stop if is_universal(dfa, i, self.source_alphabet)}
         dead_states = dfa.states - dfa.trim().states
         def color_node(x):
-            if x in universal_states: return '#E6F0E6'
+            if x in universal_states: return '#90EE90'
             elif dfa.is_final(x): return '#f26fec'
             elif x in dead_states: return 'white'
             else: return '#f2d66f'
