@@ -1,6 +1,6 @@
 from transduction import (
     PrecoverDecomp, LazyNonrecursive, BuggyLazyRecursive, LazyRecursive, LazyPrecoverNFA,
-    EagerNonrecursive, examples
+    EagerNonrecursive, examples, Precover
 )
 
 
@@ -103,49 +103,43 @@ def test_duplicate():
     assert tmp('115') == PrecoverDecomp({'15'}, set())
 
 
-def test_newspeak():
+def test_newspeak2():
 
-    n = examples.newspeak()
+    n = examples.newspeak2()
 
-    tmp = BuggyLazyRecursive(n, empty_source = b'', empty_target = b'', extend = lambda x, y: x + bytes([y]))
-    assert tmp(b'bad') == PrecoverDecomp(set(), set())
-    assert tmp(b'ba') == PrecoverDecomp(
-        {b'bar', b'bax', b'baq', b'ban', b'bap', b'bau', b'bao', b'bay', b'bag', b'bae', b'bah',
-         b'bak', b'bai', b'bav', b'bac', b'bal', b'bam', b'bab', b'baz', b'baa', b'baf', b'bat',
-         b'bas', b'baj', b'baw'},
-        {b'ba'},
+    ba = PrecoverDecomp(
+        {'bar', 'bax', 'baq', 'ban', 'bap', 'bau', 'bao', 'bay', 'bag', 'bae', 'bah',
+         'bak', 'bai', 'bav', 'bac', 'bal', 'bam', 'bab', 'baz', 'baa', 'baf', 'bat',
+         'bas', 'baj', 'baw'},
+        {'ba'},
     )
-    assert tmp(b'ungood') == PrecoverDecomp({b'bad', b'ungood'}, set())
+    empty = PrecoverDecomp({''}, set())
+    bad = PrecoverDecomp(set(), set())
+    ungood = PrecoverDecomp({'bad', 'ungood'}, set())
 
-    tmp = EagerNonrecursive(n, empty_source = b'', extend = lambda x, y: x + bytes([y]))
-    assert tmp(b'bad') == PrecoverDecomp(set(), set())
-    assert tmp(b'ba') == PrecoverDecomp(
-        {b'bar', b'bax', b'baq', b'ban', b'bap', b'bau', b'bao', b'bay', b'bag', b'bae', b'bah',
-         b'bak', b'bai', b'bav', b'bac', b'bal', b'bam', b'bab', b'baz', b'baa', b'baf', b'bat',
-         b'bas', b'baj', b'baw'},
-        {b'ba'},
-    )
-    assert tmp(b'ungood') == PrecoverDecomp({b'bad', b'ungood'}, set())
+    tmp = BuggyLazyRecursive(n)
+    assert tmp('') == empty
+    assert tmp('bad') == bad
+    assert tmp('ba') == ba
+    assert tmp('ungood') == ungood, tmp('ungood')
 
-    tmp = LazyNonrecursive(n, empty_source = b'', extend = lambda x, y: x + bytes([y]))
-    assert tmp(b'bad') == PrecoverDecomp(set(), set())
-    assert tmp(b'ba') == PrecoverDecomp(
-        {b'bar', b'bax', b'baq', b'ban', b'bap', b'bau', b'bao', b'bay', b'bag', b'bae', b'bah',
-         b'bak', b'bai', b'bav', b'bac', b'bal', b'bam', b'bab', b'baz', b'baa', b'baf', b'bat',
-         b'bas', b'baj', b'baw'},
-        {b'ba'},
-    )
-    assert tmp(b'ungood') == PrecoverDecomp({b'bad', b'ungood'}, set())
+    tmp = EagerNonrecursive(n)
+    assert tmp('') == empty
+    assert tmp('bad') ==  bad
+    assert tmp('ba') == ba
+    assert tmp('ungood') == ungood, tmp('ungood')
 
-    tmp = LazyRecursive(n, empty_source = b'', empty_target=b'', extend = lambda x, y: x + bytes([y]))
-    assert tmp(b'bad') == PrecoverDecomp(set(), set())
-    assert tmp(b'ba') == PrecoverDecomp(
-        {b'bar', b'bax', b'baq', b'ban', b'bap', b'bau', b'bao', b'bay', b'bag', b'bae', b'bah',
-         b'bak', b'bai', b'bav', b'bac', b'bal', b'bam', b'bab', b'baz', b'baa', b'baf', b'bat',
-         b'bas', b'baj', b'baw'},
-        {b'ba'},
-    )
-    assert tmp(b'ungood') == PrecoverDecomp({b'bad', b'ungood'}, set())
+    tmp = LazyNonrecursive(n)
+    assert tmp('') == empty
+    assert tmp('bad') == bad
+    assert tmp('ba') == ba
+    assert tmp('ungood') == ungood, tmp('ungood')
+
+    tmp = LazyRecursive(n)
+    assert tmp('') == empty
+    assert tmp('bad') == bad
+    assert tmp('ba') == ba
+    assert tmp('ungood') == ungood, tmp('ungood')
 
 
 def test_samuel_example():

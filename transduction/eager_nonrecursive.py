@@ -2,11 +2,102 @@ from transduction.base import AbstractAlgorithm, PrecoverDecomp
 from transduction.fst import FST, EPSILON
 from transduction.fsa import FSA
 from transduction.util import display_table
+from transduction.lazy import Lazy
 
 from arsenal import colors
 from arsenal.cache import memoize
 from functools import cached_property
 from collections import deque
+
+
+class LazyPrecoverNFAWithTruncationMarker(Lazy):
+    """
+    Alternative implmementation of LazyPrecoverNFA, which augments the states
+    with an additional bit, indicating if their output context has been
+    truncated (i.e., if there are more symbols in the output buffer than their
+    are in the state representation).
+    """
+
+    def __init__(self, fst, target):
+        self.fst = fst
+        self.target = target
+        self.N = len(target)
+
+    def arcs(self, state):
+        (i, ys, truncated) = state
+        n = len(ys)
+        m = min(self.N, n)
+#        if self.target[:m] != ys[:m]:      # target and ys are incompatible
+#            return
+        if m == self.N:                    # i.e, target <= ys
+            for x, y, j in self.fst.arcs(i):
+                if y == EPSILON or truncated:
+                    yield (x, (j, self.target, truncated))
+                else:
+                    yield (x, (j, self.target, True))
+        else:                              # i.e, ys < target)
+            assert not truncated
+            for x, y, j in self.fst.arcs(i):
+                if y == EPSILON:
+                    yield (x, (j, ys, False))
+                elif y == self.target[n]:
+                    yield (x, (j, self.target[:n+1], False))
+
+    def start(self):
+        for i in self.fst.I:
+            yield (i, '', False)
+
+    def is_final(self, state):
+        (i, ys, _) = state
+        return self.fst.is_final(i) and ys[:self.N] == self.target
+
+
+class LazyPrecoverNFA(Lazy):
+    r"""
+    `LazyPrecoverNFA(f, target)` implements the precover for the string `target` in the
+    FST `f` as a lazy, nondeterministic finite-state automaton.  Mathematically, the
+    precover is given by the following automata-theoretic operations:
+    $$
+    \mathrm{proj}_{\mathcal{X}}\Big( \texttt{f} \circ \boldsymbol{y}\mathcal{Y}^* \Big)
+    $$
+    where target is $\boldsymbol{y} \in \mathcal{Y}^*$ and $\texttt{f}$ is a transducer
+    implementing a function from some space $\mathcal{X}^*$ to $\mathcal{Y}^*$.
+
+    Mathematically, the precover represents the subset of $\mathcal{X}^*$ that
+    we need to sum over in order to compute the prefix probability of
+    $\boldsymbol{y}$ in the pushforward of $\texttt{f}$.
+
+    """
+
+    def __init__(self, fst, target):
+        self.fst = fst
+        self.target = target
+        self.N = len(target)
+
+    def arcs(self, state):
+        (i, ys) = state
+        n = len(ys)
+        m = min(self.N, n)
+#        if self.target[:m] != ys[:m]:      # target and ys are not prefixes of one another.
+#            return
+#        if ys.startswith(self.target):
+        if m == self.N:                    # i.e, target <= ys
+            for x, _, j in self.fst.arcs(i):
+                yield (x, (j, self.target))
+        else:                              # i.e, ys < target)
+            for x, y, j in self.fst.arcs(i):
+                if y == EPSILON:
+                    yield (x, (j, ys))
+                elif y == self.target[n]:
+                    yield (x, (j, self.target[:n+1]))
+
+    def start(self):
+        for i in self.fst.I:
+            yield (i, self.target[:0])
+
+    def is_final(self, state):
+        (i, ys) = state
+        return self.fst.is_final(i) and ys[:self.N] == self.target
 
 
 class Precover:
@@ -29,6 +120,14 @@ class Precover:
     def det(self):
         "DFA representing the complete precover."
         return self.fsa.det()
+#        return LazyPrecoverNFA(self.fst, self.target).det().materialize()
+#        return LazyPrecoverNFAWithTruncationMarker(self.fst, self.target).det().materialize()
+
+    @cached_property
+    def det_universal_states(self):
+        "set of universal states in `self.det`"
+        P = self.det
+        return {i for i in P.stop if is_universal(P, i, self.source_alphabet)}
 
     @cached_property
     def min(self):
@@ -39,7 +138,11 @@ class Precover:
     def fsa(self):
         "FSA representing the complete precover."
         # this is a copy machine for target \targetAlphabet^*
-        return (self.fst @ self.target_prefixes).project(0)
+        #want = (self.fst @ self.target_prefixes).project(0)
+        have = LazyPrecoverNFA(self.fst, self.target).materialize()
+        #assert have.equal(want), [want.min(), have.min()]
+        #return want
+        return have
 
     @cached_property
     def target_prefixes(self):
@@ -140,9 +243,10 @@ class Precover:
         if trim:     Q, R = Q.trim(), R.trim()
         display_table([[Q, R]], headings=['quotient', 'remainder'])
 
-    def graphviz(self):
+    def graphviz(self, trim=False):
         "Stylized graphviz representation of the precover DFA where colors denotes properties of the state (green: quotient, magenta: remainder, white: useless)"
         dfa = self.det
+        if trim: dfa = dfa.trim()
         universal_states = {i for i in dfa.stop if is_universal(dfa, i, self.source_alphabet)}
         dead_states = dfa.states - dfa.trim().states
         def color_node(x):

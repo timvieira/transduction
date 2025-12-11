@@ -249,7 +249,7 @@ def togglecase():
     T.add_F(0)
     return T
 
-
+'''
 # TODO: dump the machine to python code and create it here so that `pynini` is
 # no longer a dependency.
 def newspeak():
@@ -259,8 +259,8 @@ def newspeak():
     symtab = pynini.SymbolTable()
     symtab.add_symbol("eps")
     #for c in range(256):
-    for c in b"abcdefghijklmnopqrstuvwxyz":
-        symtab.add_symbol(str(c))
+    for c in "abcdefghijklmnopqrstuvwxyz":
+        symtab.add_symbol(c)
 
     # Add chars
     sigma_chars = [pynini.accep(symtab.find(idx), token_type=symtab)
@@ -275,19 +275,14 @@ def newspeak():
             f += pynini.accep(str(ch), token_type=symtab)
         return f
 
-    bad = seq(b"bad")
-    ungood = seq(b"ungood")
+    bad = seq("bad")
+    ungood = seq("ungood")
 
     bad_to_ungood = pynini.cross(bad, ungood)
 
     replace_bad = pynini.cdrewrite(bad_to_ungood, "", "", sigma_star).optimize()
     replace_bad.set_input_symbols(symtab)
     replace_bad.set_output_symbols(symtab)
-
-#    print('==============================')
-#    for sym in symtab:
-#        print(sym)
-#    print('==============================')
 
     m = FST()
     m.add_I(replace_bad.start())
@@ -296,23 +291,105 @@ def newspeak():
             m.add_F(s)
         for a in replace_bad.arcs(s):
             x, y = symtab.find(a.ilabel), symtab.find(a.olabel)
-            x = EPSILON if x == 'eps' else int(x)
-            y = EPSILON if y == 'eps' else int(y)
+            x = EPSILON if x == 'eps' else x
+            y = EPSILON if y == 'eps' else y
             #print((x, y), a.nextstate)
             m.add_arc(s, x, y, a.nextstate)
 
     return m
+'''
 
 
 def newspeak2():
     "Same as `newspeak` except over `str` rather than `bytes`."
-    self = newspeak()
     m = FST()
-    for i in self.I:
-        m.add_I(i)
-    for i in self.states:
-        for a, b, j in self.arcs(i):
-            m.add_arc(i, bytes([a]).decode() if a != EPSILON else EPSILON, bytes([b]).decode() if a != EPSILON else EPSILON, j)
-    for i in self.F:
-        m.add_F(i)
+    m.add_start(0)
+    m.add_stop(0)
+    m.add_stop(2)
+    m.add_stop(4)
+    m.add_arc(0, 'a', 'a', 0)
+    m.add_arc(0, 'b', 'b', 2)
+    m.add_arc(0, 'b', 'u', 1)
+    m.add_arc(0, 'c', 'c', 0)
+    m.add_arc(0, 'd', 'd', 0)
+    m.add_arc(0, 'e', 'e', 0)
+    m.add_arc(0, 'f', 'f', 0)
+    m.add_arc(0, 'g', 'g', 0)
+    m.add_arc(0, 'h', 'h', 0)
+    m.add_arc(0, 'i', 'i', 0)
+    m.add_arc(0, 'j', 'j', 0)
+    m.add_arc(0, 'k', 'k', 0)
+    m.add_arc(0, 'l', 'l', 0)
+    m.add_arc(0, 'm', 'm', 0)
+    m.add_arc(0, 'n', 'n', 0)
+    m.add_arc(0, 'o', 'o', 0)
+    m.add_arc(0, 'p', 'p', 0)
+    m.add_arc(0, 'q', 'q', 0)
+    m.add_arc(0, 'r', 'r', 0)
+    m.add_arc(0, 's', 's', 0)
+    m.add_arc(0, 't', 't', 0)
+    m.add_arc(0, 'u', 'u', 0)
+    m.add_arc(0, 'v', 'v', 0)
+    m.add_arc(0, 'w', 'w', 0)
+    m.add_arc(0, 'x', 'x', 0)
+    m.add_arc(0, 'y', 'y', 0)
+    m.add_arc(0, 'z', 'z', 0)
+    m.add_arc(1, 'a', 'n', 3)
+    m.add_arc(2, 'a', 'a', 4)
+    m.add_arc(2, 'b', 'b', 2)
+    m.add_arc(2, 'b', 'u', 1)
+    m.add_arc(2, 'c', 'c', 0)
+    m.add_arc(2, 'd', 'd', 0)
+    m.add_arc(2, 'e', 'e', 0)
+    m.add_arc(2, 'f', 'f', 0)
+    m.add_arc(2, 'g', 'g', 0)
+    m.add_arc(2, 'h', 'h', 0)
+    m.add_arc(2, 'i', 'i', 0)
+    m.add_arc(2, 'j', 'j', 0)
+    m.add_arc(2, 'k', 'k', 0)
+    m.add_arc(2, 'l', 'l', 0)
+    m.add_arc(2, 'm', 'm', 0)
+    m.add_arc(2, 'n', 'n', 0)
+    m.add_arc(2, 'o', 'o', 0)
+    m.add_arc(2, 'p', 'p', 0)
+    m.add_arc(2, 'q', 'q', 0)
+    m.add_arc(2, 'r', 'r', 0)
+    m.add_arc(2, 's', 's', 0)
+    m.add_arc(2, 't', 't', 0)
+    m.add_arc(2, 'u', 'u', 0)
+    m.add_arc(2, 'v', 'v', 0)
+    m.add_arc(2, 'w', 'w', 0)
+    m.add_arc(2, 'x', 'x', 0)
+    m.add_arc(2, 'y', 'y', 0)
+    m.add_arc(2, 'z', 'z', 0)
+    m.add_arc(3, 'd', 'g', 5)
+    m.add_arc(4, 'a', 'a', 0)
+    m.add_arc(4, 'b', 'b', 2)
+    m.add_arc(4, 'b', 'u', 1)
+    m.add_arc(4, 'c', 'c', 0)
+    m.add_arc(4, 'e', 'e', 0)
+    m.add_arc(4, 'f', 'f', 0)
+    m.add_arc(4, 'g', 'g', 0)
+    m.add_arc(4, 'h', 'h', 0)
+    m.add_arc(4, 'i', 'i', 0)
+    m.add_arc(4, 'j', 'j', 0)
+    m.add_arc(4, 'k', 'k', 0)
+    m.add_arc(4, 'l', 'l', 0)
+    m.add_arc(4, 'm', 'm', 0)
+    m.add_arc(4, 'n', 'n', 0)
+    m.add_arc(4, 'o', 'o', 0)
+    m.add_arc(4, 'p', 'p', 0)
+    m.add_arc(4, 'q', 'q', 0)
+    m.add_arc(4, 'r', 'r', 0)
+    m.add_arc(4, 's', 's', 0)
+    m.add_arc(4, 't', 't', 0)
+    m.add_arc(4, 'u', 'u', 0)
+    m.add_arc(4, 'v', 'v', 0)
+    m.add_arc(4, 'w', 'w', 0)
+    m.add_arc(4, 'x', 'x', 0)
+    m.add_arc(4, 'y', 'y', 0)
+    m.add_arc(4, 'z', 'z', 0)
+    m.add_arc(5, '', 'o', 6)
+    m.add_arc(6, '', 'o', 7)
+    m.add_arc(7, '', 'd', 0)
     return m

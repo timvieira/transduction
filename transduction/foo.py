@@ -50,6 +50,35 @@ class Analyze:
                 continue
             print(colors.light.yellow % '├─ copy:  ', (i,x,j))
 
+    def graphviz(self):
+        dot = Digraph(
+            graph_attr=dict(rankdir='LR'),
+            node_attr=dict(
+                fontname='Monospace',
+                fontsize='8',
+                height='.05',
+                width='.05',
+                margin="0.055,0.042",
+                shape='box',
+                style='rounded, filled',
+            ),
+            edge_attr=dict(
+                arrowsize='0.3',
+                fontname='Monospace',
+                fontsize='8'
+            ),
+        )
+
+        for i in self.states:
+            if i in self.universal:
+                dot.node(str(i), fillcolor='red')
+                #continue
+            elif i in self.remainder:
+                dot.node(str(i), fillcolor='magenta')
+            for x, j in self.dfa.arcs(i):
+                dot.edge(str(i), str(j), label=x)
+        return dot
+
 
 class LazyPrecoverNFA(Lazy):
 

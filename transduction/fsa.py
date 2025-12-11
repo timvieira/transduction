@@ -704,7 +704,7 @@ class FSA:
         u.add_stop(0)
         return u
 
-    def language(self, max_length):
+    def language(self):
         "Enumerate strings in the language of this FSA up to length `max_length`."
         worklist = deque()
         worklist.extend([(i, '') for i in self.start])
@@ -712,8 +712,6 @@ class FSA:
             (i, x) = worklist.popleft()
             if i in self.stop:
                 yield x
-            if len(x) >= max_length:
-                continue
             for a, j in self.arcs(i):
                 worklist.append((j, x + a))
 
