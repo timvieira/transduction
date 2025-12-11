@@ -36,26 +36,26 @@ class BuggyLazyRecursive(AbstractAlgorithm):
 
     def compute(self, y):
 
+        curr = PrecoverDecomp(set(), set())
+        worklist = []
+
         N = len(y)
         if N == 0:
-            # Note: this base case is making a (reasonable) assumption that
-            # `fst` is a total function.  We may want to consider supporting
-            # partial functions, which will require revising this step.
-            return PrecoverDecomp({self.empty_source}, set())
+            worklist.append(self.empty_source)
 
-        prev = self(y[:-1])   # recurse on prefix
-        curr = PrecoverDecomp(set(), set())
+        else:
+            prev = self(y[:-1])   # recurse on prefix
 
-        # filter previous remainders
-        for xs in prev.remainder:
-            if self.discontinuity(xs, y):
-                curr.remainder.add(xs)
+            # filter previous remainders
+            for xs in prev.remainder:
+                if self.discontinuity(xs, y):
+                    curr.remainder.add(xs)
 
-        # filter previous calls output so that it satsifies the invariant
-        worklist = []
-        for xs in prev.quotient:
-            if self.candidacy(xs, y):
-                worklist.append(xs)
+            # filter previous calls output so that it satsifies the invariant
+            worklist = []
+            for xs in prev.quotient:
+                if self.candidacy(xs, y):
+                    worklist.append(xs)
 
         # Another invariant: we never pop a xs more than once.  All
         # of a source string's prefixes will pop before it.

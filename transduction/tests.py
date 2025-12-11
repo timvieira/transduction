@@ -8,25 +8,34 @@ def test_sdd1():
     fst = examples.sdd1_fst()
 
     tmp = BuggyLazyRecursive(fst)
-    assert tmp('') == PrecoverDecomp({''}, set())    # this is a weird case and it differs from the other ones!
+    assert tmp('') == PrecoverDecomp({'a'}, set())
     assert tmp('a') == PrecoverDecomp({'a'}, set())
     assert tmp('aa') == PrecoverDecomp({'aa'}, set())
 
     tmp = EagerNonrecursive(fst)
-    print(tmp(''))
-    assert tmp('') == PrecoverDecomp({'a'}, set())   # this is a weird case but this is correct
+    assert tmp('') == PrecoverDecomp({'a'}, set())
     assert tmp('a') == PrecoverDecomp({'a'}, set())
     assert tmp('aa') == PrecoverDecomp({'aa'}, set())
 
     tmp = LazyNonrecursive(fst)
-    assert tmp('') == PrecoverDecomp({'a'}, set())   # this is a weird case but this is correct
+    assert tmp('') == PrecoverDecomp({'a'}, set())
     assert tmp('a') == PrecoverDecomp({'a'}, set())
     assert tmp('aa') == PrecoverDecomp({'aa'}, set())
 
     tmp = LazyRecursive(fst)
-    assert tmp('') == PrecoverDecomp({''}, set())   # this is a weird case and this is less correct
+    assert tmp('') == PrecoverDecomp({'a'}, set())
     assert tmp('a') == PrecoverDecomp({'a'}, set())
     assert tmp('aa') == PrecoverDecomp({'aa'}, set())
+
+    tmp = lambda target: Precover(fst, target)
+    assert_equal(tmp(''), PrecoverDecomp({'a'}, set()))
+    assert_equal(tmp('a'), PrecoverDecomp({'a'}, set()))
+    assert_equal(tmp('aa'), PrecoverDecomp({'aa'}, set()))
+
+
+def assert_equal(have, want):
+    assert have.quotient.equal(want.quotient), [have.quotient.min(), want.quotient]
+    assert have.remainder.equal(want.remainder), [have.remainder.min(), want.remainder]
 
 
 def test_simple():
