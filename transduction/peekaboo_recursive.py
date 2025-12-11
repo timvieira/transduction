@@ -340,13 +340,14 @@ class PeekabooPrecover(Lazy):
         m = min(self.N, n)
         if self.target[:m] != ys[:m]:      # target and ys are not prefixes of one another.
             return
-        if m == self.N:                    # i.e, target <= ys
+        if m >= self.N:                    # i.e, target <= ys
             for x, y, j in self.f.arcs(i):
 
                 if y == EPSILON or truncated:
                     yield (x, (j, ys, truncated))
 
                 else:
+                    assert not truncated
                     was = (ys + y)
 
                     # XXX: truncation policy
@@ -362,15 +363,15 @@ class PeekabooPrecover(Lazy):
                 if y == EPSILON:
                     yield (x, (j, ys, truncated))
                 elif y == self.target[n]:
-                    yield (x, (j, ys + y, truncated))
+                    yield (x, (j, self.target[:n+1], truncated))
 
     def start(self):
         for i in self.f.I:
-            yield (i, '', False)
+            yield (i, self.target[:0], False)
 
     def is_final(self, state):
         (i, ys, _) = state
-        return self.f.is_final(i) and ys.startswith(self.target) and len(ys) == self.N+1
+        return self.f.is_final(i) and ys.startswith(self.target) and len(ys) > self.N
 
 
 class TruncatedDFA(Lazy):
@@ -492,9 +493,9 @@ def test_number_comma_separator():
     #import string
     #fst = examples.number_comma_separator(set(string.printable) - set('\t\n\r\x0b\x0c'))
     fst = examples.number_comma_separator({'a', ',', ' ', '0'}, Digit={'0'})
-    recursive_testing(fst, '', depth=4, verbosity=1)
-    recursive_testing(fst, '0,| 0,', depth=1, verbosity=1)
-    recursive_testing(fst, '0,| 0,|', depth=1, verbosity=1)
+    recursive_testing(fst, '', depth=4, verbosity=0)
+    recursive_testing(fst, '0,| 0,', depth=1, verbosity=0)
+    recursive_testing(fst, '0,| 0,|', depth=1, verbosity=0)
 
 
 def test_newspeak2():
@@ -507,7 +508,7 @@ def test_newspeak2():
 
 def test_lookahead():
     fst = examples.lookahead()
-    recursive_testing(fst, '', depth=6, verbosity=1)
+    recursive_testing(fst, '', depth=6, verbosity=0)
 
 
 def test_weird_copy():
@@ -522,12 +523,12 @@ def test_triplets_of_doom():
 
 def test_infinite_quotient():
     fst = examples.infinite_quotient()
-    recursive_testing(fst, '', depth=5, verbosity=1)
+    recursive_testing(fst, '', depth=5, verbosity=0)
 
 
 def test_parity():
     fst = examples.parity({'a', 'b'})
-    recursive_testing(fst, '', depth=5, verbosity=1)
+    recursive_testing(fst, '', depth=5, verbosity=0)
 
 
 if __name__ == '__main__':
