@@ -36,7 +36,6 @@ def test_foo():
     assert E.materialize().equal(m)
 
 
-
 if __name__ == '__main__':
     from arsenal import testing_framework
     testing_framework(globals())
