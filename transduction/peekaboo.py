@@ -10,7 +10,7 @@ from arsenal import colors
 from collections import deque
 
 
-# [2025-11-21 Fri] This version of the next symbold prediction algorithm
+# [2025-11-21 Fri] This version of the next-symbol prediction algorithm
 # enumerates strings (and states).  We also have a version that enumrates just
 # the states.
 class PeekabooStrings:
@@ -140,34 +140,42 @@ class PeekabooPrecover(Lazy):
     def __init__(self, fst, target):
         self.fst = fst
         self.target = target
+        self.N = len(target)
 
     def arcs(self, state):
         (i, ys) = state
         n = len(ys)
-        N = len(self.target)
-        if ys == self.target and n >= N:
+        m = min(n, self.N)
+        if self.target[:m] != ys[:m]: return
+
+        # case: grow the buffer until we have covered all of the target string
+        if n < self.N:
+            for x,y,j in self.fst.arcs(i):
+                if y == EPSILON:
+                    yield (x, (j, ys))
+                elif y == self.target[n]:
+                    yield (x, (j, self.target[:n+1]))
+
+        # extend the buffer beyond the target string by one symbol
+        elif n == self.N:
             for x,y,j in self.fst.arcs(i):
                 if y == EPSILON:
                     yield (x, (j, ys))
                 else:
                     yield (x, (j, ys + y))
 
-        # Note: we truncate the buffer after the (N+1)th symbol
-        # XXX: In the recursive algorithm, we would not do this!
-        elif ys.startswith(self.target) and n == N + 1:
+        # truncate the buffer after the (N+1)th symbol
+        elif n == self.N + 1:
             for a,b,j in self.fst.arcs(i):
                 yield (a, (j, ys))
-
-        elif self.target.startswith(ys) and n < N:
-            for x,y,j in self.fst.arcs(i):
-                if y == EPSILON:
-                    yield (x, (j, ys))
-                elif y == self.target[len(ys)]:
-                    yield (x, (j, ys + y))
 
     def start(self):
         for i in self.fst.I:
             yield (i, '')
+
+    def is_final(self, state):
+        (i, ys) = state
+        return self.fst.is_final(i) and ys.startswith(self.target) and len(ys) == self.N+1
 
 
 class FilteredDFA(Lazy):
@@ -214,9 +222,18 @@ class recursive_testing:
 
     def run(self, target, depth):
         if depth == 0: return
+
+        # Check that the peekaboo machine matches the reference implementation
+        have = PeekabooPrecover(self.fst, target).materialize()
+        want = (self.fst @ (FSA.from_string(target) * FSA.from_strings(self.target_alphabet).p())).project(0)
+        assert have.equal(want)
+
+        # Check that the decomposition matches the reference implementation
         want = {y: self.reference(target + y) for y in self.target_alphabet}
         have = self.peekaboo(target)
         assert_equal_decomp_map(have, want)
+
+        # Recurse
         for y in want:
             if self.verbosity > 0: print('>', repr(target + y))
             q = want[y].quotient.trim()

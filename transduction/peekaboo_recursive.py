@@ -14,7 +14,7 @@ from collections import deque
 #
 # [2025-12-09 Tue] TRUNCATION STRATEGIES: COST-BENEFIT ANALYSIS - The strategy
 #   that we have taken in the current implementation is truncate as early as
-#   possible this minimizes the work in the current iteration.  However, it
+#   possible - this minimizes the work in the current iteration.  However, it
 #   might lead to more work in a later iteration because more nodes are marked
 #   as trauncated, meaning that they cannot be used in the later iterations.  If
 #   we used a different truncation policy it might be the case that we could
@@ -25,7 +25,7 @@ from collections import deque
 #   cost-benefit analysis, which I am trying to elucidate a bit.  The knob that
 #   controls this is the "truncation policy" and there are smarter things than
 #   truncating at N+1 (even for the triplets of doom example).
-#_______________________________________________________________________________
+#   _______________________________________________________________________________
 #
 # Warning: The BufferedRelevance machine is not finite state!
 #
@@ -312,12 +312,6 @@ class PeekabooState:
                             debug(colors.light.red % 'goo', state, repr(y), next_state)
                             goo[y].add(state)
 
-                # [2025-12-02 Tue] unfortunately, these graphs aren't always
-                # cleanly layered; we can have arcs that go backward (e.g., when
-                # Q and R are cyclical) [TODO: add examples] We can also have
-                # empty layers (these are layers where the nodes are in previous
-                # layers - just imagine a case where Q(abc) = Q(ab)).
-
         self.foo = precover
         self.goo = goo
 
@@ -376,7 +370,7 @@ class PeekabooPrecover(Lazy):
 
     def is_final(self, state):
         (i, ys, _) = state
-        return self.f.is_final(i) and ys.startswith(self.target)
+        return self.f.is_final(i) and ys.startswith(self.target) and len(ys) == self.N+1
 
 
 class TruncatedDFA(Lazy):
@@ -443,9 +437,18 @@ class recursive_testing:
 
     def run(self, target, depth):
         if depth == 0: return
+
+        # Check that the peekaboo machine matches the reference implementation
+        have = PeekabooPrecover(self.fst, target).materialize()
+        want = (self.fst @ (FSA.from_string(target) * FSA.from_strings(self.target_alphabet).p())).project(0)
+        assert have.equal(want)
+
+        # Check that the decomposition matches the reference implementation
         want = {y: self.reference(target + y) for y in self.target_alphabet}
         have = self.peekaboo(target)
         assert_equal_decomp_map(have, want)
+
+        # recurse
         for y in want:
             if self.verbosity > 0: print('>', repr(target + y))
             q = want[y].quotient.trim()
