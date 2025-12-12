@@ -1,11 +1,11 @@
-from transduction.base import AbstractAlgorithm, PrecoverDecomp
+from transduction.base import PrecoverDecomp
 from transduction.fst import EPSILON
 from transduction.fsa import FSA
 from arsenal.cache import memoize
 from arsenal import colors
 
 
-class BuggyLazyRecursive(AbstractAlgorithm):
+class BuggyLazyRecursive:
     """This algorithm returns a valid, but sometimes suboptimal, `PrecoverDecomp`.
 
     UPDATE: See `transduction3.Fixed` for a version that correctly identifies
@@ -16,13 +16,16 @@ class BuggyLazyRecursive(AbstractAlgorithm):
 
     """
 
-    def __init__(self, fst, empty_target = '', **kwargs):
-        super().__init__(fst, **kwargs)
-        self.empty_target = empty_target
-        self.cache = {}
 
-    def initialize(self, target):
-        pass   # does nothing.
+    def __init__(self, fst, empty_target = '', empty_source = '', extend = lambda x,y: x + y, max_steps=float('inf')):
+        self.fst = fst
+        self.empty_source = empty_source
+        self.empty_target = empty_target
+        self.source_alphabet = fst.A - {EPSILON}
+        self.target_alphabet = fst.B - {EPSILON}
+        self.extend = extend
+        self.max_steps = max_steps
+        self.cache = {}
 
     # Note: this version overrides the base because it is recursive;
     # TODO: make a base class for abstract *recursive* algorithms!
@@ -79,31 +82,31 @@ class BuggyLazyRecursive(AbstractAlgorithm):
 
         return curr
 
-    def as_fsa(self, target):
-        "Take the output and represent it as an FSA."
-        decomp = self(target)
-        return (FSA.from_strings(decomp.quotient) * FSA.universal(self.source_alphabet)
-                + FSA.from_strings(decomp.remainder))
+#    def as_fsa(self, target):
+#        "Take the output and represent it as an FSA."
+#        decomp = self(target)
+#        return (FSA.from_strings(decomp.quotient) * FSA.universal(self.source_alphabet)
+#                + FSA.from_strings(decomp.remainder))
 
-    def _as_fsa(self, target):
-        "Equivalent to `as_fsa`, but less efficient."
-        decomp = self(target)
-        # The method below is better implemented by the else clause.
-        states = {x[:t] for x in decomp.quotient | decomp.remainder
-                  for t in range(len(x)+1)}
-        m = FSA()
-        m.add_start('')
-        for x in states:
-            if self.continuity(x, target):
-                m.add_stop(x)
-                for a in self.source_alphabet:
-                    m.add(x, a, x)
-                continue
-            if self.discontinuity(x, target):
-                m.add_stop(x)
-            for xx in self.candidates(x, target):
-                m.add(x, xx[-1], xx)
-        return m
+#    def _as_fsa(self, target):
+#        "Equivalent to `as_fsa`, but less efficient."
+#        decomp = self(target)
+#        # The method below is better implemented by the else clause.
+#        states = {x[:t] for x in decomp.quotient | decomp.remainder
+#                  for t in range(len(x)+1)}
+#        m = FSA()
+#        m.add_start('')
+#        for x in states:
+#            if self.continuity(x, target):
+#                m.add_stop(x)
+#                for a in self.source_alphabet:
+#                    m.add(x, a, x)
+#                continue
+#            if self.discontinuity(x, target):
+#                m.add_stop(x)
+#            for xx in self.candidates(x, target):
+#                m.add(x, xx[-1], xx)
+#        return m
 
     def candidates(self, xs, target):
         for source_symbol in self.source_alphabet:

@@ -25,6 +25,10 @@ class Lazy:
     def det(self):
         return LazyDeterminize(self)
 
+    def min(self):
+        "Warning: not lazy."
+        return self.materialize().min()
+
     def epsremove(self):
         return EpsilonRemove(self)
 
@@ -35,16 +39,19 @@ class Lazy:
         visited = set()
         for i in self.start():
             worklist.append(i)
-            m.add_start(i)
-        while worklist:
-            i = worklist.popleft()
-            if i in visited: continue
             visited.add(i)
+            m.add_start(i)
+        steps = 0
+        while worklist:
+            steps += 1
+            if steps >= max_steps: break
+            i = worklist.popleft()
             if self.is_final(i):
                 m.add_stop(i)
-            if len(visited) > max_steps: break
             for a, j in self.arcs(i):
-                worklist.append(j)
+                if j not in visited:
+                    visited.add(j)
+                    worklist.append(j)
                 m.add(i,a,j)
         return m
 

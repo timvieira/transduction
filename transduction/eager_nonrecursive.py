@@ -27,8 +27,8 @@ class LazyPrecoverNFAWithTruncationMarker(Lazy):
         (i, ys, truncated) = state
         n = len(ys)
         m = min(self.N, n)
-#        if self.target[:m] != ys[:m]:      # target and ys are incompatible
-#            return
+        if self.target[:m] != ys[:m]:      # target and ys are incompatible
+            return
         if m == self.N:                    # i.e, target <= ys
             for x, y, j in self.fst.arcs(i):
                 if y == EPSILON or truncated:
@@ -45,7 +45,7 @@ class LazyPrecoverNFAWithTruncationMarker(Lazy):
 
     def start(self):
         for i in self.fst.I:
-            yield (i, '', False)
+            yield (i, self.target[:0], False)
 
     def is_final(self, state):
         (i, ys, _) = state
@@ -78,9 +78,8 @@ class LazyPrecoverNFA(Lazy):
         (i, ys) = state
         n = len(ys)
         m = min(self.N, n)
-#        if self.target[:m] != ys[:m]:      # target and ys are not prefixes of one another.
-#            return
-#        if ys.startswith(self.target):
+        if self.target[:m] != ys[:m]:      # target and ys are not prefixes of one another.
+            return
         if m == self.N:                    # i.e, target <= ys
             for x, _, j in self.fst.arcs(i):
                 yield (x, (j, self.target))
@@ -120,8 +119,6 @@ class Precover:
     def det(self):
         "DFA representing the complete precover."
         return self.fsa.det()
-#        return LazyPrecoverNFA(self.fst, self.target).det().materialize()
-#        return LazyPrecoverNFAWithTruncationMarker(self.fst, self.target).det().materialize()
 
     @cached_property
     def det_universal_states(self):
@@ -138,11 +135,9 @@ class Precover:
     def fsa(self):
         "FSA representing the complete precover."
         # this is a copy machine for target \targetAlphabet^*
-        #want = (self.fst @ self.target_prefixes).project(0)
-        have = LazyPrecoverNFA(self.fst, self.target).materialize()
-        #assert have.equal(want), [want.min(), have.min()]
-        #return want
-        return have
+        #return (self.fst @ self.target_prefixes).project(0)
+        return LazyPrecoverNFA(self.fst, self.target)
+        #return LazyPrecoverNFAWithTruncationMarker(self.fst, self.target)
 
     @cached_property
     def target_prefixes(self):
@@ -161,6 +156,7 @@ class Precover:
     def decomposition(self):
         "Produce a quotient--remainder pair each represented as automata."
         P = self.det
+        if isinstance(P, Lazy): P = P.materialize()
 
         # identify all universal states
         universal_states = {i for i in P.stop if is_universal(P, i, self.source_alphabet)}
@@ -261,15 +257,15 @@ class Precover:
         return self.graphviz()._repr_mimebundle_(*args, **kwargs)
 
 
-def force_start(fsa, start_state):
-    assert start_state in fsa.states
-    new = FSA()
-    new.add_start(start_state)
-    for i, a, j in fsa.arcs():
-        new.add(i, a, j)
-    for i in fsa.stop:
-        new.add_stop(i)
-    return new
+#def force_start(fsa, start_state):
+#    assert start_state in fsa.states
+#    new = FSA()
+#    new.add_start(start_state)
+#    for i, a, j in fsa.arcs():
+#        new.add(i, a, j)
+#    for i in fsa.stop:
+#        new.add_stop(i)
+#    return new
 
 
 #def is_universal(fsa, q, alphabet):
@@ -335,10 +331,9 @@ class EagerNonrecursive(AbstractAlgorithm):
     def initialize(self, target):
         self.state = {}
         self.dfa = Precover(self.fst, target).min
-        if len(self.dfa.start) == 0: return    # empty!
-        [state] = self.dfa.start
-        self.state[self.empty_source] = state
-        yield self.empty_source
+        for state in self.dfa.start:
+            self.state[self.empty_source] = state
+            yield self.empty_source
 
     def candidates(self, xs, target):
         for source_symbol, next_state in self.dfa.arcs(self.state[xs]):

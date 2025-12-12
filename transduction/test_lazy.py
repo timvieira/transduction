@@ -35,6 +35,8 @@ def test_foo():
 
     assert E.materialize().equal(m)
 
+    assert E.materialize(max_steps=2).states == {1, 2}
+
 
 if __name__ == '__main__':
     from arsenal import testing_framework

@@ -48,8 +48,53 @@ class Relevance(Lazy):
         raise NotImplementedError()
 
 
+# TODO: needs tests
+class NonrecursiveDFADecomp:
+
+    def __init__(self, fst, target):
+
+        dfa = LazyPrecoverNFA(self.fst, target).det()
+
+        Q = FSA()
+        R = FSA()
+
+        worklist = deque()
+        visited = set()
+
+        for i in dfa.start():
+            worklist.append(i)
+            visited.add(i)
+            Q.add_start(i)
+            R.add_start(i)
+
+        while worklist:
+            i = worklist.pop()
+
+            if dfa.is_final(i):
+                if dfa.accepts_universal(i, self.source_alphabet):
+                    Q.add_stop(i)
+                    continue       # will not expand further
+                else:
+                    R.add_stop(i)  # will expand further
+
+            for a, j in dfa.arcs(i):
+                if j not in visited:
+                    worklist.append(j)
+                    visited.add(j)
+
+                Q.add_arc(i, a, j)
+                R.add_arc(i, a, j)
+
+        self.fst = fst
+        self.dfa = dfa
+        self.target = target
+        self.quotient = Q
+        self.remainder = R
+
+
 # XXX: Warning: this algorithm doesn't work in all cases.  It currently fails to
-# terminate on the `triplets_of_doom` test case.
+# terminate on the `triplets_of_doom` test case.  The issue is that it does not
+# truncate the target buffer.
 class RecursiveDFADecomposition:
 
     def __init__(self, fst, target, parent=None):
@@ -79,13 +124,13 @@ class RecursiveDFADecomposition:
 
             # put previous and Q and R states on the worklist
             worklist = []
-            worklist.extend(parent.Q.stop)
-            worklist.extend(parent.R.stop)
+            worklist.extend(parent._stop_Q)
+            worklist.extend(parent._stop_R)
 
             # TODO: copying is slow
             self._states = self.parent._states.copy()
             #self._arcs = parent._arcs[:]
-            self._arcs = [(i,x,j) for (i,x,j) in parent._arcs if i not in parent.R.stop]
+            self._arcs = [(i,x,j) for (i,x,j) in parent._arcs if i not in parent._stop_R]
 
         self._stop_Q = set()
         self._stop_R = set()
@@ -110,21 +155,12 @@ class RecursiveDFADecomposition:
         #assert len(worklist) == 0
         #assert Q.states == R.states == visited
 
-    # TODO: better to rename Q -> quotient and R -> remainder for consistency.
     @property
     def quotient(self):
-        return self.Q
-
-    @property
-    def remainder(self):
-        return self.R
-
-    @property
-    def Q(self):
         return FSA(start=self._start, arcs=self._arcs, stop=self._stop_Q)
 
     @property
-    def R(self):
+    def remainder(self):
         return FSA(start=self._start, arcs=self._arcs, stop=self._stop_R)
 
     def is_final(self, frontier, target):
@@ -164,11 +200,8 @@ class RecursiveDFADecomposition:
         return RecursiveDFADecomposition(self.fst, self.target + y, parent=self)
 
     def __iter__(self):
-        return iter([self.Q.trim(), self.R.trim()])
+        return iter([self.quotient, self.remainder])
 
-    # TODO: I think we should store and visualize the machine over the same
-    # state space and just use different notations for each of the final state
-    # types.
     def _repr_html_(self, *args, **kwargs):
         return format_table([self], headings=['quotient', 'remainder'])
 
