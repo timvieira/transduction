@@ -284,7 +284,6 @@ def test_number_comma_separator():
 
 def test_newspeak2():
     fst = examples.newspeak2()
-    p = Peekaboo(fst, max_steps=500)
     recursive_testing(fst, '', depth=1)
     recursive_testing(fst, 'ba', depth=1)
     recursive_testing(fst, 'bad', depth=1)

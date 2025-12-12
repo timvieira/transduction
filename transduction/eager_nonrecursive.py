@@ -200,8 +200,8 @@ class Precover:
 
     def check_decomposition(self, Q, R, throw=False):
         "Analyze the decompositions Q and R: is it valid? optimal?  Note that these tests only terminal each Q and R are finite sets."
-        if isinstance(Q, FSA): Q = Q.language(np.inf)
-        if isinstance(R, FSA): R = R.language(np.inf)
+        if isinstance(Q, FSA): Q = Q.language()
+        if isinstance(R, FSA): R = R.language()
         ok = True
         z = self.is_valid(Q, R)   # check validity of the decomposition
         ok &= z

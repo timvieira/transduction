@@ -25,11 +25,11 @@ class PrecoverDecomp:
     def __eq__(self, other):
         return tuple(other) == tuple(self)
 
-    def to_precover_fsa(self, source_alphabet):
-        return (
-            FSA.from_strings(self.quotient) * FSA.universal(source_alphabet)
-            + FSA.from_strings(self.remainder)
-        )
+#    def to_precover_fsa(self, source_alphabet):
+#        return (
+#            FSA.from_strings(self.quotient) * FSA.universal(source_alphabet)
+#            + FSA.from_strings(self.remainder)
+#        )
 
 
 class AbstractAlgorithm:

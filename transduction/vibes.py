@@ -8,7 +8,6 @@ from transduction.fsa import EPSILON
 # Edge-label compressor (regex-style summaries)
 # ---------------------------------------------
 import unicodedata
-from itertools import groupby
 
 def _escape_char(c):
     specials = {']', '\\', '^', '-', '"'}

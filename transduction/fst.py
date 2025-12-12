@@ -423,7 +423,6 @@ class FST:
                 yield path
             for a, b, j in self.arcs(i):
                 worklist.append((*path, (a,b), j))
-        return m
 
     def relation(self, max_length):
         "Enumerate string pairs in the relation of this FST up to length `max_length`."

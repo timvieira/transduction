@@ -1,4 +1,6 @@
 import html
+import json
+import base64
 from IPython.display import SVG, HTML, display
 
 #
@@ -35,12 +37,6 @@ from IPython.display import SVG, HTML, display
 #    return display(HTML(format_table(*args, **kwargs)))
 #
 
-import html
-import json
-import base64
-from IPython.display import HTML, SVG
-
-
 def _pick_from_mimebundle(obj, prefer=(
     "text/html",
     "image/svg+xml",
@@ -63,13 +59,13 @@ def _pick_from_mimebundle(obj, prefer=(
         except Exception:
             bundle = None
 
-    if bundle is None:
-        try:
-            ip = get_ipython()
-            fmt = ip.display_formatter
-            bundle = fmt.format(obj)[0]
-        except Exception:
-            bundle = None
+    #if bundle is None:
+    #    try:
+    #        ip = get_ipython()
+    #        fmt = ip.display_formatter
+    #        bundle = fmt.format(obj)[0]
+    #    except Exception:
+    #        bundle = None
 
     if not isinstance(bundle, dict):
         return None

@@ -2,9 +2,9 @@ from transduction.base import PrecoverDecomp
 from transduction.eager_nonrecursive import Precover
 from transduction.lazy import Lazy
 from transduction.fsa import FSA, frozenset
-from transduction.fst import FST, EPSILON
-from transduction.eager_nonrecursive import EagerNonrecursive
-from transduction.lazy_recursive import LazyRecursive
+from transduction.fst import EPSILON
+#from transduction.eager_nonrecursive import EagerNonrecursive
+#from transduction.lazy_recursive import LazyRecursive
 #from transduction.lazy_nonrecursive import LazyNonrecursive
 
 from arsenal import colors
@@ -99,9 +99,7 @@ class Peekaboo:
         # something like this in my dissertation code base, which was based on
         # using HTML tables inside node internals.)
         #
-        from arsenal import Integerizer
         from graphviz import Digraph
-        m = Integerizer()
 
         def helper(target, outer):
             print(repr(target))
@@ -251,10 +249,8 @@ class PeekabooState:
         def state_relevant_symbols(state):
             return {ys[N] for _, ys, _ in state if len(ys) > N}
 
-        verbosity = 0
         N = len(target)
         t = 0
-        visited = set()
         while worklist:
             state = worklist.popleft()
             t += 1
@@ -500,7 +496,6 @@ def test_number_comma_separator():
 
 def test_newspeak2():
     fst = examples.newspeak2()
-    p = Peekaboo(fst, max_steps=500)
     recursive_testing(fst, '', depth=1)
     recursive_testing(fst, 'ba', depth=1)
     recursive_testing(fst, 'bad', depth=1)

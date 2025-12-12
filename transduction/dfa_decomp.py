@@ -1,9 +1,8 @@
-from transduction import (
-    FSA, EPSILON, examples, Precover, format_table, colors
-)
-
-
+from transduction import FSA, EPSILON, Precover, format_table, colors
+from transduction.eager_nonrecursive import LazyPrecoverNFA
 from transduction.lazy import Lazy
+from collections import deque
+
 
 class TargetSideBuffer(Lazy):
 
@@ -30,7 +29,6 @@ class Relevance(Lazy):
         self.target = target
 
     def arcs(self, state):
-        N = len(self.target)
         for x, (i, ys) in self.base.arcs(state):
             if self.target.startswith(ys) or ys.startswith(self.target):
                 yield x, (i, ys)
