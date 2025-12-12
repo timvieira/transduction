@@ -125,8 +125,8 @@ class FSA:
 
     def D(self, x):
         "left derivative"
-        m = FSA(start = set(e.start), stop = set(e.stop))
         e = self.epsremove()
+        m = FSA(start = set(e.start), stop = set(e.stop))
         for i,a,j in e.arcs():
             if i in e.start and a == x:
                 m.add(i,eps,j)
