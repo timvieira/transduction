@@ -125,18 +125,13 @@ class FSA:
 
     def D(self, x):
         "left derivative"
-        m = FSA()
-
-        e = self.epsremoval()
+        m = FSA(start = set(e.start), stop = set(e.stop))
+        e = self.epsremove()
         for i,a,j in e.arcs():
-
             if i in e.start and a == x:
                 m.add(i,eps,j)
             else:
                 m.add(i,a,j)
-
-        m.start = set(e.start)
-        m.stop = set(e.stop)
         return m
 
     def add(self, i, a, j):
@@ -197,7 +192,6 @@ class FSA:
     def accessible(self):
         return self._accessible(self.start)
 
-    @lru_cache(None)
     def trim(self):
         c = self.accessible() & self.reverse().accessible()
         m = FSA()
@@ -277,8 +271,7 @@ class FSA:
 #        assert s in self.states
 #        return dfs({s}, self.arcs)
 
-    @lru_cache(None)
-    def epsremoval(self):
+    def epsremove(self):
 
         eps_m = FSA()
         for i,a,j in self.arcs():
@@ -307,10 +300,9 @@ class FSA:
 
         return m
 
-    @lru_cache(None)
     def det(self):
 
-        self = self.epsremoval()
+        self = self.epsremove()
 
         def powerarcs(Q):
             for a in self.syms:
@@ -443,7 +435,7 @@ class FSA:
 
         return self.rename(lambda i: find[i]).trim()
 
-    min = lru_cache(None)(min_faster)
+    min = min_faster
 
     def equal(self, other):
         if isinstance(other, (frozenset, list, set, tuple)):
@@ -535,8 +527,8 @@ class FSA:
     def __and__(self, other):
         "intersection"
 
-        self = self.epsremoval().renumber()
-        other = other.epsremoval().renumber()
+        self = self.epsremove().renumber()
+        other = other.epsremove().renumber()
 
         def product_arcs(Q):
             (q1, q2) = Q
@@ -605,8 +597,8 @@ class FSA:
         "left quotient self//other ≐ {y | ∃x ∈ other: x⋅y ∈ self}"
 
         # TODO: support NFA/epsilon arcs?
-        self = self.epsremoval()
-        other = other.epsremoval()
+        self = self.epsremove()
+        other = other.epsremove()
 
         # quotient arcs are very similar to product arcs except that the common
         # string is "erased" in the new machine.

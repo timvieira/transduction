@@ -1,6 +1,5 @@
 from transduction.base import PrecoverDecomp
 from transduction.fst import EPSILON
-from transduction.fsa import FSA
 from arsenal.cache import memoize
 from arsenal import colors
 

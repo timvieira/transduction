@@ -249,55 +249,54 @@ def togglecase():
     T.add_F(0)
     return T
 
-'''
-# TODO: dump the machine to python code and create it here so that `pynini` is
-# no longer a dependency.
-def newspeak():
-    import pynini
 
-    # Symtab
-    symtab = pynini.SymbolTable()
-    symtab.add_symbol("eps")
-    #for c in range(256):
-    for c in "abcdefghijklmnopqrstuvwxyz":
-        symtab.add_symbol(c)
-
-    # Add chars
-    sigma_chars = [pynini.accep(symtab.find(idx), token_type=symtab)
-                   for idx in range(1, symtab.num_symbols())]
-
-    sigma = pynini.union(*sigma_chars)
-    sigma_star = sigma.closure().optimize()
-
-    def seq(s):
-        f = pynini.accep(str(s[0]), token_type=symtab)
-        for ch in s[1:]:
-            f += pynini.accep(str(ch), token_type=symtab)
-        return f
-
-    bad = seq("bad")
-    ungood = seq("ungood")
-
-    bad_to_ungood = pynini.cross(bad, ungood)
-
-    replace_bad = pynini.cdrewrite(bad_to_ungood, "", "", sigma_star).optimize()
-    replace_bad.set_input_symbols(symtab)
-    replace_bad.set_output_symbols(symtab)
-
-    m = FST()
-    m.add_I(replace_bad.start())
-    for s in replace_bad.states():
-        if 'Infinity' not in str(replace_bad.final(s)):   # TODO: absolutely hideous hack
-            m.add_F(s)
-        for a in replace_bad.arcs(s):
-            x, y = symtab.find(a.ilabel), symtab.find(a.olabel)
-            x = EPSILON if x == 'eps' else x
-            y = EPSILON if y == 'eps' else y
-            #print((x, y), a.nextstate)
-            m.add_arc(s, x, y, a.nextstate)
-
-    return m
-'''
+# # TODO: dump the machine to python code and create it here so that `pynini` is
+# # no longer a dependency.
+# def newspeak():
+#     import pynini
+#
+#     # Symtab
+#     symtab = pynini.SymbolTable()
+#     symtab.add_symbol("eps")
+#     #for c in range(256):
+#     for c in "abcdefghijklmnopqrstuvwxyz":
+#         symtab.add_symbol(c)
+#
+#     # Add chars
+#     sigma_chars = [pynini.accep(symtab.find(idx), token_type=symtab)
+#                    for idx in range(1, symtab.num_symbols())]
+#
+#     sigma = pynini.union(*sigma_chars)
+#     sigma_star = sigma.closure().optimize()
+#
+#     def seq(s):
+#         f = pynini.accep(str(s[0]), token_type=symtab)
+#         for ch in s[1:]:
+#             f += pynini.accep(str(ch), token_type=symtab)
+#         return f
+#
+#     bad = seq("bad")
+#     ungood = seq("ungood")
+#
+#     bad_to_ungood = pynini.cross(bad, ungood)
+#
+#     replace_bad = pynini.cdrewrite(bad_to_ungood, "", "", sigma_star).optimize()
+#     replace_bad.set_input_symbols(symtab)
+#     replace_bad.set_output_symbols(symtab)
+#
+#     m = FST()
+#     m.add_I(replace_bad.start())
+#     for s in replace_bad.states():
+#         if 'Infinity' not in str(replace_bad.final(s)):   # TODO: absolutely hideous hack
+#             m.add_F(s)
+#         for a in replace_bad.arcs(s):
+#             x, y = symtab.find(a.ilabel), symtab.find(a.olabel)
+#             x = EPSILON if x == 'eps' else x
+#             y = EPSILON if y == 'eps' else y
+#             #print((x, y), a.nextstate)
+#             m.add_arc(s, x, y, a.nextstate)
+#
+#     return m
 
 
 def newspeak2():

@@ -1,4 +1,4 @@
-from transduction import FSA, EPSILON, Precover, format_table, colors
+from transduction import FSA, EPSILON, Precover, format_table
 from transduction.eager_nonrecursive import LazyPrecoverNFA
 from transduction.lazy import Lazy
 from collections import deque
@@ -51,7 +51,7 @@ class NonrecursiveDFADecomp:
 
     def __init__(self, fst, target):
 
-        dfa = LazyPrecoverNFA(self.fst, target).det()
+        dfa = LazyPrecoverNFA(fst, target).det()
 
         Q = FSA()
         R = FSA()
@@ -135,7 +135,6 @@ class RecursiveDFADecomposition:
 
         while worklist:
             i = worklist.pop()
-            #print(colors.yellow % 'work', i)
 
             if self.is_final(i, target):
                 if self.is_universal(i, target):
@@ -200,7 +199,7 @@ class RecursiveDFADecomposition:
     def __iter__(self):
         return iter([self.quotient, self.remainder])
 
-    def _repr_html_(self, *args, **kwargs):
+    def _repr_html_(self):
         return format_table([self], headings=['quotient', 'remainder'])
 
     def check(self):

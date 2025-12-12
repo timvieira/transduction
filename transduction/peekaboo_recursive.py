@@ -206,7 +206,7 @@ class PeekabooState:
 
         assert parent is None or parent.target == target[:-1]
 
-        def debug(*args): pass
+        def debug(*_): pass
         #debug = print
 
         dfa = PeekabooPrecover(self.fst, target).det()

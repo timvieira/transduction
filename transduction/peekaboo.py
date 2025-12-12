@@ -1,10 +1,8 @@
 from transduction.base import PrecoverDecomp
 from transduction.lazy import Lazy
 from transduction.fsa import FSA
-from transduction.fst import FST, EPSILON
-from transduction.eager_nonrecursive import EagerNonrecursive, Precover
-from transduction.lazy_recursive import LazyRecursive
-#from transduction.lazy_nonrecursive import LazyNonrecursive
+from transduction.fst import EPSILON
+from transduction.eager_nonrecursive import Precover
 
 from arsenal import colors
 from collections import deque
@@ -150,7 +148,7 @@ class PeekabooPrecover(Lazy):
 
         # case: grow the buffer until we have covered all of the target string
         if n < self.N:
-            for x,y,j in self.fst.arcs(i):
+            for x, y, j in self.fst.arcs(i):
                 if y == EPSILON:
                     yield (x, (j, ys))
                 elif y == self.target[n]:
@@ -158,7 +156,7 @@ class PeekabooPrecover(Lazy):
 
         # extend the buffer beyond the target string by one symbol
         elif n == self.N:
-            for x,y,j in self.fst.arcs(i):
+            for x, y, j in self.fst.arcs(i):
                 if y == EPSILON:
                     yield (x, (j, ys))
                 else:
@@ -166,8 +164,8 @@ class PeekabooPrecover(Lazy):
 
         # truncate the buffer after the (N+1)th symbol
         elif n == self.N + 1:
-            for a,b,j in self.fst.arcs(i):
-                yield (a, (j, ys))
+            for x, _, j in self.fst.arcs(i):
+                yield (x, (j, ys))
 
     def start(self):
         for i in self.fst.I:
