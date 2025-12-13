@@ -2,6 +2,7 @@ from transduction.base import PrecoverDecomp
 from transduction.fst import EPSILON
 from arsenal.cache import memoize
 from arsenal import colors
+from collections import deque
 
 
 class BuggyLazyRecursive:
@@ -39,7 +40,7 @@ class BuggyLazyRecursive:
     def compute(self, y):
 
         curr = PrecoverDecomp(set(), set())
-        worklist = []
+        worklist = deque()
 
         N = len(y)
         if N == 0:
@@ -54,7 +55,6 @@ class BuggyLazyRecursive:
                     curr.remainder.add(xs)
 
             # filter previous calls output so that it satsifies the invariant
-            worklist = []
             for xs in prev.quotient:
                 if self.candidacy(xs, y):
                     worklist.append(xs)
@@ -63,7 +63,7 @@ class BuggyLazyRecursive:
         # of a source string's prefixes will pop before it.
         t = 0
         while worklist:
-            xs = worklist.pop()
+            xs = worklist.popleft()
             t += 1
             if t > self.max_steps:
                 print(colors.light.red % '~~~~ stopped early ~~~~')
@@ -192,10 +192,10 @@ class BuggyLazyRecursive:
         if len(q_dfa.states) != 1:
             return False
         [i] = q_dfa.states
-        for a in self.source_alphabet:
-            if set(q_dfa.arcs(i, a)) != {i}:
-                return False
-        return True
+        return all(
+            set(q_dfa.arcs(i, a)) == {i}
+            for a in self.source_alphabet
+        )
 
 
 class LazyRecursive(BuggyLazyRecursive):
@@ -237,7 +237,7 @@ class LazyRecursive(BuggyLazyRecursive):
         def is_final(xs):
             return self.discontinuity(xs, target)
 
-        worklist = []
+        worklist = deque()
 
         # DFA start state
         worklist.append(xs)
@@ -245,7 +245,7 @@ class LazyRecursive(BuggyLazyRecursive):
         visited = {refine(self.frontier(xs))}
 
         while worklist:
-            i = worklist.pop()
+            i = worklist.popleft()
 
             # All-final check in the DFA view
             if not is_final(i):

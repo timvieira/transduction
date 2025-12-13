@@ -173,7 +173,10 @@ def number_comma_separator(
 
 
 def delete_b():
-    "This FST is over the alphabet `{a,b}`.  It deletes every instance of `b`."
+    """
+    This FST is over the alphabet `{a,b}`: it deletes every instance of `b` and replaces a -> A
+    This example has infinite quotients.
+    """
     fst = FST()
     fst.add_I(0)
     fst.add_arc(0, 'a', 'A', 0)
@@ -238,16 +241,16 @@ def replace(mapping):
     return fst
 
 
-def togglecase():
-    T = FST()
-    T.add_I(0)
-    for b in range(256):
-        if bytes([b]).isupper():
-            T.add_arc(0, b, bytes([b]).lower()[0], 0)
-        else:
-            T.add_arc(0, b, bytes([b]).upper()[0], 0)
-    T.add_F(0)
-    return T
+#def togglecase():
+#    T = FST()
+#    T.add_I(0)
+#    for b in range(256):
+#        if bytes([b]).isupper():
+#            T.add_arc(0, b, bytes([b]).lower()[0], 0)
+#        else:
+#            T.add_arc(0, b, bytes([b]).upper()[0], 0)
+#    T.add_F(0)
+#    return T
 
 
 # # TODO: dump the machine to python code and create it here so that `pynini` is
@@ -392,3 +395,23 @@ def newspeak2():
     m.add_arc(6, '', 'o', 7)
     m.add_arc(7, '', 'd', 0)
     return m
+
+
+def togglecase():
+    T = FST()
+    T.add_I(0)
+    for y in 'abcdefghijklmnopqrstuvwxyz ':
+        T.add_arc(0, x.lower(), x.upper(), 0)
+        T.add_arc(0, x.upper(), x.lower(), 0)
+    T.add_F(0)
+    return T
+
+
+def lowercase():
+    T = FST()
+    T.add_I(0)
+    for y in 'abcdefghijklmnopqrstuvwxyz ':
+        T.add_arc(0, x.lower(), x.lower(), 0)
+        T.add_arc(0, x.upper(), x.lower(), 0)
+    T.add_F(0)
+    return T

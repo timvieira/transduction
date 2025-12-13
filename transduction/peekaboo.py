@@ -13,11 +13,10 @@ from collections import deque
 # the states.
 class PeekabooStrings:
 
-    def __init__(self, fst, max_steps=float('inf')):
+    def __init__(self, fst):
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
-        self.max_steps = max_steps
 
     def __call__(self, target):
         precover = {y: PrecoverDecomp(set(), set()) for y in self.target_alphabet}
@@ -27,14 +26,9 @@ class PeekabooStrings:
         for state in dfa.start():
             worklist.append(('', state))
 
-        t = 0
         N = len(target)
         while worklist:
             (xs, state) = worklist.popleft()
-            t += 1
-            if t > self.max_steps:
-                print(colors.light.red % 'stopped early')
-                break
 
             relevant_symbols = {ys[N] for _, ys in state if len(ys) > N}
 
@@ -62,11 +56,10 @@ class PeekabooStrings:
 
 class Peekaboo:
 
-    def __init__(self, fst, max_steps=float('inf')):
+    def __init__(self, fst):
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
-        self.max_steps = max_steps
 
     def __call__(self, target):
         precover = {y: PrecoverDecomp(set(), set()) for y in self.target_alphabet}
@@ -80,14 +73,9 @@ class Peekaboo:
 
         arcs = []
 
-        t = 0
         N = len(target)
         while worklist:
             state = worklist.popleft()
-            t += 1
-            if t > self.max_steps:
-                print(colors.light.red % 'stopped early')
-                break
 
             relevant_symbols = {ys[N] for _, ys in state if len(ys) > N}
 

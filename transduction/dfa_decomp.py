@@ -46,10 +46,11 @@ class Relevance(Lazy):
         raise NotImplementedError()
 
 
-# TODO: needs tests
 class NonrecursiveDFADecomp:
 
     def __init__(self, fst, target):
+        self.source_alphabet = fst.A - {EPSILON}
+        self.target_alphabet = fst.B - {EPSILON}
 
         dfa = LazyPrecoverNFA(fst, target).det()
 
@@ -66,7 +67,7 @@ class NonrecursiveDFADecomp:
             R.add_start(i)
 
         while worklist:
-            i = worklist.pop()
+            i = worklist.popleft()
 
             if dfa.is_final(i):
                 if dfa.accepts_universal(i, self.source_alphabet):
@@ -106,8 +107,9 @@ class RecursiveDFADecomposition:
         # this fast because this machine is lazy
         self.dfa = Relevance(TargetSideBuffer(fst), target).det()
 
+        worklist = deque()
+
         if parent is None:
-            worklist = []
 
             self._start = set()
             self._states = set()
@@ -121,7 +123,6 @@ class RecursiveDFADecomposition:
             self._start = self.parent._start
 
             # put previous and Q and R states on the worklist
-            worklist = []
             worklist.extend(parent._stop_Q)
             worklist.extend(parent._stop_R)
 
@@ -134,7 +135,7 @@ class RecursiveDFADecomposition:
         self._stop_R = set()
 
         while worklist:
-            i = worklist.pop()
+            i = worklist.popleft()
 
             if self.is_final(i, target):
                 if self.is_universal(i, target):
@@ -177,11 +178,11 @@ class RecursiveDFADecomposition:
         })
 
     def is_universal(self, frontier, target):
-        worklist = []
+        worklist = deque()
         worklist.append(frontier)
         visited = {self.refine(frontier, target)}
         while worklist:
-            i = worklist.pop()
+            i = worklist.popleft()
             if not self.is_final(i, target): return False
             dest = dict(self.arcs(i))
             for a in self.source_alphabet:

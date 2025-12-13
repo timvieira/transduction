@@ -1,11 +1,11 @@
 import pytest
 from transduction import examples, FSA, EPSILON, Precover
-from transduction.dfa_decomp import RecursiveDFADecomposition
+from transduction.dfa_decomp import NonrecursiveDFADecomp, RecursiveDFADecomposition
 from transduction import peekaboo
 from transduction import peekaboo_recursive
 
 
-class run_recursive_dfa_decomposition:
+class run_recursive_dfa_decomp:
     """
     Utility function for testing a precover decomposition method against a reference
     implementation method.
@@ -21,7 +21,7 @@ class run_recursive_dfa_decomposition:
     def run(self, target, depth, state):
         if depth == 0: return
         want = {y: self.reference(target + y) for y in self.target_alphabet}
-        have = {y: state >> y for y in self.target_alphabet}
+        have = {y: (state >> y) for y in self.target_alphabet}
         assert_equal_decomp_map(have, want)
         for y in want:
             if self.verbosity > 0: print('>', repr(target + y))
@@ -66,7 +66,7 @@ class run_peekaboo_recursive:
                 self.run(target + y, depth - 1)
 
 
-class run_peekaboo:
+class run_peekaboo_nonrecursive:
     """
     Utility function for testing the `Peekaboo` method against a slower method.
     """
@@ -101,10 +101,41 @@ class run_peekaboo:
                 self.run(target + y, depth - 1)
 
 
+class run_nonrecursive_dfa_decomp:
+    """
+    Utility function for testing the `Peekaboo` method against a slower method.
+    """
+    def __init__(self, fst, target, depth, verbosity=0):
+        self.fst = fst
+        self.target_alphabet = self.fst.B - {EPSILON}
+        self.depth = depth
+        self.peekaboo = lambda target: NonrecursiveDFADecomp(fst, target)
+        self.reference = lambda target: Precover(fst, target)
+        self.verbosity = verbosity
+        self.run(target, depth)
+
+    def run(self, target, depth):
+        if depth == 0: return
+
+        # Check that the decomposition matches the reference implementation
+        want = {y: self.reference(target + y) for y in self.target_alphabet}
+        have = {y: self.peekaboo(target + y) for y in self.target_alphabet}
+        assert_equal_decomp_map(have, want)
+
+        # Recurse
+        for y in want:
+            if self.verbosity > 0: print('>', repr(target + y))
+            q = want[y].quotient.trim()
+            r = want[y].remainder.trim()
+            if q.states or r.states:
+                self.run(target + y, depth - 1)
+
+
 IMPLEMENTATIONS = [
-    pytest.param(run_recursive_dfa_decomposition, id="recursive_dfa_decomposition"),
+    pytest.param(run_recursive_dfa_decomp, id="recursive_dfa_decomp"),
+    pytest.param(run_nonrecursive_dfa_decomp, id="nonrecursive_dfa_decomp"),
     pytest.param(run_peekaboo_recursive, id="peekaboo_recursive"),
-    pytest.param(run_peekaboo, id="peekaboo_nonrecursive"),
+    pytest.param(run_peekaboo_nonrecursive, id="peekaboo_nonrecursive"),
 ]
 
 
@@ -122,6 +153,11 @@ def run(request):
 def test_abc(run):
     fst = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c'), ('4', 'd'), ('5', 'e')])
     run(fst, '', depth=4)
+
+
+def test_delete_b(run):
+    fst = examples.delete_b()
+    run(fst, '', depth=10)
 
 
 def test_samuel(run):
@@ -188,7 +224,21 @@ def test_parity(run):
     run(fst, '', depth=5, verbosity=0)
 
 
-#if __name__ == '__main__':
-#    from arsenal import testing_framework
-#    suite = TestSuite()
-#    testing_framework({f: getattr(suite, f) for f in TestSuite.__dict__})
+if __name__ == '__main__':
+    from arsenal import testing_framework
+
+    algs = [
+        run_recursive_dfa_decomp,
+        run_nonrecursive_dfa_decomp,
+        run_peekaboo_recursive,
+        run_peekaboo_nonrecursive,
+    ]
+
+    options = {}
+    env = dict(globals())
+    for f in env:
+        if f.startswith('test_'):
+            for alg in algs:
+                options[f'{f}[{alg.__name__}]'] = lambda f=f, alg=alg: env[f](alg)
+
+    testing_framework(options)

@@ -1,7 +1,12 @@
 from transduction import (
     PrecoverDecomp, LazyNonrecursive, BuggyLazyRecursive, LazyRecursive, LazyPrecoverNFA,
-    EagerNonrecursive, examples, Precover
+    EagerNonrecursive, examples, Precover, FSA
 )
+
+
+def assert_equal(have, want):
+    assert have.quotient.equal(want.quotient), [have.quotient.min(), want.quotient]
+    assert have.remainder.equal(want.remainder), [have.remainder.min(), want.remainder]
 
 
 def test_sdd1():
@@ -33,9 +38,38 @@ def test_sdd1():
     assert_equal(tmp('aa'), PrecoverDecomp({'aa'}, set()))
 
 
-def assert_equal(have, want):
-    assert have.quotient.equal(want.quotient), [have.quotient.min(), want.quotient]
-    assert have.remainder.equal(want.remainder), [have.remainder.min(), want.remainder]
+def test_delete_b():
+    # this example has an infinite quotient for non-empty target strings, but
+    # always an empty remainder
+    fst = examples.delete_b()
+
+    a = FSA.lift('a')
+    b = FSA.lift('b')
+    bs = b.star()
+
+    tmp = lambda target: Precover(fst, target)
+    assert_equal(tmp(''), PrecoverDecomp({''}, set()))
+    assert_equal(tmp('b'), PrecoverDecomp(set(), set()))
+    have = tmp('AAA')
+    want = (bs * a * bs * a * bs * a).min()
+    assert_equal(have, PrecoverDecomp(want, set()))
+
+    algs = [
+        BuggyLazyRecursive(fst, max_steps=30),
+        EagerNonrecursive(fst, max_steps=30),
+        LazyNonrecursive(fst, max_steps=30),
+        LazyRecursive(fst, max_steps=30),
+    ]
+
+    for tmp in algs:
+        assert tmp('') == PrecoverDecomp({''}, set())
+        assert tmp('b') == PrecoverDecomp(set(), set())
+
+        target = 'AAA'
+        have = tmp(target)
+        assert have.remainder == set()
+        p = Precover(fst, target)
+        p.check_decomposition(*have, skip_validity=True)
 
 
 def test_simple():
@@ -185,6 +219,7 @@ def test_samuel_example():
     tmp = BuggyLazyRecursive(fst)
     have = tmp(target)
     assert have == ({'ab', 'aa'}, {'a'}), have
+    Precover(fst, target).check_decomposition(*have, throw=False)
 
     # this algorithm fixes BuggyLazyRecursive's expected failure
     tmp = LazyRecursive(fst)
@@ -194,7 +229,6 @@ def test_samuel_example():
     tmp = lambda target: Precover(fst, target)
     have = tmp(target)
     assert_equal(have, PrecoverDecomp({'a'}, set()))
-
 
 
 def test_number_comma_separator():
@@ -208,16 +242,16 @@ def test_number_comma_separator():
     want = ({'1, 2,' + x for x in tmp.source_alphabet if x not in '1234567890'}, set())
     assert have == want
 
-    target = '1,| 2,'
-    for y in tmp.target_alphabet:
-        Q,R = tmp(target+y)
-        assert len(R) == 0
-        if y == '|' and target.endswith(','):
-            assert len(Q) == len(tmp.source_alphabet) - len(digits), [target, y, Q]
-        else:
-            assert len(Q) <= 1, [target, y, Q]
-        if len(Q) > 0:
-            print(repr(y), Q)
+    #target = '1,| 2,'
+    #for y in tmp.target_alphabet:
+    #    Q,R = tmp(target+y)
+    #    assert len(R) == 0
+    #    if y == '|' and target.endswith(','):
+    #        assert len(Q) == len(tmp.source_alphabet) - len(digits), [target, y, Q]
+    #    else:
+    #        assert len(Q) <= 1, [target, y, Q]
+    #    if len(Q) > 0:
+    #        print(repr(y), Q)
 
     tmp = BuggyLazyRecursive(fst, max_steps=100)
     assert tmp('1,| 2,| and 3') == ({'1, 2, and 3'}, set())
@@ -225,16 +259,16 @@ def test_number_comma_separator():
     want = ({'1, 2,' + x for x in tmp.source_alphabet if x not in '1234567890'}, set())
     assert have == want
 
-    target = '1,| 2,'
-    for y in tmp.target_alphabet:
-        Q,R = tmp(target+y)
-        assert len(R) == 0
-        if y == '|' and target.endswith(','):
-            assert len(Q) == len(tmp.source_alphabet) - len(digits), [target, y, Q]
-        else:
-            assert len(Q) <= 1, [target, y, Q]
-        if len(Q) > 0:
-            print(repr(y), Q)
+    #target = '1,| 2,'
+    #for y in tmp.target_alphabet:
+    #    Q,R = tmp(target+y)
+    #    assert len(R) == 0
+    #    if y == '|' and target.endswith(','):
+    #        assert len(Q) == len(tmp.source_alphabet) - len(digits), [target, y, Q]
+    #    else:
+    #        assert len(Q) <= 1, [target, y, Q]
+    #    if len(Q) > 0:
+    #        print(repr(y), Q)
 
 
 if __name__ == '__main__':

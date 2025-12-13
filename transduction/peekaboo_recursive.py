@@ -55,11 +55,10 @@ class Peekaboo:
     """
     Recursive, batched computation of next-target-symbol optimal DFA-decomposition.
     """
-    def __init__(self, fst, max_steps=float('inf')):
+    def __init__(self, fst):
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
-        self.max_steps = max_steps
 
     def __call__(self, target):
         s = PeekabooState(self.fst, '', parent=None)
@@ -108,7 +107,7 @@ class Peekaboo:
                            style='rounded, filled', color='black', fillcolor='white')
 
                 if target == '':
-                    curr = PeekabooState(self.fst, '', parent=None, max_steps=self.max_steps)
+                    curr = PeekabooState(self.fst, '', parent=None)
 
                     for j, arcs in curr._arcs.items():
                         for x,i in arcs:
@@ -192,17 +191,12 @@ class Peekaboo:
 
 class PeekabooState:
 
-    def __init__(self, fst, target, parent, max_steps=float('inf')):
+    def __init__(self, fst, target, parent):
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
         self.target = target
         self.parent = parent
-
-        if self.parent is not None:
-            self.max_steps = min(self.parent.max_steps, max_steps)
-        else:
-            self.max_steps = max_steps
 
         assert parent is None or parent.target == target[:-1]
 
@@ -250,16 +244,10 @@ class PeekabooState:
             return {ys[N] for _, ys, _ in state if len(ys) > N}
 
         N = len(target)
-        t = 0
         while worklist:
             state = worklist.popleft()
-            t += 1
             debug()
             debug(colors.cyan % 'work:', state)
-
-            if t >= self.max_steps:
-                print(colors.light.red % 'TOOK TOO LONG')
-                break
 
             relevant_symbols = state_relevant_symbols(state)
             debug(f'  {relevant_symbols=}')

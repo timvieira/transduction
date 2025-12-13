@@ -198,12 +198,12 @@ class Precover:
             if self.is_cylinder(xss):
                 yield xss
 
-    def check_decomposition(self, Q, R, throw=False):
+    def check_decomposition(self, Q, R, throw=False, skip_validity=False):
         "Analyze the decompositions Q and R: is it valid? optimal?  Note that these tests only terminal each Q and R are finite sets."
         if isinstance(Q, FSA): Q = Q.language()
         if isinstance(R, FSA): R = R.language()
         ok = True
-        z = self.is_valid(Q, R)   # check validity of the decomposition
+        z = skip_validity or self.is_valid(Q, R)   # check validity of the decomposition
         ok &= z
         print('check decomposition:')
         print('├─ valid:', colors.mark(z), 'equal to precover')

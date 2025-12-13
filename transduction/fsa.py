@@ -207,7 +207,7 @@ class FSA:
         return self.rename(Integerizer())
 
     def rename(self, f):
-        "Note: f is not bijective, states may split/merge."
+        "Note: if f is not bijective, states may merge."
         m = FSA()
         for i in self.start:
             m.add_start(f(i))
@@ -225,10 +225,11 @@ class FSA:
         return (self, other)
 
     def __mul__(self, other):
-        m = FSA()
         self, other = self.rename_apart(other)
-        m.start = self.start
-        m.stop = other.stop
+        m = FSA(
+            start = self.start,
+            stop = other.stop,
+        )
         for i in self.stop:
             for j in other.start:
                 m.add(i,eps,j)
