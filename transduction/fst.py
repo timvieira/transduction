@@ -282,7 +282,7 @@ class FST:
         T = self.spawn()
         for i in self.states:
             for a, b, j in self.arcs(i):
-                T.add_arc(i, b, a, j)  # (a,b) -> (b,a)
+                T.add_arc(i, b, a, j)  # pylint: disable=W1114
         for q in self.I:
             T.add_I(q)
         for q in self.F:

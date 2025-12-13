@@ -241,7 +241,7 @@ class Precover:
 
     def graphviz(self, trim=False):
         "Stylized graphviz representation of the precover DFA where colors denotes properties of the state (green: quotient, magenta: remainder, white: useless)"
-        dfa = self.det
+        dfa = self.det.materialize()
         if trim: dfa = dfa.trim()
         universal_states = {i for i in dfa.stop if is_universal(dfa, i, self.source_alphabet)}
         dead_states = dfa.states - dfa.trim().states
@@ -348,5 +348,5 @@ class EagerNonrecursive(AbstractAlgorithm):
         return self._continuity(target, self.state[xs])
 
     @memoize
-    def _continuity(self, target, state):
+    def _continuity(self, target, state):   # pylint: disable=W0613
         return is_universal(self.dfa, state, self.source_alphabet)

@@ -1,4 +1,4 @@
-from arsenal import Integerizer, colors
+from arsenal import Integerizer
 from collections import defaultdict, deque
 from functools import lru_cache
 from graphviz import Digraph
@@ -18,8 +18,7 @@ def dfs(Ps, arcs):
     return m
 
 
-_frozenset = frozenset
-class frozenset(_frozenset):
+class frozenset(frozenset):
     "Same as frozenset, but with a nicer printing method."
     def __repr__(self):
         return '{%s}' % (','.join(str(x) for x in self))

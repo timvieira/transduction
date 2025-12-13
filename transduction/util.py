@@ -46,26 +46,15 @@ def _pick_from_mimebundle(obj, prefer=(
     "text/markdown",
     "application/json",
     "text/plain",
-)):
+)):   
     bundle = None
 
     if hasattr(obj, "_repr_mimebundle_"):
-        try:
-            out = obj._repr_mimebundle_()
-            if isinstance(out, tuple) and out and isinstance(out[0], dict):
-                bundle = out[0]
-            elif isinstance(out, dict):
-                bundle = out
-        except Exception:
-            bundle = None
-
-    #if bundle is None:
-    #    try:
-    #        ip = get_ipython()
-    #        fmt = ip.display_formatter
-    #        bundle = fmt.format(obj)[0]
-    #    except Exception:
-    #        bundle = None
+        out = obj._repr_mimebundle_()
+        if isinstance(out, tuple) and out and isinstance(out[0], dict):
+            bundle = out[0]
+        elif isinstance(out, dict):
+            bundle = out
 
     if not isinstance(bundle, dict):
         return None
@@ -84,7 +73,7 @@ def _pick_from_mimebundle(obj, prefer=(
                 try:
                     base64.b64decode(data, validate=True)
                     b64 = data
-                except Exception:
+                except Exception:  # pylint: disable=W0718
                     b64 = base64.b64encode(data.encode("utf-8")).decode("ascii")
             elif isinstance(data, (bytes, bytearray, memoryview)):
                 b64 = base64.b64encode(bytes(data)).decode("ascii")
@@ -99,7 +88,7 @@ def _pick_from_mimebundle(obj, prefer=(
             try:
                 obj_json = json.loads(data) if isinstance(data, str) else data
                 pretty = json.dumps(obj_json, indent=2, ensure_ascii=False)
-            except Exception:
+            except Exception:       # pylint: disable=W0718
                 pretty = str(data)
             return f'<pre>{html.escape(pretty)}</pre>'
         if mime == "text/plain":
@@ -121,7 +110,7 @@ def _as_html_cell(x):
         if hasattr(x, meth):
             try:
                 return getattr(x, meth)()
-            except Exception:
+            except Exception:  # pylint: disable=W0718
                 pass
 
     for meth, tag in (("_repr_png_", "image/png"), ("_repr_jpeg_", "image/jpeg")):
@@ -133,18 +122,18 @@ def _as_html_cell(x):
                         try:
                             base64.b64decode(data, validate=True)
                             b64 = data
-                        except Exception:
+                        except Exception:   # pylint: disable=W0718
                             b64 = base64.b64encode(data.encode("utf-8")).decode("ascii")
                     else:
                         b64 = base64.b64encode(data).decode("ascii")
                     return f'<img alt="" src="data:{tag};base64,{b64}" />'
-            except Exception:
+            except Exception:   # pylint: disable=W0718
                 pass
 
     if hasattr(x, "_repr_latex_"):
         try:
             return f'\\[{x._repr_latex_()}\\]'
-        except Exception:
+        except Exception:   # pylint: disable=W0718
             pass
 
     return f'<pre>{html.escape(str(x))}</pre>'

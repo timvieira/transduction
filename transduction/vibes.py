@@ -159,7 +159,6 @@ def visualize_automaton(
     rankdir="LR",
     use_unicode=False,
     max_exclusions=5,
-    max_label_len=64,
     epsilon_symbol="ε",
     node_attrs=None,
     edge_attrs=None,
@@ -178,22 +177,26 @@ def visualize_automaton(
                 uv_to_syms[(u, v)].add(a)
 
     # Graphviz setup
+    _node_attrs = dict(
+        fontname='Monospace',
+        fontsize='8',
+        height='.05',
+        width='.05',
+        margin="0.055,0.042",
+        shape='box',
+        style='rounded',
+    )
+    _edge_attrs = dict(
+        arrowsize='0.3',
+        fontname='Monospace',
+        fontsize='8',
+    )
+    if node_attrs: _node_attrs.update(node_attrs)
+    if edge_attrs: _edge_attrs.update(edge_attrs)
     dot = Digraph(
-        graph_attr=dict(rankdir='LR'),
-        node_attr=dict(
-            fontname='Monospace',
-            fontsize='8',
-            height='.05',
-            width='.05',
-                margin="0.055,0.042",
-            shape='box',
-            style='rounded',
-        ),
-        edge_attr=dict(
-            arrowsize='0.3',
-            fontname='Monospace',
-            fontsize='8'
-        ),
+        graph_attr=dict(rankdir=rankdir),
+        node_attr=_node_attrs,
+        edge_attr=_edge_attrs,
     )
 
     # Invisible entry arrow for each start state
