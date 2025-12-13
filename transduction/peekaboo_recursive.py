@@ -323,6 +323,15 @@ class PeekabooState:
 
 
 # TODO: in order to predict EOS, we need to extract the preimage from Q and R
+#
+# TODO: should we unify this class with `peekabo.PeekabooPrecover`?
+#
+#    I think the non-recursive algorithm doesn tneed to worry about the
+#    truncation bits, so we probably do not need to unify them.  That said, we
+#    might want to have a collection of all the different Precover encodings so
+#    that we can test them / compare them independently of the algorithms that
+#    use them.
+#
 class PeekabooPrecover(Lazy):
 
     def __init__(self, f, target):
@@ -409,123 +418,3 @@ class TruncatedDFA(Lazy):
 
     def is_final(self, state):
         return any(ys.startswith(self.target) and self.fst.is_final(i) for (i, ys, _) in state)
-
-
-#_______________________________________________________________________________
-# TESTING CODE BELOW
-
-from transduction import examples
-
-
-class recursive_testing:
-    """
-    Utility function for testing the `Peekaboo` method against a slower method.
-    """
-    def __init__(self, fst, target, depth, verbosity=0):
-        self.fst = fst
-        self.target_alphabet = self.fst.B - {EPSILON}
-        self.depth = depth
-        self.peekaboo = Peekaboo(fst)
-        self.reference = lambda target: Precover(fst, target)
-#        self.reference = LazyNonrecursive(fst)
-#        self.reference = EagerNonrecursive(fst)
-        self.verbosity = verbosity
-        self.run(target, depth)
-
-    def run(self, target, depth):
-        if depth == 0: return
-
-        # Check that the peekaboo machine matches the reference implementation
-        have = PeekabooPrecover(self.fst, target).materialize()
-        want = (self.fst @ (FSA.from_string(target) * FSA.from_strings(self.target_alphabet).p())).project(0)
-        assert have.equal(want)
-
-        # Check that the decomposition matches the reference implementation
-        want = {y: self.reference(target + y) for y in self.target_alphabet}
-        have = self.peekaboo(target)
-        assert_equal_decomp_map(have, want)
-
-        # recurse
-        for y in want:
-            if self.verbosity > 0: print('>', repr(target + y))
-            q = want[y].quotient.trim()
-            r = want[y].remainder.trim()
-            if q.states or r.states:
-                self.run(target + y, depth - 1)
-
-
-def assert_equal_decomp_map(have, want):
-    for y in have | want:
-        assert have[y].quotient.equal(want[y].quotient)
-        assert have[y].remainder.equal(want[y].remainder)
-
-
-def test_abc():
-    fst = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c'), ('4', 'd'), ('5', 'e')])
-    recursive_testing(fst, '', depth=4)
-
-
-def test_samuel():
-    fst = examples.samuel_example()
-    recursive_testing(fst, '', depth=5)
-
-
-def test_small():
-    fst = examples.small()
-    recursive_testing(fst, '', depth=5)
-
-
-def test_sdd1():
-    fst = examples.sdd1_fst()
-    recursive_testing(fst, '', depth=5)
-
-
-def test_duplicate():
-    fst = examples.duplicate(set('12345'))
-    recursive_testing(fst, '', depth=5)
-
-
-def test_number_comma_separator():
-    #import string
-    #fst = examples.number_comma_separator(set(string.printable) - set('\t\n\r\x0b\x0c'))
-    fst = examples.number_comma_separator({'a', ',', ' ', '0'}, Digit={'0'})
-    recursive_testing(fst, '', depth=4, verbosity=0)
-    recursive_testing(fst, '0,| 0,', depth=1, verbosity=0)
-    recursive_testing(fst, '0,| 0,|', depth=1, verbosity=0)
-
-
-def test_newspeak2():
-    fst = examples.newspeak2()
-    recursive_testing(fst, '', depth=1)
-    recursive_testing(fst, 'ba', depth=1)
-    recursive_testing(fst, 'bad', depth=1)
-
-
-def test_lookahead():
-    fst = examples.lookahead()
-    recursive_testing(fst, '', depth=6, verbosity=0)
-
-
-def test_weird_copy():
-    fst = examples.weird_copy()
-    recursive_testing(fst, '', depth=5, verbosity=0)
-
-
-def test_triplets_of_doom():
-    fst = examples.triplets_of_doom()
-    recursive_testing(fst, '', depth=13, verbosity=0)
-
-
-def test_infinite_quotient():
-    fst = examples.infinite_quotient()
-    recursive_testing(fst, '', depth=5, verbosity=0)
-
-
-def test_parity():
-    fst = examples.parity({'a', 'b'})
-    recursive_testing(fst, '', depth=5, verbosity=0)
-
-
-if __name__ == '__main__':
-    from arsenal import testing_framework
-    testing_framework(globals())
