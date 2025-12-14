@@ -2,9 +2,7 @@ from transduction.base import PrecoverDecomp
 from transduction.lazy import Lazy
 from transduction.fsa import FSA
 from transduction.fst import EPSILON
-from transduction.eager_nonrecursive import Precover
 
-from arsenal import colors
 from collections import deque
 
 
@@ -114,10 +112,13 @@ class Peekaboo:
 
 # TODO: in order to predict EOS, we need to extract the preimage from Q and R
 class PeekabooPrecover(Lazy):
-    """NOTE: this is a semi-automaton as it does not have an `is_final` method.
+    """
+    Implements the union of the precovers of single-symbol extension of `target`:
 
-    It implements a state space that tracks the states of an FST `fst` along
-    with the target string they generate.  It prunes the state space to just the
+    PeekabooPrecover(target) = f^{-1}(y Y Y^*)
+
+    Operationally, it is an automaton that tracks the states of an FST `fst` along
+    with the target string it generates.  It prunes the state space to just the
     states that are relevant to `target` followed by at least additional target
     symbol.
 

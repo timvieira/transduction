@@ -1,7 +1,8 @@
 import pytest
 from transduction import examples, FSA, EPSILON, Precover
-from transduction.dfa_decomp import NonrecursiveDFADecomp, RecursiveDFADecomposition
-from transduction import peekaboo
+from transduction.dfa_decomp_nonrecursive import NonrecursiveDFADecomp
+from transduction.dfa_decomp_recursive import RecursiveDFADecomp
+from transduction import peekaboo_nonrecursive
 from transduction import peekaboo_recursive
 
 
@@ -16,7 +17,7 @@ class run_recursive_dfa_decomp:
         self.depth = depth
         self.reference = lambda target: Precover(fst, target)
         self.verbosity = verbosity
-        self.run(target, depth, RecursiveDFADecomposition(fst, target))
+        self.run(target, depth, RecursiveDFADecomp(fst, target))
 
     def run(self, target, depth, state):
         if depth == 0: return
@@ -74,7 +75,7 @@ class run_peekaboo_nonrecursive:
         self.fst = fst
         self.target_alphabet = self.fst.B - {EPSILON}
         self.depth = depth
-        self.peekaboo = peekaboo.Peekaboo(fst)
+        self.peekaboo = peekaboo_nonrecursive.Peekaboo(fst)
         self.reference = lambda target: Precover(fst, target)
         self.verbosity = verbosity
         self.run(target, depth)
@@ -83,7 +84,7 @@ class run_peekaboo_nonrecursive:
         if depth == 0: return
 
         # Check that the peekaboo machine matches the reference implementation
-        have = peekaboo.PeekabooPrecover(self.fst, target).materialize()
+        have = peekaboo_nonrecursive.PeekabooPrecover(self.fst, target).materialize()
         want = (self.fst @ (FSA.from_string(target) * FSA.from_strings(self.target_alphabet).p())).project(0)
         assert have.equal(want)
 

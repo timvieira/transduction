@@ -3,9 +3,6 @@ from transduction.eager_nonrecursive import Precover
 from transduction.lazy import Lazy
 from transduction.fsa import FSA, frozenset
 from transduction.fst import EPSILON
-#from transduction.eager_nonrecursive import EagerNonrecursive
-#from transduction.lazy_recursive import LazyRecursive
-#from transduction.lazy_nonrecursive import LazyNonrecursive
 
 from arsenal import colors
 from collections import deque
@@ -25,29 +22,6 @@ from collections import deque
 #   cost-benefit analysis, which I am trying to elucidate a bit.  The knob that
 #   controls this is the "truncation policy" and there are smarter things than
 #   truncating at N+1 (even for the triplets of doom example).
-#   _______________________________________________________________________________
-#
-# Warning: The BufferedRelevance machine is not finite state!
-#
-# [2025-12-02 Tue] Possible issue: we could do an unbounded amount of useless
-#   work by enumerating states in the buffered relevance machine that are not on
-#   track to participate in any relevant target string's precover.
-#
-# [2025-12-04 Thu] I think we ned to do something similar ot the
-#   PeekabooPrecover construction so that we can only explore a finite number of
-#   states and, thus, terminate in finite time.  The key to this is going to be
-#   to either tweak the state space as in PeekabooPrecover or to use something
-#   like we did with `refine`.  The concert about the PeekabooPrecover strategy
-#   is that we might add edges to the machine that need to be removed/ignored in
-#   the next layer. (The picture that I have in my head is something like change
-#   propagation where we have to invalidate some of the work that we done under
-#   the assumption that the target string ended here.  Aesthetically and
-#   practically, I would rather not require invalidate work.  There is some
-#   guiding principle that is lacking here and I don't know how to think about
-#   it.)  Maybe the best way to move forward with this is to make a few
-#   visualizations of what I expected the layered structure to look like (e.g.,
-#   by grafting a set of correct machines for each next symbol together and
-#   seeing where things diverge from from that idealization).
 #_______________________________________________________________________________
 #
 
@@ -70,8 +44,8 @@ class Peekaboo:
 
         foo = {}
         for y in self.target_alphabet:
-            q = FSA(start=set(s.dfa.start()), arcs=ARCS, stop=s.foo[y].quotient)
-            r = FSA(start=set(s.dfa.start()), arcs=ARCS, stop=s.foo[y].remainder)
+            q = FSA(start=set(s.dfa.start()), arcs=ARCS, stop=s.decomp[y].quotient)
+            r = FSA(start=set(s.dfa.start()), arcs=ARCS, stop=s.decomp[y].remainder)
             foo[y] = PrecoverDecomp(q, r)
 
         return foo
@@ -101,39 +75,20 @@ class Peekaboo:
         from graphviz import Digraph
 
         def helper(target, outer):
-            print(repr(target))
             with outer.subgraph(name="cluster") as inner:
-                inner.attr(label=target,
-                           style='rounded, filled', color='black', fillcolor='white')
-
+                inner.attr(label=target, style='rounded, filled', color='black', fillcolor='white')
                 if target == '':
                     curr = PeekabooState(self.fst, '', parent=None)
-
-                    for j, arcs in curr._arcs.items():
-                        for x,i in arcs:
-                            #inner.node(str(i))
-                            #inner.node(str(j))
-                            inner.edge(str(i), str(j), label=x)
-
                 else:
-
-                    prev = helper(target[:-1], inner)
-
-                    curr = prev >> target[-1]
-                    #ARCS.append([(i,x,j) for j, arcs in curr._arcs.items() for x,i in arcs])
-
-                    for j, arcs in curr._arcs.items():
-                        for x,i in arcs:
-                            #inner.node(str(i))
-                            inner.edge(str(i), str(j), label=x)
-
-                for y in curr.foo:
-                    tmp = curr.foo[y]
+                    curr = helper(target[:-1], inner) >> target[-1]
+                for j, arcs in curr._arcs.items():
+                    for x,i in arcs:
+                        inner.edge(str(i), str(j), label=x)
+                for y, tmp in curr.decomp.items():
                     for j in tmp.quotient:
                         inner.node(str(j), fillcolor='#90EE90')
                     for j in tmp.remainder:
                         inner.node(str(j), fillcolor='#f26fec')
-
                 return curr
 
         dot = Digraph(
@@ -147,11 +102,7 @@ class Peekaboo:
                 shape='box',
                 style='rounded, filled',
             ),
-            edge_attr=dict(
-                arrowsize='0.3',
-                fontname='Monospace',
-                fontsize='8'
-            ),
+            edge_attr=dict(arrowsize='0.3', fontname='Monospace', fontsize='8'),
         )
 
         with dot.subgraph(name='outer') as outer:
@@ -177,12 +128,6 @@ class Peekaboo:
                 print(colors.mark(True), 'sym:', repr(y))
             else:
                 print(colors.mark(False), 'sym:', repr(y), 'q:', colors.mark(q_ok), 'r:', colors.mark(r_ok))
-
-                #display_table([
-                #    ['quotient', have.quotient.min(), want.quotient.min()],
-                #    ['remainder', have.remainder.min(), want.remainder.min()],
-                #], headings=['', 'have', 'want'])
-
                 display_table([
                     [HTML('<b>quotient</b>'), have.quotient, want.quotient],
                     [HTML('<b>remainder</b>'), have.remainder, want.remainder],
@@ -205,15 +150,13 @@ class PeekabooState:
 
         dfa = PeekabooPrecover(self.fst, target).det()
 
-        self.dfa = dfa
-
         if len(target) == 0:
             assert parent is None
             worklist = deque()
-            self._arcs = {}
+            _arcs = {}
             for state in dfa.start():
                 worklist.append(state)
-                self._arcs[state] = set()
+                _arcs[state] = set()
                 debug(colors.orange % 'init:', state)
 
         else:
@@ -226,22 +169,19 @@ class PeekabooState:
 
             # put previous and Q and R states on the worklist
             worklist = deque()
-            self._arcs = {}
+            _arcs = {}
             for state in p:
                 assert not any(truncated for _, ys, truncated in state)
                 worklist.append(state)
-                self._arcs[state] = set()
+                _arcs[state] = set()
 
-        precover = {y: PrecoverDecomp(set(), set()) for y in self.target_alphabet}
+        # `decomp` is a map from next target symbols to their quotient and
+        # remainder states.
+        decomp = {y: PrecoverDecomp(set(), set()) for y in self.target_alphabet}
+
+        # `goo` is a map from next target symbols to the states that we need to
+        # resume expansion from because they were truncated
         goo = {y: set() for y in self.target_alphabet}
-
-        #def refine(frontier):
-        #    "For caching and cycle-detection, we truncate the state representation after N+1 target symbols."
-        #    #return frontier
-        #    return frozenset((i, ys[:N+1]) for i, ys in frontier)
-
-        def state_relevant_symbols(state):
-            return {ys[N] for _, ys, _ in state if len(ys) > N}
 
         N = len(target)
         while worklist:
@@ -249,7 +189,7 @@ class PeekabooState:
             debug()
             debug(colors.cyan % 'work:', state)
 
-            relevant_symbols = state_relevant_symbols(state)
+            relevant_symbols = {ys[N] for _, ys, _ in state if len(ys) > N}
             debug(f'  {relevant_symbols=}')
 
             # Shortcut: At most one of the `relevant_symbols` can be
@@ -260,14 +200,14 @@ class PeekabooState:
                 # XXX: we may have already constructed this machine
                 dfa_truncated = TruncatedDFA(dfa=dfa, fst=self.fst, target=target + y)
 
-                if dfa_truncated.accepts_universal(state, self.source_alphabet):
+                if len(continuous) == 0 and dfa_truncated.accepts_universal(state, self.source_alphabet):
                     debug('  universal for', repr(y))
-                    precover[y].quotient.add(state)
+                    decomp[y].quotient.add(state)
                     continuous.add(y)
 
                 elif dfa_truncated.is_final(state):
                     debug('  accepting for', repr(y))
-                    precover[y].remainder.add(state)
+                    decomp[y].remainder.add(state)
 
                 else:
                     debug('  pass on', repr(y))
@@ -279,15 +219,11 @@ class PeekabooState:
 
             for x, next_state in dfa.arcs(state):
 
-                if next_state not in self._arcs:
-                    assert isinstance(next_state, frozenset), [type(x), x]
+                if next_state not in _arcs:
                     worklist.append(next_state)
-                    self._arcs[next_state] = set()
-                    debug('  pushed', next_state)
-                else:
-                    debug('  pushed-repeat', next_state)
+                    _arcs[next_state] = set()
 
-                self._arcs[next_state].add((x, state))
+                _arcs[next_state].add((x, state))
 
                 if not any(truncated for _, ys, truncated in state):
                     for _, ys, truncated in next_state:
@@ -296,14 +232,16 @@ class PeekabooState:
                             debug(colors.light.red % 'goo', state, repr(y), next_state)
                             goo[y].add(state)
 
-        self.foo = precover
-        self.goo = goo
-
-        for y in self.foo:
-            for state in self.foo[y].quotient | self.foo[y].remainder:
+        for y in decomp:
+            for state in decomp[y].quotient | decomp[y].remainder:
                 if not any(truncated for _, ys, truncated in state):
                     debug(colors.light.red % 'goo+', state)
                     goo[y].add(state)
+
+        self.decomp = decomp
+        self.goo = goo
+        self.dfa = dfa
+        self._arcs = _arcs
 
     def __rshift__(self, y):
         assert y in self.target_alphabet, repr(y)
@@ -312,44 +250,41 @@ class PeekabooState:
 
 # TODO: in order to predict EOS, we need to extract the preimage from Q and R
 #
-# TODO: should we unify this class with `peekabo.PeekabooPrecover`?
+# Should we unify this class with `peekabo.PeekabooPrecover`?
 #
-#    I think the non-recursive algorithm doesn tneed to worry about the
-#    truncation bits, so we probably do not need to unify them.  That said, we
-#    might want to have a collection of all the different Precover encodings so
-#    that we can test them / compare them independently of the algorithms that
-#    use them.
+#    No, the non-recursive algorithm doesnt need to worry about the truncation
+#    bits, so we probably do not need to unify them.  That said, we might want
+#    to have a collection of all the different Precover encodings so that we can
+#    test them / compare them independently of the algorithms that use them.
+#
+# NOTE: We use this construction to mark truncated state because they need to be
+# removed/recomputed in the next iteration.  And, we need to truncate the output
+# buffer so that the state space is finite.
 #
 class PeekabooPrecover(Lazy):
 
-    def __init__(self, f, target):
+    def __init__(self, f, target, K=1):
         self.f = f
         self.target = target
         self.N = len(target)
+        self.K = K
+        assert K >= 1
 
     def arcs(self, state):
-        (i, ys, truncated) = state   # TODO: use truncated bit to speed some of this up
+        (i, ys, truncated) = state
         n = len(ys)
         m = min(self.N, n)
         if self.target[:m] != ys[:m]:      # target and ys are not prefixes of one another.
             return
         if m >= self.N:                    # i.e, target <= ys
             for x, y, j in self.f.arcs(i):
-
                 if y == EPSILON or truncated:
                     yield (x, (j, ys, truncated))
-
                 else:
                     assert not truncated
                     was = (ys + y)
-
-                    # XXX: truncation policy
-                    now = was[:self.N+1]
-                    #now = was[:self.N+2]
-
-                    # mark truncated nodes because they need to be removed in the next iteration
-                    yield (x, (j, now, truncated or (was != now)))
-
+                    now = was[:self.N+self.K]
+                    yield (x, (j, now, (was != now)))
         else:                              # i.e, ys < target)
             assert not truncated
             for x, y, j in self.f.arcs(i):

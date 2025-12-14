@@ -222,14 +222,28 @@ def parity(alphabet):
     return m
 
 
-def duplicate(V):
+#def duplicate(V):
+#    dup = FST()
+#    dup.add_I(0)
+#    for b in V:
+#        dup.add_arc(0, b, b, (1, b))
+#        dup.add_arc((1, b), EPSILON, b, 0)
+#    dup.add_F(0)
+#    return dup
+
+
+def duplicate(V, K=2):
+    "Duplicate (by K > 1) each symbol in the input string, e.g., `abc -> a^K b^K c^K`."
+    assert K > 1
     dup = FST()
     dup.add_I(0)
     for b in V:
-        dup.add_arc(0, b, b, (1, b))
-        dup.add_arc((1, b), EPSILON, b, 0)
+        dup.add_arc(0, b, b, (0, b))
+        for k in range(K-2):
+            dup.add_arc((k, b), EPSILON, b, (k+1, b))
+        dup.add_arc((K-2, b), EPSILON, b, 0)
     dup.add_F(0)
-    return dup
+    return dup.renumber
 
 
 def replace(mapping):
@@ -239,6 +253,30 @@ def replace(mapping):
         fst.add_arc(0, x, y, 0)
     fst.add_F(0)
     return fst
+
+
+def doom(V, K):   # k-tuples of doom
+    """doom(V={'a', 'b'}, K) creates a copy transducer for (a^K|b^K)^*.
+
+    The example `triplets_of_doom` is a special case of this method.  This
+    method generates some tricky examples with infinite remainders.
+
+    Historically, this example is what helped us surface the issues related to
+    target buffer truncation (without it the unbounded buffering construction of
+    the precover results in infintely many states, causing the DFA-factoring
+    method to run forever unnecessarily).
+
+    """
+    assert K > 1
+    dup = FST()
+    dup.add_I(0)
+    for b in V:
+        dup.add_arc(0, b, b, (0, b))
+        for k in range(K-2):
+            dup.add_arc((k, b), b, b, (k+1, b))
+        dup.add_arc((K-2, b), EPSILON, EPSILON, 0)
+    dup.add_F(0)
+    return dup.renumber
 
 
 #def togglecase():
@@ -400,7 +438,7 @@ def newspeak2():
 def togglecase():
     T = FST()
     T.add_I(0)
-    for y in 'abcdefghijklmnopqrstuvwxyz ':
+    for x in 'abcdefghijklmnopqrstuvwxyz ':
         T.add_arc(0, x.lower(), x.upper(), 0)
         T.add_arc(0, x.upper(), x.lower(), 0)
     T.add_F(0)
@@ -410,8 +448,243 @@ def togglecase():
 def lowercase():
     T = FST()
     T.add_I(0)
-    for y in 'abcdefghijklmnopqrstuvwxyz ':
+    for x in 'abcdefghijklmnopqrstuvwxyz ':
         T.add_arc(0, x.lower(), x.lower(), 0)
         T.add_arc(0, x.upper(), x.lower(), 0)
     T.add_F(0)
     return T
+
+
+
+#____________________________
+#
+
+
+def mystery1():
+    fst = FST()
+
+    fst.add_I(0)
+
+    # Path A: 'a' -> 'c'
+    fst.add_arc(0, 'a', 'c', 1)
+
+    # Path B: 'b' (ε) then 'a' -> 'c'
+    fst.add_arc(0, 'b', EPSILON, 2)
+    fst.add_arc(2, 'a', 'c', 3)
+
+    # After 'c', just loop with 'x'
+    for q in (1, 3):
+        fst.add_F(q)
+        fst.add_arc(q, 'a', 'x', q)
+        fst.add_arc(q, 'b', 'x', q)
+
+    return fst
+
+
+def mystery2():
+
+    fst = FST()
+
+    fst.add_I(0)
+
+    # Path 1: 'a' -> 'c'
+    fst.add_arc(0, 'a', 'c', 1)
+
+    # Path 2: 'b' (ε) then 'a' -> 'c'  i.e., "ba"
+    fst.add_arc(0, 'b', EPSILON, 5)
+    fst.add_arc(5, 'a', 'c', 2)
+
+    # Path 3: 'b' (ε), then 'b' (ε), then 'b' -> 'c'  i.e., "bbb"
+    fst.add_arc(5, 'b', EPSILON, 6)
+    fst.add_arc(6, 'b', 'c', 3)
+
+    # After 'c', loop 'x' on both symbols
+    for q in (1, 2, 3):
+        fst.add_F(q)
+        fst.add_arc(q, 'a', 'x', q)
+        fst.add_arc(q, 'b', 'x', q)
+
+    return fst
+
+
+def mystery3():
+    fst = FST()
+
+    fst.add_I(0)
+
+    # Transition: track last symbol, no output yet.
+    fst.add_arc(0, 'a', EPSILON, 1)
+    fst.add_arc(0, 'b', EPSILON, 2)
+
+    fst.add_arc(1, 'a', EPSILON, 1)
+    fst.add_arc(1, 'b', EPSILON, 2)
+
+    fst.add_arc(2, 'a', EPSILON, 1)
+    fst.add_arc(2, 'b', EPSILON, 2)
+
+    # Final ε-output arcs
+    fst.add_arc(1, EPSILON, 'A', 3)   # last was a
+    fst.add_arc(2, EPSILON, 'B', 4)   # last was b
+
+    fst.add_F(3)
+    fst.add_F(4)
+
+    return fst
+
+
+def mystery4():
+    fst = FST()
+
+    fst.add_I(0)
+
+    # From state 0
+    fst.add_arc(0, 'a', EPSILON, 1)  # first a
+    fst.add_arc(0, 'b', EPSILON, 0)  # still zero a's
+
+    # From state 1
+    fst.add_arc(1, 'a', EPSILON, 2)  # second a
+    fst.add_arc(1, 'b', EPSILON, 1)  # still exactly one a
+
+    # From state 2
+    fst.add_arc(2, 'a', EPSILON, 2)
+    fst.add_arc(2, 'b', EPSILON, 2)
+
+    # Final ε-output arcs
+    fst.add_arc(0, EPSILON, '0', 3)  # zero a's
+    fst.add_arc(1, EPSILON, '1', 4)  # exactly one a
+    fst.add_arc(2, EPSILON, '0', 3)  # at least two a's
+
+    fst.add_F(3)
+    fst.add_F(4)
+
+    return fst
+
+
+def mystery5():
+
+    fst = FST()
+
+    fst.add_I(0)
+
+    # Cycle mod 3 on any input symbol, no output
+    for s_from, s_to in [(0, 1), (1, 2), (2, 0)]:
+        fst.add_arc(s_from, 'a', EPSILON, s_to)
+        fst.add_arc(s_from, 'b', EPSILON, s_to)
+
+    # Final ε-output arcs
+    fst.add_arc(0, EPSILON, '0', 3)
+    fst.add_arc(1, EPSILON, '1', 4)
+    fst.add_arc(2, EPSILON, '2', 5)
+
+    fst.add_F(3)
+    fst.add_F(4)
+    fst.add_F(5)
+
+    return fst
+
+
+def mystery6():
+    fst = FST()
+
+    fst.add_I(0)
+
+    fst.add_arc(0, 'a', '', 1)
+    fst.add_arc(1, 'a', '', 2)
+    fst.add_arc(2, 'a', '', 3)
+
+    fst.add_arc(3, 'a', 'a', 3)
+    fst.add_arc(3, 'b', 'b', 3)
+    fst.add_arc(3, 'c', 'c', 3)
+
+    fst.add_arc(0, '', 'b', 4)
+
+    fst.add_arc(4, '', 'a', 4)
+    fst.add_arc(4, '', 'b', 4)
+    fst.add_arc(4, '', 'c', 5)
+    fst.add_F(5)
+
+    fst.add_F(3)
+
+    return fst
+
+
+def infinite_quotient2():
+    fst = FST()
+
+    fst.add_I(0)
+
+    # From start (state 0)
+    fst.add_arc(0, 'a', EPSILON, 1)   # odd a-count
+    fst.add_arc(0, 'b', EPSILON, 0)   # still even
+
+    # Parity-tracking region (no '#' allowed anymore)
+    fst.add_arc(1, 'a', EPSILON, 0)
+    fst.add_arc(1, 'b', EPSILON, 1)
+
+    # Exit parity region
+    fst.add_arc(0, '#', EPSILON, 2)
+    fst.add_arc(1, '#', EPSILON, 3)
+
+    # Absorbing region:
+    fst.add_arc(2, 'a', EPSILON, 2)
+    fst.add_arc(2, 'b', EPSILON, 2)
+    fst.add_arc(2, '#', EPSILON, 2)
+
+    # Absorbing region:
+    fst.add_arc(3, 'a', EPSILON, 3)
+    fst.add_arc(3, 'b', EPSILON, 3)
+    fst.add_arc(3, '#', EPSILON, 3)
+
+    # even → '0', odd → '1', absorbing → '0'
+    #fst.add_arc(0, '', '0', 'done')
+    fst.add_F('done')
+    fst.add_arc(3, '', '1', 'done')
+    fst.add_arc(2, '', '0', 'done')
+
+    fst.add_F(0)
+    fst.add_F(1)
+
+    return fst
+
+
+def mystery7():
+    fst = FST()
+
+    fst.add_I(0)
+
+    # Path 1: 0 -b|c-> 3
+    fst.add_arc(0, 'b', 'c', 3)
+
+    # Path 2: 0 -a|ε-> 1; 1 -b|c-> 2
+    fst.add_arc(0, 'a', EPSILON, 1)
+    fst.add_arc(1, 'b', 'c', 2)
+
+    # After we have emitted 'c', we only emit 'x' forever.
+    for q in (2, 3):
+        fst.add_F(q)
+        fst.add_arc(q, 'a', 'x', q)
+        fst.add_arc(q, 'b', 'x', q)
+
+    return fst
+
+
+def mystery8():
+    fst = FST()
+
+    fst.add_I(0)
+    fst.add_F(0)
+
+    # Direct C, like your original
+    fst.add_arc(0, 'a', 'c', 1)
+    fst.add_F(1)
+    fst.add_arc(1, 'a', 'x', 3)
+
+    # Indirect C via epsilon-output
+    fst.add_arc(0, 'b', EPSILON, 2)
+    fst.add_arc(2, 'b', 'c', 3)
+
+    fst.add_F(3)
+    fst.add_arc(3, 'a', 'x', 3)
+    fst.add_arc(3, 'b', 'x', 3)
+
+    return fst

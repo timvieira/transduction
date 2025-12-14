@@ -1,6 +1,5 @@
 from transduction.base import AbstractAlgorithm, PrecoverDecomp
-from transduction.fst import FST, EPSILON
-from transduction.fsa import FSA
+from transduction.fsa import FSA, EPSILON
 from transduction.util import display_table
 from transduction.lazy import Lazy
 
@@ -120,11 +119,10 @@ class Precover:
         "DFA representing the complete precover."
         return self.fsa.det()
 
-    @cached_property
-    def det_universal_states(self):
-        "set of universal states in `self.det`"
-        P = self.det
-        return {i for i in P.stop if is_universal(P, i, self.source_alphabet)}
+#    def det_universal_states(self):
+#        "set of universal states in `self.det`"
+#        P = self.det.materialize()
+#        return {i for i in P.stop if is_universal(P, i, self.source_alphabet)}
 
     @cached_property
     def min(self):
@@ -139,18 +137,18 @@ class Precover:
         return LazyPrecoverNFA(self.fst, self.target)
         #return LazyPrecoverNFAWithTruncationMarker(self.fst, self.target)
 
-    @cached_property
-    def target_prefixes(self):
-        "An automaton that denotes the `target` string's cylinder set."
-        m = FST()
-        m.add_I(self.target[:0])
-        N = len(self.target)
-        for i in range(N):
-            m.add_arc(self.target[:i], self.target[i], self.target[i], self.target[:i+1])
-        for x in self.target_alphabet:
-            m.add_arc(self.target, x, x, self.target)
-        m.add_F(self.target)
-        return m
+#    @cached_property
+#    def target_prefixes(self):
+#        "An automaton that denotes the `target` string's cylinder set."
+#        m = FST()
+#        m.add_I(self.target[:0])
+#        N = len(self.target)
+#        for i in range(N):
+#            m.add_arc(self.target[:i], self.target[i], self.target[i], self.target[:i+1])
+#        for x in self.target_alphabet:
+#            m.add_arc(self.target, x, x, self.target)
+#        m.add_F(self.target)
+#        return m
 
     @cached_property
     def decomposition(self):
@@ -160,7 +158,7 @@ class Precover:
 
         # identify all universal states
         universal_states = {i for i in P.stop if is_universal(P, i, self.source_alphabet)}
-
+        
         # copy all arcs except those leaving universal states
         arcs = [(i,a,j) for i in P.states - universal_states for a,j in P.arcs(i)]
 

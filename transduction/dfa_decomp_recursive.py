@@ -1,5 +1,4 @@
 from transduction import FSA, EPSILON, Precover, format_table
-from transduction.eager_nonrecursive import LazyPrecoverNFA
 from transduction.lazy import Lazy
 from collections import deque
 
@@ -33,12 +32,6 @@ class Relevance(Lazy):
             if self.target.startswith(ys) or ys.startswith(self.target):
                 yield x, (i, ys)
 
-#    def arcs(self, state):
-#        N = len(self.target)
-#        for x, (i, ys) in self.base.arcs(state):
-#            if self.target.startswith(ys) or ys.startswith(self.target):
-#                yield x, (i, ys[:N])
-
     def start(self):
         yield from self.base.start()
 
@@ -46,55 +39,10 @@ class Relevance(Lazy):
         raise NotImplementedError()
 
 
-class NonrecursiveDFADecomp:
-
-    def __init__(self, fst, target):
-        self.source_alphabet = fst.A - {EPSILON}
-        self.target_alphabet = fst.B - {EPSILON}
-
-        dfa = LazyPrecoverNFA(fst, target).det()
-
-        Q = FSA()
-        R = FSA()
-
-        worklist = deque()
-        visited = set()
-
-        for i in dfa.start():
-            worklist.append(i)
-            visited.add(i)
-            Q.add_start(i)
-            R.add_start(i)
-
-        while worklist:
-            i = worklist.popleft()
-
-            if dfa.is_final(i):
-                if dfa.accepts_universal(i, self.source_alphabet):
-                    Q.add_stop(i)
-                    continue       # will not expand further
-                else:
-                    R.add_stop(i)  # will expand further
-
-            for a, j in dfa.arcs(i):
-                if j not in visited:
-                    worklist.append(j)
-                    visited.add(j)
-
-                Q.add_arc(i, a, j)
-                R.add_arc(i, a, j)
-
-        self.fst = fst
-        self.dfa = dfa
-        self.target = target
-        self.quotient = Q
-        self.remainder = R
-
-
 # XXX: Warning: this algorithm doesn't work in all cases.  It currently fails to
 # terminate on the `triplets_of_doom` test case.  The issue is that it does not
 # truncate the target buffer.
-class RecursiveDFADecomposition:
+class RecursiveDFADecomp:
 
     def __init__(self, fst, target, parent=None):
 
@@ -104,7 +52,7 @@ class RecursiveDFADecomposition:
         self.fst = fst
         self.target = target
 
-        # this fast because this machine is lazy
+        # XXX: Warning: this machine may have infinitely many states.
         self.dfa = Relevance(TargetSideBuffer(fst), target).det()
 
         worklist = deque()
@@ -195,7 +143,7 @@ class RecursiveDFADecomposition:
         return True
 
     def __rshift__(self, y):
-        return RecursiveDFADecomposition(self.fst, self.target + y, parent=self)
+        return RecursiveDFADecomp(self.fst, self.target + y, parent=self)
 
     def __iter__(self):
         return iter([self.quotient, self.remainder])
