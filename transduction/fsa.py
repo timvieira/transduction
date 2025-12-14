@@ -37,6 +37,10 @@ class FSA:
         for i in stop: self.add_stop(i)
         for i,a,j in arcs: self.add_arc(i,a,j)
 
+    def materialize(self):
+        # the FSA is already materialized
+        return self
+
     def as_tuple(self):
         return (frozenset(self.states),
                 frozenset(self.start),

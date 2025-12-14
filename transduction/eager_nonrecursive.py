@@ -98,6 +98,49 @@ class LazyPrecoverNFA(Lazy):
         return self.fst.is_final(i) and ys[:self.N] == self.target
 
 
+# [2025-12-14 Sun] Is it possible that with the pop version of the preccover
+#   automaton that we don't have to worry about truncation and other inefficient
+#   things like that?  Is there some way in which we could run in "both
+#   direction" some how?  I have this feeling that it is possible to switch
+#   between the states as they ought to be totally isomorphic.  My worry with
+#   the pop version below is that there would appear to be inherently less
+#   sharing of work because the precovers of prefixes aren't guarnateed to be
+#   useful (that said, due to truncation they aren't).  Maybe this is an
+#   empirical question?
+class PopPrecover(Lazy):
+    """
+    Equivalent to LazyPrecoverNFA, but the states are named different as they are
+    designed to pop from the target-string buffer rather than push.  This
+    construction is better-suited for exploiting work on common suffixes.
+    """
+
+    def __init__(self, fst, target):
+        self.fst = fst
+        self.target = target
+        self.N = len(target)
+
+    def arcs(self, state):
+        (i, ys) = state
+        n = len(ys)
+        if n == 0:
+            for x, _, j in self.fst.arcs(i):
+                yield (x, (j, ys))
+        else:
+            for x, y, j in self.fst.arcs(i):
+                if y == EPSILON:
+                    yield (x, (j, ys))
+                elif y == ys[0]:
+                    yield (x, (j, ys[1:]))
+
+    def start(self):
+        for i in self.fst.I:
+            yield (i, self.target)
+
+    def is_final(self, state):
+        (i, ys) = state
+        return self.fst.is_final(i) and len(ys) == 0
+
+
 class Precover:
     """
     Representation of the precover of target string `target` in the FST `fst`.
@@ -107,12 +150,13 @@ class Precover:
 
     """
 
-    def __init__(self, fst, target):
+    def __init__(self, fst, target, impl='push'):
         self.fst = fst
         self.target = target
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
         self.U = FSA.universal(self.source_alphabet)
+        self.impl = impl
 
     @cached_property
     def det(self):
@@ -132,22 +176,43 @@ class Precover:
     @cached_property
     def fsa(self):
         "FSA representing the complete precover."
-        # this is a copy machine for target \targetAlphabet^*
-        #return (self.fst @ self.target_prefixes).project(0)
-        return LazyPrecoverNFA(self.fst, self.target)
-        #return LazyPrecoverNFAWithTruncationMarker(self.fst, self.target)
+#        if self.impl == 0:
+#            return (self.fst @ self.target_prefixes).project(0)
+        if self.impl == 'push':
+            return LazyPrecoverNFA(self.fst, self.target)
+        elif self.impl == 'push-truncated':
+            return LazyPrecoverNFAWithTruncationMarker(self.fst, self.target)
+        elif self.impl == 'pop':
+            return PopPrecover(self.fst, self.target)
+        else:
+            raise ValueError(self.impl)
 
-#    @cached_property
-#    def target_prefixes(self):
-#        "An automaton that denotes the `target` string's cylinder set."
-#        m = FST()
-#        m.add_I(self.target[:0])
+#    def target_prefixes_pop_version(self):
+#        """
+#        An automaton that denotes the `target` string's cylinder set.
+#        """
+#        m = FSA()
+#        m.add_start(self.target)
 #        N = len(self.target)
 #        for i in range(N):
-#            m.add_arc(self.target[:i], self.target[i], self.target[i], self.target[:i+1])
+#           m.add_arc(self.target[i:], self.target[i], self.target[i+1:])
+#        for x in self.fst.B - {EPSILON}:
+#           m.add_arc(self.target[:0], x, self.target[:0])
+#        m.add_stop(self.target[:0])
+#        return m
+
+#    def target_prefixes_push_version(self):
+#        """
+#        An automaton that denotes the `target` string's cylinder set.
+#        """
+#        m = FSA()
+#        m.add_start(self.target[:0])
+#        N = len(self.target)
+#        for i in range(N):
+#            m.add_arc(self.target[:i], self.target[i], self.target[:i+1])
 #        for x in self.target_alphabet:
-#            m.add_arc(self.target, x, x, self.target)
-#        m.add_F(self.target)
+#            m.add_arc(self.target, x, self.target)
+#        m.add_stop(self.target)
 #        return m
 
     @cached_property
@@ -158,7 +223,7 @@ class Precover:
 
         # identify all universal states
         universal_states = {i for i in P.stop if is_universal(P, i, self.source_alphabet)}
-        
+
         # copy all arcs except those leaving universal states
         arcs = [(i,a,j) for i in P.states - universal_states for a,j in P.arcs(i)]
 
