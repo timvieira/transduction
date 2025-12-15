@@ -115,14 +115,16 @@ class BuggyLazyRecursive:
 
     def candidacy(self, xs, target):
         return any(
-            (ys.startswith(target) or target.startswith(ys))
+            (ys[:len(target)] == target or target[:len(ys)] == ys)
             for (s, ys) in self.frontier(xs)
         )
 
-    def discontinuity(self, xs, target):   # pylint: disable=W0613
-        #assert not self.continuity(xs, y)
-        return any((s in self.fst.F) for (s, ys) in self.frontier(xs)
-                   if ys.startswith(target))
+    def discontinuity(self, xs, target):
+        return any(
+            (s in self.fst.F) 
+            for (s, ys) in self.frontier(xs)
+            if ys[:len(target)] == target
+        )
 
     # XXX: technically, this state depends on the `target` as it was used for filtering.
     @memoize

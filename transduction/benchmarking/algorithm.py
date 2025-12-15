@@ -1,4 +1,4 @@
-from transduction import Precover
+from transduction.lazy_recursive import LazyRecursive as Precover
 
 import numpy as np
 from arsenal.datastructures import LocatorMaxHeap
@@ -17,12 +17,14 @@ class Item:
 
 def prioritized_enumeration(lm, fst, target, max_steps, EOS, threshold=0.001, trim=False):
     
-    precover = Precover(fst, target)
+    precover = Precover(fst, empty_target=(), empty_source=(), extend=lambda x, y: x + (y,))(target)
+    print(" | Precover instantiated")
     fsa = precover.quotient
     Q = precover.quotient.stop
     R = precover.remainder.stop
-    fsa.stop |= R
     print("| Precover built")
+    fsa.stop |= R
+    print("| Remainder removed from acceptance")
     if trim:
         print("trimming")
         fsa = fsa.trim()
