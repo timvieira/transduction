@@ -9,6 +9,9 @@ from collections import deque
 # [2025-11-21 Fri] This version of the next-symbol prediction algorithm
 # enumerates strings (and states).  We also have a version that enumrates just
 # the states.
+#
+# TODO: hook this up to our suite of (finite) test cases
+#
 class PeekabooStrings:
 
     def __init__(self, fst):
