@@ -3,6 +3,14 @@ from transduction import (
     EagerNonrecursive, examples, Precover, FSA
 )
 
+# TODO: unify frameworks, or at least bring the recursive testing strategy here
+# because it should hit a broader set of test strings.  The challenge will be in
+# excluding examples, or using max_steps and defining some kind of expected
+# behavior for limited runs (e.g., check that the precover is a subset of the
+# true precover rather than equal to the precover).  Note that there is still
+# likely some value in testing some of the outputs on specific example, but that
+# could just be done for one of the many equivalent methods, e.g., `Precover`.
+
 
 def assert_equal(have, want):
     assert have.quotient.equal(want.quotient), [have.quotient.min(), want.quotient]
