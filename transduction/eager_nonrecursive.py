@@ -219,7 +219,7 @@ class Precover:
     def decomposition(self):
         "Produce a quotient--remainder pair each represented as automata."
         P = self.det
-        if isinstance(P, Lazy): P = P.materialize()
+        P = P.materialize()
 
         # identify all universal states
         universal_states = {i for i in P.stop if is_universal(P, i, self.source_alphabet)}
