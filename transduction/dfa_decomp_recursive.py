@@ -144,14 +144,3 @@ class RecursiveDFADecomp:
 
     def __rshift__(self, y):
         return RecursiveDFADecomp(self.fst, self.target + y, parent=self)
-
-    def __iter__(self):
-        return iter([self.quotient, self.remainder])
-
-    def _repr_html_(self):
-        return format_table([self], headings=['quotient', 'remainder'])
-
-    def check(self):
-        P = Precover(self.fst, self.target)
-        assert self.quotient.equal(P.quotient)
-        assert self.remainder.equal(P.remainder)
