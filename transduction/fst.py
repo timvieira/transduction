@@ -129,7 +129,7 @@ class FST:
 
     def _repr_mimebundle_(self, *args, **kwargs):
         if not self.states:
-            return {'image/svg+xml': '<center>∅</center>'}
+            return {'text/html': '<center>∅</center>'}
         return self.graphviz()._repr_mimebundle_(*args, **kwargs)
 
     def graphviz(

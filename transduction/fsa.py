@@ -41,6 +41,10 @@ class FSA:
         # the FSA is already materialized
         return self
 
+    def lazy(self):
+        from transduction.lazy import LazyWrapper
+        return LazyWrapper(self)
+
     def as_tuple(self):
         return (frozenset(self.states),
                 frozenset(self.start),
@@ -74,7 +78,7 @@ class FSA:
 
     def _repr_mimebundle_(self, *args, **kwargs):
         if not self.states:
-            return {'image/svg+xml': '<center>∅</center>'}
+            return {'text/html': '<center>∅</center>'}
         return self.graphviz()._repr_mimebundle_(*args, **kwargs)
 
     def graphviz(self, fmt_node=lambda x: x, sty_node=lambda x: {}, fmt_edge=lambda i,a,j: 'ε' if a == EPSILON else a):
@@ -178,6 +182,9 @@ class FSA:
 
         else:
             raise NotImplementedError()
+
+    def arcs_x(self, i, x):
+        return self.edges[i][x]
 
     def reverse(self):
         m = FSA()
@@ -709,7 +716,10 @@ class FSA:
             if i in self.stop:
                 yield x
             for a, j in self.arcs(i):
-                worklist.append((j, x + a))
+                if a == EPSILON:
+                    worklist.append((j, x))
+                else:
+                    worklist.append((j, x + a))
 
 
 EPSILON = eps = ''
