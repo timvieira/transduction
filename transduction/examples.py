@@ -243,7 +243,7 @@ def duplicate(V, K=2):
             dup.add_arc((k, b), EPSILON, b, (k+1, b))
         dup.add_arc((K-2, b), EPSILON, b, 0)
     dup.add_F(0)
-    return dup.renumber
+    return dup.renumber()
 
 
 def replace(mapping):
@@ -276,7 +276,7 @@ def doom(V, K):   # k-tuples of doom
             dup.add_arc((k, b), b, b, (k+1, b))
         dup.add_arc((K-2, b), EPSILON, EPSILON, 0)
     dup.add_F(0)
-    return dup.renumber
+    return dup.renumber()
 
 
 #def togglecase():

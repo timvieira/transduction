@@ -680,7 +680,8 @@ class FSA:
         [s] = d.start
         for x in xs:
             t = d.edges[s][x]
-            if not t: break
+            if not t:
+                return False
             [s] = t
         return (s in d.stop)
 

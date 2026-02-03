@@ -178,7 +178,9 @@ class LazyDeterminize(Lazy):
             yield a, frozenset(j)
 
     def arcs_x(self, Q, x):
-        return frozenset(j for i in Q for j in self.fsa.arcs_x(i, x))
+        result = frozenset(j for i in Q for j in self.fsa.arcs_x(i, x))
+        if result:
+            yield result
 
 
 class StartAt(Lazy):
@@ -219,7 +221,8 @@ class Renumber(Lazy):
             yield a, self.m(j)
 
     def arcs_x(self, i, x):
-        return self.fsa.arcs_x(self.m[i], x)
+        for j in self.fsa.arcs_x(self.m[i], x):
+            yield self.m(j)
 
 
 class LazyWrapper(Lazy):

@@ -163,6 +163,7 @@ def visualize_automaton(
     node_attrs=None,
     edge_attrs=None,
 ):
+    """Visualize a materialized FSA using Graphviz (does not support Lazy automata)."""
     from graphviz import Digraph
 
     # Merge parallel edges (u, v) by symbol set
@@ -207,9 +208,7 @@ def visualize_automaton(
 
     # Nodes (doublecircle for finals)
     for q in automaton.states:
-        is_final = False
-        if automaton.is_final(q):
-            is_final = automaton.is_final(q)
+        is_final = automaton.is_final(q)
         if is_final:
             dot.node(str(q), peripheries='2')
         else:

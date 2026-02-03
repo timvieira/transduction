@@ -109,7 +109,6 @@ class FST:
                 m.add_arc(f(i), a, b, f(j))
         return m
 
-    @cached_property
     def renumber(self):
         return self.rename(Integerizer())
 
@@ -376,7 +375,7 @@ class FST:
         epsilon_1 or epsilon_2 transitions to be able to perform the composition
         correctly.  See Fig. 7 on p. 17 of Mohri, "Weighted Automata Algorithms".
 
-        Args: `idx` (int): 1 if the FST is the first one in the composition, 2 otherwise.
+        Args: `idx` (int): 0 if the FST is the first one in the composition, 1 otherwise.
         """
         assert idx in [0, 1]
 

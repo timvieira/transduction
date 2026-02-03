@@ -40,7 +40,7 @@ class Peekaboo:
         ARCS = [(i,x,j) for j, arcs in s._arcs.items() for x,i in arcs]
         for x in target:
             s >>= x
-            ARCS.extend((i,x,j) for j, arcs in s._arcs.items() for x,i in arcs)
+            ARCS.extend((i,a,j) for j, arcs in s._arcs.items() for a,i in arcs)
 
         foo = {}
         for y in self.target_alphabet:
@@ -75,7 +75,7 @@ class Peekaboo:
         from graphviz import Digraph
 
         def helper(target, outer):
-            with outer.subgraph(name="cluster") as inner:
+            with outer.subgraph(name=f"cluster_{target}") as inner:
                 inner.attr(label=target, style='rounded, filled', color='black', fillcolor='white')
                 if target == '':
                     curr = PeekabooState(self.fst, '', parent=None)
