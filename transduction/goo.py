@@ -193,8 +193,8 @@ class NonrecursiveDFADecomp:
         # grow without bound.  This works in a surprising number of cases, but
         # it can fail to terminate (e.g., on the `triplets_of_doom`).
         print('1')
-        fsa = LazyPrecoverNFA(fst, target)#.materialize().renumber().trim().epsremove().trim().lazy()
-        dfa = fsa.det()
+        fsa = LazyPrecoverNFA(fst, target).materialize().renumber().trim()#.epsremove().trim().lazy()
+        dfa = fsa.lazy().det()
         print('2')
 
         Q = FSA()
@@ -213,7 +213,6 @@ class NonrecursiveDFADecomp:
         while worklist:
             i = worklist.popleft()
 #            print('pop', i)
-            print('pop')
 
             if dfa.is_final(i):
                 print('final')

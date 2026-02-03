@@ -74,7 +74,7 @@ class prioritized_enumeration:
                 next_item = Item(
                     weight = next_weight,
                     state = next_state,
-                    source = item.source << x.bytes,
+                    source = item.source << (lm.lm._decode[x_t] if isinstance(x_t, int) else x_t.bytes),
                 )
                 #print('push:', next_item)
                 self.queue[next_item] = next_weight
@@ -136,5 +136,60 @@ class importance_sampling:
             item = Item(
                 weight = item.weight + Z,
                 state = T[x_t],
-                source = item.source << x_t.bytes,
+                source = item.source << (lm.lm._decode[x_t] if isinstance(x_t, int) else x_t.bytes),
+            )
+
+
+class crude_importance_sampling:
+    """
+    This class is similar to importance_sampling except that it does not
+    leverage from decomposition
+    """
+
+    def __init__(self, lm, fst, target):
+
+        if not (set(target) <= fst.B):
+            print(f'[warn] OOVs: {set(target) - fst.B}')
+
+        self.dfa = LazyPrecoverNFA(fst, target).det()
+        self.lm = lm
+
+    def sample(self, max_length=np.inf):
+        EOS = self.lm.lm.eos
+
+        t = 0
+        for i in self.dfa.start():
+            item = Item(weight = 0, state = i, source = self.lm)
+
+        while True:
+            t += 1
+            if t > max_length:
+                print(colors.light.red % 'stopped early')
+                break
+
+            print('step:', t)
+
+            lm_logp_next = item.source.logp_next
+
+            q = {}
+            T = {}
+            if self.dfa.is_final(item.state):
+                q[EOS] = lm_logp_next[EOS]
+            for x, next_state in self.dfa.arcs(item.state):
+                q[x] = lm_logp_next[x]
+                T[x] = next_state
+
+            keys = list(q.keys())
+            vals = np.array(list(q.values()))
+            Z = logsumexp(vals)
+            vals = np.exp(vals - Z)
+            x_t = keys[sample(vals)]
+
+            if x_t == EOS:
+                return item
+
+            item = Item(
+                weight = item.weight + Z,
+                state = T[x_t],
+                source = item.source << (lm.lm._decode[x_t] if isinstance(x_t, int) else x_t.bytes),
             )
