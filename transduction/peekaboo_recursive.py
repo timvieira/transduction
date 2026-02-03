@@ -59,7 +59,7 @@ class Peekaboo:
         # precovers.
         #
         # TODO: use the integerizer here so that nodes are not improperly
-        # equated with thier string representations.
+        # equated with their string representations.
         #
         # TODO: show the active nodes in the graph of the outer most plate
         # (e.g., by coloring them yellow (#f2d66f), as in the precover
@@ -250,7 +250,7 @@ class PeekabooState:
 
 # TODO: in order to predict EOS, we need to extract the preimage from Q and R
 #
-# Should we unify this class with `peekabo.PeekabooPrecover`?
+# Should we unify this class with `peekaboo.PeekabooPrecover`?
 #
 #    No, the non-recursive algorithm doesnt need to worry about the truncation
 #    bits, so we probably do not need to unify them.  That said, we might want
@@ -323,9 +323,9 @@ class TruncatedDFA(Lazy):
     def start(self):
         return self.dfa.start()
 
-    # TODO: I think this is optional, but possible less efficient
+    # TODO: I think this is optional, but possibly less efficient
     def refine(self, frontier):
-        # clip the target side side to `y` in order to mimick the states of the
+        # clip the target side to `y` in order to mimic the states of the
         # composition machine that we used in the new lazy, nonrecursive
         # algorithm.
         N = len(self.target)

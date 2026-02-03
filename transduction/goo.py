@@ -13,7 +13,6 @@ def bpe_wfst(tokenizer, readable=False):
     drop = {x.encode() for x in tokenizer.all_special_tokens}
     for i, x in enumerate(get_byte_vocab(tokenizer)):
         if x in drop:
-            print('dropped', (i, x))
             continue
         _x = x
         x = tuple(x)
@@ -51,9 +50,6 @@ class Token:
         else:
             return (self, *other)
 
-
-#def Token(i, _):
-#    return i
 
 
 class LazyPrecoverNFA_slower(Lazy):
@@ -94,7 +90,6 @@ class LazyPrecoverNFA(Lazy):
 
         try:
             fst.index_iy_xj
-            print('index_iy_xj available')
         except AttributeError:
             index_iy_xj = {}
             for i in fst.states:
@@ -103,12 +98,10 @@ class LazyPrecoverNFA(Lazy):
                         index_iy_xj[i, y] = set()
                     index_iy_xj[i, y].add((x, j))
             fst.index_iy_xj = index_iy_xj
-            print('made the index_iy_xj')
             del index_iy_xj
 
         try:
             fst.index_i_xj
-            print('index_i_xj available')
         except AttributeError:
             index_i_xj = {}
             for i in fst.states:
@@ -117,12 +110,10 @@ class LazyPrecoverNFA(Lazy):
                         index_i_xj[i] = set()
                     index_i_xj[i].add((x, j))
             fst.index_i_xj = index_i_xj
-            print('made the index_i_xj')
             del index_i_xj
 
         try:
             fst.index_ix_j
-            print('index_ix_j available')
         except AttributeError:
             index_ix_j = {}
             for i in fst.states:
@@ -131,12 +122,10 @@ class LazyPrecoverNFA(Lazy):
                         index_ix_j[i, x] = set()
                     index_ix_j[i, x].add(j)
             fst.index_ix_j = index_ix_j
-            print('made the index_ix_j')
             del index_ix_j
 
         try:
             fst.index_ixy_j
-            print('index_ixy_j available')
         except AttributeError:
             index_ixy_j = {}
             for i in fst.states:
@@ -145,7 +134,6 @@ class LazyPrecoverNFA(Lazy):
                         index_ixy_j[i, x, y] = set()
                     index_ixy_j[i, x, y].add(j)
             fst.index_ixy_j = index_ixy_j
-            print('made the index_ixy_j')
             del index_ixy_j
 
     def arcs(self, state):
@@ -192,10 +180,8 @@ class NonrecursiveDFADecomp:
         # something differently where the automaton allows the target buffer to
         # grow without bound.  This works in a surprising number of cases, but
         # it can fail to terminate (e.g., on the `triplets_of_doom`).
-        print('1')
-        fsa = LazyPrecoverNFA(fst, target).materialize().renumber().trim()#.epsremove().trim().lazy()
+        fsa = LazyPrecoverNFA(fst, target).materialize().renumber().trim()
         dfa = fsa.lazy().det()
-        print('2')
 
         Q = FSA()
         R = FSA()
@@ -208,16 +194,12 @@ class NonrecursiveDFADecomp:
             visited.add(i)
             Q.add_start(i)
             R.add_start(i)
-        print('3')
 
         while worklist:
             i = worklist.popleft()
-#            print('pop', i)
 
             if dfa.is_final(i):
-                print('final')
                 if dfa.accepts_universal(i, self.source_alphabet):
-                    print('universal')
                     Q.add_stop(i)
                     continue       # will not expand further
                 else:
@@ -227,9 +209,6 @@ class NonrecursiveDFADecomp:
                 if j not in visited:
                     worklist.append(j)
                     visited.add(j)
-#                    print('  push', a, '==>', j)
-#                else:
-#                    print('  push', a, 'dup')
 
                 Q.add_arc(i, a, j)
                 R.add_arc(i, a, j)

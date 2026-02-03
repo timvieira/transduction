@@ -44,10 +44,14 @@ class prioritized_enumeration:
         self.R = R
         self.precover = precover
         self.dfa = dfa
+        self.lm = lm
 
         self.run(max_steps)
 
     def run(self, max_steps):
+        lm = self.lm
+        EOS = lm.eos
+        
         t = 0
         while self.queue:
             t += 1
@@ -67,14 +71,13 @@ class prioritized_enumeration:
                     state = item.state,
                     source = item.source,   # << EOS?
                 ))
-                remainder.append(item)
             for x, next_state in self.dfa.arcs(item.state):
                 next_weight = float(item.weight + lm_logp_next[x])   # use LM state here
                 if next_weight == -np.inf: continue
                 next_item = Item(
                     weight = next_weight,
                     state = next_state,
-                    source = item.source << (lm.lm._decode[x_t] if isinstance(x_t, int) else x_t.bytes),
+                    source = item.source << x,
                 )
                 #print('push:', next_item)
                 self.queue[next_item] = next_weight
@@ -101,7 +104,7 @@ class importance_sampling:
         self.lm = lm
 
     def sample(self, max_length=np.inf):
-        EOS = self.lm.lm.eos
+        EOS = self.lm.eos
 
         t = 0
         for i in self.dfa.lazy().start():
@@ -136,7 +139,7 @@ class importance_sampling:
             item = Item(
                 weight = item.weight + Z,
                 state = T[x_t],
-                source = item.source << (lm.lm._decode[x_t] if isinstance(x_t, int) else x_t.bytes),
+                source = item.source << x_t,
             )
 
 
@@ -155,7 +158,7 @@ class crude_importance_sampling:
         self.lm = lm
 
     def sample(self, max_length=np.inf):
-        EOS = self.lm.lm.eos
+        EOS = self.lm.eos
 
         t = 0
         for i in self.dfa.start():
@@ -166,8 +169,6 @@ class crude_importance_sampling:
             if t > max_length:
                 print(colors.light.red % 'stopped early')
                 break
-
-            print('step:', t)
 
             lm_logp_next = item.source.logp_next
 
@@ -191,5 +192,5 @@ class crude_importance_sampling:
             item = Item(
                 weight = item.weight + Z,
                 state = T[x_t],
-                source = item.source << (lm.lm._decode[x_t] if isinstance(x_t, int) else x_t.bytes),
+                source = item.source << x_t,
             )

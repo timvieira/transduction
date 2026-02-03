@@ -18,8 +18,6 @@ class Item:
 
 def prioritized_enumeration(lm, fst, target, max_steps, EOS, threshold=0.001, trim=False):
 
-    from IPython import embed; embed()
-    
     precover = LazyRecursive(fst, empty_target=(), empty_source=(), extend=lambda x, y: x + (y,))(target)
     print(" | Precover instantiated")
     fsa = precover.quotient
@@ -49,9 +47,7 @@ def prioritized_enumeration(lm, fst, target, max_steps, EOS, threshold=0.001, tr
             print('stopped early')
             break
         (item, _) = queue.pop()
-        breakpoint()
         lm_logp_next = lm.logp_next(item.source)
-        breakpoint()
 
         if item.state in Q:
             quotient.append(item)
@@ -64,7 +60,6 @@ def prioritized_enumeration(lm, fst, target, max_steps, EOS, threshold=0.001, tr
                 source = item.source,
             ))
             remainder.append(item)
-        breakpoint()
         for x, next_state in fsa.arcs(item.state):
             next_weight = float(item.weight + lm_logp_next[x])   # use LM state here
             if next_weight == -np.inf: continue

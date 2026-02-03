@@ -69,7 +69,7 @@ class FST:
     def add_arc(self, i, a, b, j):  # pylint: disable=arguments-renamed
         self.states.add(i)
         self.states.add(j)
-        self.delta[i][a][b].add(j)   # TODO: change this data structure to separarate a and b.
+        self.delta[i][a][b].add(j)   # TODO: change this data structure to separate a and b.
         self.A.add(a)
         self.B.add(b)
 

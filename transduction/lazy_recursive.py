@@ -54,7 +54,7 @@ class BuggyLazyRecursive:
                 if self.discontinuity(xs, y):
                     curr.remainder.add(xs)
 
-            # filter previous calls output so that it satsifies the invariant
+            # filter previous calls output so that it satisfies the invariant
             for xs in prev.quotient:
                 if self.candidacy(xs, y):
                     worklist.append(xs)
@@ -81,32 +81,6 @@ class BuggyLazyRecursive:
 
         return curr
 
-#    def as_fsa(self, target):
-#        "Take the output and represent it as an FSA."
-#        decomp = self(target)
-#        return (FSA.from_strings(decomp.quotient) * FSA.universal(self.source_alphabet)
-#                + FSA.from_strings(decomp.remainder))
-
-#    def _as_fsa(self, target):
-#        "Equivalent to `as_fsa`, but less efficient."
-#        decomp = self(target)
-#        # The method below is better implemented by the else clause.
-#        states = {x[:t] for x in decomp.quotient | decomp.remainder
-#                  for t in range(len(x)+1)}
-#        m = FSA()
-#        m.add_start('')
-#        for x in states:
-#            if self.continuity(x, target):
-#                m.add_stop(x)
-#                for a in self.source_alphabet:
-#                    m.add(x, a, x)
-#                continue
-#            if self.discontinuity(x, target):
-#                m.add_stop(x)
-#            for xx in self.candidates(x, target):
-#                m.add(x, xx[-1], xx)
-#        return m
-
     def candidates(self, xs, target):
         for source_symbol in self.source_alphabet:
             next_xs = self.extend(xs, source_symbol)
@@ -120,14 +94,13 @@ class BuggyLazyRecursive:
         )
 
     def discontinuity(self, xs, target):   # pylint: disable=W0613
-        #assert not self.continuity(xs, y)
         return any((s in self.fst.F) for (s, ys) in self.frontier(xs)
                    if ys.startswith(target))
 
     # XXX: technically, this state depends on the `target` as it was used for filtering.
     @memoize
     def frontier(self, xs):
-        """This method is primarily for debugging.  It rReturns the state of
+        """This method is primarily for debugging.  It Returns the state of
         `xs` in the powerset construction augmented where each state
         is paired with a target-side string.
 
@@ -168,7 +141,7 @@ class BuggyLazyRecursive:
 
     def continuity(self, xs, target):
         """
-        Is `xs` a member of y's quotient? (not necessarily miminal)
+        Is `xs` a member of y's quotient? (not necessarily minimal)
 
         Warning: this test is not exact, and it leads to a suboptimal quotient.
         """
@@ -217,7 +190,7 @@ class LazyRecursive(BuggyLazyRecursive):
         alphabet = self.source_alphabet
 
         def refine(frontier):
-            # clip the target side side to `y` in order to mimick the states of
+            # clip the target side to `y` in order to mimic the states of
             # the composition machine that we used in the new lazy, nonrecursive
             # algorithm.
             N = len(target)

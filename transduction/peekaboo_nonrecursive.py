@@ -7,7 +7,7 @@ from collections import deque
 
 
 # [2025-11-21 Fri] This version of the next-symbol prediction algorithm
-# enumerates strings (and states).  We also have a version that enumrates just
+# enumerates strings (and states).  We also have a version that enumerates just
 # the states.
 #
 # TODO: hook this up to our suite of (finite) test cases

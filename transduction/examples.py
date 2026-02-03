@@ -263,7 +263,7 @@ def doom(V, K):   # k-tuples of doom
 
     Historically, this example is what helped us surface the issues related to
     target buffer truncation (without it the unbounded buffering construction of
-    the precover results in infintely many states, causing the DFA-factoring
+    the precover results in infinitely many states, causing the DFA-factoring
     method to run forever unnecessarily).
 
     """

@@ -1,6 +1,6 @@
 """
-Staging ground for vibe-coded method, which need to be properly vetted
-before being incorporated into the libary.
+Staging ground for vibe-coded methods, which need to be properly vetted
+before being incorporated into the library.
 """
 from transduction.fsa import EPSILON
 

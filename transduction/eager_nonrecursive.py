@@ -11,9 +11,9 @@ from collections import deque
 
 class LazyPrecoverNFAWithTruncationMarker(Lazy):
     """
-    Alternative implmementation of LazyPrecoverNFA, which augments the states
+    Alternative implementation of LazyPrecoverNFA, which augments the states
     with an additional bit, indicating if their output context has been
-    truncated (i.e., if there are more symbols in the output buffer than their
+    truncated (i.e., if there are more symbols in the output buffer than there
     are in the state representation).
     """
 
@@ -98,18 +98,18 @@ class LazyPrecoverNFA(Lazy):
         return self.fst.is_final(i) and ys[:self.N] == self.target
 
 
-# [2025-12-14 Sun] Is it possible that with the pop version of the preccover
+# [2025-12-14 Sun] Is it possible that with the pop version of the precover
 #   automaton that we don't have to worry about truncation and other inefficient
 #   things like that?  Is there some way in which we could run in "both
 #   direction" some how?  I have this feeling that it is possible to switch
 #   between the states as they ought to be totally isomorphic.  My worry with
 #   the pop version below is that there would appear to be inherently less
-#   sharing of work because the precovers of prefixes aren't guarnateed to be
+#   sharing of work because the precovers of prefixes aren't guaranteed to be
 #   useful (that said, due to truncation they aren't).  Maybe this is an
 #   empirical question?
 class PopPrecover(Lazy):
     """
-    Equivalent to LazyPrecoverNFA, but the states are named different as they are
+    Equivalent to LazyPrecoverNFA, but the states are named differently as they are
     designed to pop from the target-string buffer rather than push.  This
     construction is better-suited for exploiting work on common suffixes.
     """
@@ -163,11 +163,6 @@ class Precover:
         "DFA representing the complete precover."
         return self.fsa.det()
 
-#    def det_universal_states(self):
-#        "set of universal states in `self.det`"
-#        P = self.det.materialize()
-#        return {i for i in P.stop if is_universal(P, i, self.source_alphabet)}
-
     @cached_property
     def min(self):
         "Minimal DFA representing the complete precover."
@@ -176,8 +171,6 @@ class Precover:
     @cached_property
     def fsa(self):
         "FSA representing the complete precover."
-#        if self.impl == 0:
-#            return (self.fst @ self.target_prefixes).project(0)
         if self.impl == 'push':
             return LazyPrecoverNFA(self.fst, self.target)
         elif self.impl == 'push-truncated':
@@ -186,34 +179,6 @@ class Precover:
             return PopPrecover(self.fst, self.target)
         else:
             raise ValueError(self.impl)
-
-#    def target_prefixes_pop_version(self):
-#        """
-#        An automaton that denotes the `target` string's cylinder set.
-#        """
-#        m = FSA()
-#        m.add_start(self.target)
-#        N = len(self.target)
-#        for i in range(N):
-#           m.add_arc(self.target[i:], self.target[i], self.target[i+1:])
-#        for x in self.fst.B - {EPSILON}:
-#           m.add_arc(self.target[:0], x, self.target[:0])
-#        m.add_stop(self.target[:0])
-#        return m
-
-#    def target_prefixes_push_version(self):
-#        """
-#        An automaton that denotes the `target` string's cylinder set.
-#        """
-#        m = FSA()
-#        m.add_start(self.target[:0])
-#        N = len(self.target)
-#        for i in range(N):
-#            m.add_arc(self.target[:i], self.target[i], self.target[:i+1])
-#        for x in self.target_alphabet:
-#            m.add_arc(self.target, x, self.target)
-#        m.add_stop(self.target)
-#        return m
 
     @cached_property
     def decomposition(self):
@@ -251,7 +216,7 @@ class Precover:
         return FSA.from_string(xs) * self.U <= self.min
 
     def is_valid(self, Q, R):
-        "Is the decompositions (Q, R) valid?"
+        "Is the decomposition (Q, R) valid?"
         return self.min.equal(FSA.from_strings(Q) * self.U + FSA.from_strings(R))
 
     def find_cylinder_prefixes(self, xs):
@@ -262,7 +227,7 @@ class Precover:
                 yield xss
 
     def check_decomposition(self, Q, R, throw=False, skip_validity=False):
-        "Analyze the decompositions Q and R: is it valid? optimal?  Note that these tests only terminal each Q and R are finite sets."
+        "Analyze the decompositions Q and R: is it valid? optimal?  Note that these tests only terminate when Q and R are finite sets."
         if isinstance(Q, FSA): Q = Q.language()
         if isinstance(R, FSA): R = R.language()
         ok = True
@@ -273,7 +238,7 @@ class Precover:
         assert z
         if Q: print('├─ quotient:')
         for xs in Q:
-            # Elements of the quotinet should all be cylinders
+            # Elements of the quotient should all be cylinders
             z = self.is_cylinder(xs)
             print('├─', colors.mark(z), repr(xs), 'is a valid cylinder')
             ok &= z
@@ -318,23 +283,6 @@ class Precover:
     def _repr_mimebundle_(self, *args, **kwargs):
         "For visualization purposes in notebook."
         return self.graphviz()._repr_mimebundle_(*args, **kwargs)
-
-
-#def force_start(fsa, start_state):
-#    assert start_state in fsa.states
-#    new = FSA()
-#    new.add_start(start_state)
-#    for i, a, j in fsa.arcs():
-#        new.add(i, a, j)
-#    for i in fsa.stop:
-#        new.add_stop(i)
-#    return new
-
-
-#def is_universal(fsa, q, alphabet):
-#    # universality test; best used on a DFA
-#    m = force_start(fsa, q).min()
-#    return len(m.states) == 1 and all(set(m.arcs(i, a)) == {i} for i in m.states for a in alphabet)
 
 
 def is_universal(dfa, state, alphabet):

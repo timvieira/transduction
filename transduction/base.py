@@ -5,7 +5,7 @@ from collections import deque
 
 class PrecoverDecomp:
     """
-    This class represents the precover of some target string $\boldsymbol{y} \in \matcal{Y}^*$ as
+    This class represents the precover of some target string $\boldsymbol{y} \in \mathcal{Y}^*$ as
     a quotient and remainder set:
 
     $$\mathcal{P}(\boldsymbol{y}) = \mathcal{Q}(\boldsymbol{y}) \mathcal{X}^* \sqcup \mathcal{R}(\boldsymbol{y})$$
@@ -24,12 +24,6 @@ class PrecoverDecomp:
 
     def __eq__(self, other):
         return tuple(other) == tuple(self)
-
-#    def to_precover_fsa(self, source_alphabet):
-#        return (
-#            FSA.from_strings(self.quotient) * FSA.universal(source_alphabet)
-#            + FSA.from_strings(self.remainder)
-#        )
 
 
 class AbstractAlgorithm:
