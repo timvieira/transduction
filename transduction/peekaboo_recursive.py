@@ -374,7 +374,7 @@ class PeekabooState:
 
 # TODO: in order to predict EOS, we need to extract the preimage from Q and R
 #
-# Should we unify this class with `peekaboo.PeekabooPrecover`?
+# TODO: Should we unify this class with `peekaboo.PeekabooPrecover`?
 #
 #    No, the non-recursive algorithm doesnt need to worry about the truncation
 #    bits, so we probably do not need to unify them.  That said, we might want
@@ -463,13 +463,21 @@ class TruncatedDFA(Lazy):
     def start(self):
         return self.dfa.start()
 
-    # TODO: I think this is optional, but possibly less efficient
+    # Refine is not required for correctness — the TruncatedDFA recognizes
+    # the same language without it.  It is a normalization step that removes
+    # NFA states committed to a different next symbol (e.g., buffer target+z
+    # when we're computing Precover(target+y) for z ≠ y).  These states are
+    # "passengers" that don't affect is_final results, but they inflate
+    # powerset states (more elements to hash/compare) and generate irrelevant
+    # successors during the universality sub-BFS.  In practice the impact is
+    # unclear: most universality checks short-circuit via witnesses or the
+    # monotonicity cache before reaching the sub-BFS.
     def refine(self, frontier):
         """Clip buffer strings to target length and filter to prefix-compatible
         states.  This normalization ensures equivalent DFA states are identified."""
         N = len(self.target)
         return frozenset(
-            (i, ys[:N], truncated) for i, ys, truncated in frontier     # TODO: can we use the truncated bit here?
+            (i, ys[:N], truncated) for i, ys, truncated in frontier
             if ys[:min(N, len(ys))] == self.target[:min(N, len(ys))]
         )
 
