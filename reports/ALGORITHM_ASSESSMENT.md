@@ -88,11 +88,11 @@ and extract all $|\mathcal{Y}|$ decompositions from it.
 The **nonrecursive** variant is simpler: it takes a full target string and builds the
 Peekaboo DFA from scratch each time. Sufficient for one-shot evaluation.
 
-The **recursive** variant adds truncation markers and a `goo` frontier-tracking
+The **recursive** variant adds truncation markers and a `resume_frontiers` frontier-tracking
 mechanism that enables **incremental computation** via the `>>` operator. When
 generating a target string one symbol at a time (ancestral sampling, beam search),
 advancing from $\mathbf{y}$ to $\mathbf{y}z$ only processes the frontier states
-recorded in `parent.goo[z]`, rather than re-exploring the entire DFA from scratch.
+recorded in `parent.resume_frontiers[z]`, rather than re-exploring the entire DFA from scratch.
 This is the correct algorithm for autoregressive decoding, where the access pattern
 is a sequence of single-symbol extensions of a growing prefix.
 
@@ -152,7 +152,7 @@ decompositions. This is an asymptotic win when the target alphabet is large
 During autoregressive generation, target symbols are produced one at a time:
 $\mathbf{y}_1, \mathbf{y}_1\mathbf{y}_2, \mathbf{y}_1\mathbf{y}_2\mathbf{y}_3, \ldots$
 The recursive Peekaboo's `>>` operator advances from step $k$ to step $k+1$ by
-resuming only from the frontier states (`goo`) rather than rebuilding the entire
+resuming only from the frontier states (`resume_frontiers`) rather than rebuilding the entire
 DFA. This avoids redundant work proportional to the length of the already-generated
 prefix. The nonrecursive variant cannot do this -- it must start from scratch at
 every step.
@@ -168,7 +168,7 @@ steps but risks larger intermediate state spaces.
 The DFA construction (powerset determinization + universality detection) should
 happen in Rust. `decompose.rs` already does this for a single target. Extending
 it to the Peekaboo construction (target + one extra symbol, with per-symbol
-Q/R extraction) would be the natural next step. The incremental state (`goo`
+Q/R extraction) would be the natural next step. The incremental state (`resume_frontiers`
 frontier) would live on the Rust side and be advanced per decoding step.
 
 ### 4. Fused lazy DFA construction + LM-weighted enumeration
@@ -225,7 +225,7 @@ management. The fusion combines both.
        │  Rust: IncrementalPeekaboo                    │
        │  - Maintains PeekabooState across steps       │
        │  - advance(z): extend target by one symbol    │
-       │    using goo frontier (not full rebuild)       │
+       │    using resume_frontiers (not full rebuild)    │
        │  - Powerset determinize (incremental)          │
        │  - UniversalityFilter with caching             │
        │  - Return per-symbol Q/R stop states           │
@@ -266,7 +266,7 @@ Collapse from ~10 Python decomposition implementations to ~3:
 
 ### Keep and refactor
 
-- **Peekaboo recursive** (`peekaboo_recursive.py`) -- the right algorithm for autoregressive next-symbol prediction; supports incremental `>>` advancement via `goo` frontier tracking; port the incremental DFA construction to Rust
+- **Peekaboo recursive** (`peekaboo_recursive.py`) -- the right algorithm for autoregressive next-symbol prediction; supports incremental `>>` advancement via `resume_frontiers` frontier tracking; port the incremental DFA construction to Rust
 - **Peekaboo nonrecursive** (`peekaboo_nonrecursive.py`) -- simpler variant for one-shot (non-incremental) next-symbol prediction; useful as a reference and for cases where the full target is known upfront
 
 ### Remove or archive
@@ -313,7 +313,7 @@ Init cost (~28ms) is token extraction + trie building; could be cached across ca
 ## Efficiency Analysis: PeekabooRecursive
 
 The PeekabooRecursive algorithm (`peekaboo_recursive.py`) has the right algorithmic
-structure — incremental `>>` advancement via `goo` frontier tracking, truncation to
+structure — incremental `>>` advancement via `resume_frontiers` frontier tracking, truncation to
 guarantee termination, batched next-symbol computation. This section catalogs
 implementation-level efficiency issues: places where the current Python code does
 redundant work, misses caching opportunities, or makes unnecessary allocations.
@@ -453,32 +453,21 @@ Since states are already frozensets (hashable), this is straightforward.
 universality BFS across different symbols. In the worst case, a state relevant
 to $k$ symbols has its arcs computed $k$ times instead of once.
 
-### Issue 6: ARCS list in `__call__` grows without bound
+### Issue 6: ARCS list in `__call__` grows without bound ✅ FIXED
 
-**Location**: `Peekaboo.__call__`, lines ~40–43
+**Location**: `Peekaboo.__call__`
 
-```python
-ARCS = [(i,x,j) for j, arcs in s._arcs.items() for x,i in arcs]
-for x in target:
-    s >>= x
-    ARCS.extend((i,a,j) for j, arcs in s._arcs.items() for a,i in arcs)
-```
+Previously, a flat `ARCS` list accumulated every arc from all $N+1$ depth levels.
+Many of these arcs were unreachable from start states to Q/R stops, and the arc
+data was stored twice (once per-state in `incoming`, once in the flat list).
 
-Every PeekabooState's discovered arcs are appended to a single flat `ARCS` list.
-For a target of length $N$, this list accumulates arcs from all $N+1$ levels.
-Many of these arcs may be unreachable from the start states to the final Q/R
-states. The `FSA` constructor on line ~47 ingests all of them.
-
-Additionally, each `PeekabooState` retains its own `self._arcs` dict (line ~244),
-so the arc data is stored twice: once in the per-state dict and once in the
-accumulated list.
-
-**Fix**: Either (a) call `trim()` on the resulting FSAs (the nonrecursive variant
-does this on line ~111), or (b) don't accumulate `ARCS` and instead walk the chain
-of PeekabooStates to collect only reachable arcs on demand.
-
-**Impact**: Memory proportional to total arcs across all levels rather than
-just the reachable subset. For long targets, this can be significant.
+Now the per-depth `incoming` (reverse-arc) dicts are merged into a single shared
+graph, and per-symbol trimmed FSAs are extracted via backward BFS from Q/R stop
+states through the merged graph.  Since all states are forward-reachable (found by
+BFS) and the backward BFS selects only states that can reach the stops, the
+resulting FSAs are trimmed by construction — no unreachable arcs, no redundant
+storage.  The same merged graph serves all target symbols; each symbol's Q and R
+pull out only their reachable slice.
 
 ### Issue 7: NFA states use string prefixes — integer positions would be cheaper
 
@@ -520,19 +509,19 @@ def __rshift__(self, y):
 Each `>>` call constructs a complete `PeekabooState`, which includes:
 - A new `PeekabooPrecover` NFA (Issue 4)
 - A new `LazyDeterminize` DFA (Issue 5)
-- A full BFS over goo frontier states
+- A full BFS over resume-frontier states
 - Universality checks for all relevant symbols (Issue 2)
-- A new `_arcs` dict, `decomp` dict, and `goo` dict
+- A new `incoming` dict, `decomp` dict, and `resume_frontiers` dict
 
 There is no way to do a "lightweight" advancement that, e.g., only computes
-the goo for a specific symbol of interest rather than all symbols. In the
+the resume_frontiers for a specific symbol of interest rather than all symbols. In the
 autoregressive decoding use case, you typically sample one symbol and advance
 — but the PeekabooState computes decompositions for *all* next symbols.
 
 This is by design (it's the "batched" property), but it means you can't
 cheaply advance without computing everything. A two-phase API — first compute
 the batched decompositions, then advance cheaply using only the selected
-symbol's goo — would avoid wasted work in the advance step.
+symbol's resume frontier — would avoid wasted work in the advance step.
 
 ### Summary: Priority-ordered fix list
 
@@ -544,11 +533,13 @@ symbol's goo — would avoid wasted work in the advance step.
 | 4 | Share epsilon closure cache across steps (Issue 4) | Open | Low | Medium |
 | 5 | Memoize `TruncatedDFA.refine` (Issue 3) | Open | Low | Low |
 | 6 | Add arc cache to `LazyDeterminize` (Issue 5) | Open | Low | Low-Medium |
-| 7 | Trim or lazily collect ARCS (Issue 6) | Open | Low | Low |
+| 7 | Trim or lazily collect ARCS (Issue 6) | ✅ Done | Low | Low |
 | 8 | Two-phase advance API (Issue 8) | Open | Medium | Context-dependent |
 
-Issues 1 and 2 are now fixed. Issue 2 (universality caching via `UniversalityFilter`)
+Issues 1, 2, and 6 are now fixed. Issue 2 (universality caching via `UniversalityFilter`)
 is the single biggest win for general FSTs, and for BPE FSTs the `all_input_universal`
-fast path makes the universality check essentially free. Issue 7 (integer positions)
-is the highest-impact remaining item — a cross-cutting improvement that speeds up
-every operation touching NFA states.
+fast path makes the universality check essentially free. Issue 6 (trimmed FSA extraction
+via backward BFS over merged `incoming` graph) eliminates redundant arc storage and
+produces minimal machines per symbol. Issue 7 (integer positions) is the highest-impact
+remaining item — a cross-cutting improvement that speeds up every operation touching
+NFA states.
