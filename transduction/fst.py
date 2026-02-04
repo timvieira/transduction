@@ -828,13 +828,20 @@ class UniversalityFilter:
     Monotonicity caches use element-indexed lookups rather than linear scans.
     """
 
-    def __init__(self, fst, target, dfa, source_alphabet):
+    def __init__(self, fst, target, dfa, source_alphabet, *,
+                 all_input_universal=None, witnesses=None):
         self.dfa = dfa
         self.source_alphabet = source_alphabet
-        self.all_input_universal = check_all_input_universal(fst)
+        self.all_input_universal = (
+            check_all_input_universal(fst) if all_input_universal is None
+            else all_input_universal
+        )
         if not self.all_input_universal:
-            ip_univ = compute_ip_universal_states(fst)
-            self._witnesses = frozenset((q, target) for q in ip_univ)
+            if witnesses is not None:
+                self._witnesses = witnesses
+            else:
+                ip_univ = compute_ip_universal_states(fst)
+                self._witnesses = frozenset((q, target) for q in ip_univ)
         # Element-indexed positive cache (known universal states).
         # _pos_index[element] = set of entry IDs whose stored set contains element.
         # A stored set u ⊆ dfa_state iff every element of u is in dfa_state,
@@ -909,6 +916,10 @@ class UniversalityFilter:
 
     def is_universal(self, dfa_state):
         """Returns True/False for whether dfa_state accepts Sigma*."""
+
+        # A state must be final to accept Sigma* (since epsilon is in Sigma*)
+        if not self.dfa.is_final(dfa_state):
+            return False
 
         # Fast path: all input universal means every final state is universal
         if self.all_input_universal:

@@ -319,59 +319,46 @@ implementation-level efficiency issues: places where the current Python code doe
 redundant work, misses caching opportunities, or makes unnecessary allocations.
 The algorithm is *correct* (passes all tests); these are purely performance concerns.
 
-### Issue 1: TruncatedDFA rebuilt per (state, symbol) pair — should be cached per symbol
+### Issue 1: TruncatedDFA rebuilt per (state, symbol) pair ✅ FIXED
 
-**Location**: `PeekabooState.__init__`, line ~201
+**Location**: `PeekabooState.__init__`
 
-```python
-for y in relevant_symbols:
-    dfa_truncated = TruncatedDFA(dfa=dfa, fst=self.fst, target=target + y)
-```
+Previously, a new `TruncatedDFA` was constructed inside the BFS inner loop for each
+`(worklist_state, relevant_symbol)` pair. Now pre-built as
+`{y: TruncatedDFA(...) for y in target_alphabet}` once before the BFS loop.
 
-This is inside the main BFS loop. For each worklist state, for each of its relevant
-symbols, a new `TruncatedDFA` is constructed. But `TruncatedDFA` only depends on
-`(dfa, fst, target + y)` — it doesn't depend on the current worklist state. So the
-same object for symbol `y` could be reused across all worklist states.
+### Issue 2: No universality caching ✅ FIXED
 
-**Fix**: Pre-build `{y: TruncatedDFA(..., target=target+y) for y in target_alphabet}`
-once before the BFS loop. The existing comment `# XXX: we may have already constructed
-this machine` already flags this.
+**Location**: `PeekabooState.__init__`; `UniversalityFilter` in `fst.py`
 
-**Impact**: Eliminates `O(|worklist| × |relevant_symbols|)` object constructions,
-reducing to `O(|target_alphabet|)`.
+Previously, each universality check called `Lazy.accepts_universal`, which created a
+`StartAt` → `LazyDeterminize` → `EpsilonRemove` wrapper chain and did a fresh BFS
+from scratch — *every* time, for *every* worklist state.
 
-### Issue 2: No universality caching — each `accepts_universal` call does a full BFS
+Now uses `UniversalityFilter` (one per target symbol per PeekabooState), which provides:
 
-**Location**: `PeekabooState.__init__`, line ~203; backed by `Lazy.accepts_universal`
+- **`all_input_universal` fast path**: For BPE-like FSTs, every final state is
+  universal — the BFS is eliminated entirely. This is the single biggest win.
+- **ip-universal witness check**: O(|state|) set-intersection test using precomputed
+  witnesses `{(q, target+y, False) for q in ip_universal_states}`.
+- **Superset monotonicity cache**: If `S` is known universal and `S ⊆ T`, then `T`
+  is universal (element-indexed lookup, avoids BFS).
+- **Subset monotonicity cache**: If `S` is known non-universal and `T ⊆ S`, then `T`
+  is non-universal (element-indexed lookup, avoids BFS).
+- **BFS fallback**: Only reached when all fast paths miss. Results are cached for
+  future monotonicity lookups.
 
-```python
-if len(continuous) == 0 and dfa_truncated.accepts_universal(state, self.source_alphabet):
-```
+The `all_input_universal` flag and `ip_universal_states` set are computed once in
+`Peekaboo.__init__` and propagated through the `>>` chain (parent → child), so
+these O(|FST|) computations happen exactly once per FST, not per step.
 
-`accepts_universal` (defined in `lazy.py:65`) creates a `StartAt` → `LazyDeterminize`
-→ `EpsilonRemove` wrapper chain and then does a full BFS from `state` checking that
-all reachable states are final and complete. This is potentially expensive (explores
-the reachable DFA subset from `state`) and is called for *every* worklist state for
-*every* relevant symbol (until one is found to be continuous).
-
-The main codebase already has `UniversalityFilter` (`fst.py:819`) with several
-optimizations that PeekabooRecursive does not use:
-
-- **ip-universal witness check**: O(1) set intersection test
-- **Superset monotonicity**: if `S` is known universal and `S ⊆ T`, then `T` is universal
-- **Subset monotonicity**: if `S` is known non-universal and `T ⊆ S`, then `T` is non-universal
-- **`all_input_universal` fast path**: skips BFS entirely for BPE-like FSTs
-
-None of these are used. Each universality check is a fresh BFS.
-
-**Fix**: Build one `UniversalityFilter`-like cache per PeekabooState (or even share
-it across recursive calls). Even a simple memoization dict `{dfa_state: bool}` would
-help, since the same DFA state can appear in multiple worklist entries' relevant
-symbol checks.
-
-**Impact**: For BPE FSTs, `all_input_universal` would eliminate the BFS entirely
-(every final state is universal). For general FSTs, the monotonicity caches give
-sub-linear amortized cost.
+**Changes to `UniversalityFilter`** (`fst.py`):
+- Added `all_input_universal` and `witnesses` keyword parameters to `__init__`,
+  allowing pre-computed values to be injected instead of recomputed.
+- Added `is_final` guard at the top of `is_universal`: the `all_input_universal`
+  fast path previously returned `True` unconditionally (safe in its original call
+  context where only final states were tested, but incorrect in general). Now
+  explicitly checks `dfa.is_final(dfa_state)` first.
 
 ### Issue 3: `TruncatedDFA.refine` allocates a new frozenset on every arc traversal
 
@@ -403,8 +390,12 @@ This is called during `accepts_universal`'s BFS, so the total cost is
 Or better, avoid `refine` entirely by using NFA states that already track the
 clipped target position as an integer index rather than a string prefix.
 
-**Impact**: Eliminates redundant allocation and string operations during the
-universality BFS inner loop.
+**Impact**: Low. The main BFS expands each state exactly once, so `refine` is
+never called from the main loop. It's only called inside `UniversalityFilter._bfs_universal`
+sub-BFS calls. With the UniversalityFilter's own caching (monotonicity, witnesses,
+`all_input_universal`), most universality checks short-circuit before reaching
+`_bfs_universal`, so few sub-BFS calls happen and overlap between their explored
+regions is small. A dict cache is trivial to add but unlikely to matter much.
 
 ### Issue 4: No epsilon closure sharing across recursive `>>` steps
 
@@ -545,19 +536,19 @@ symbol's goo — would avoid wasted work in the advance step.
 
 ### Summary: Priority-ordered fix list
 
-| Priority | Issue | Effort | Impact |
-|----------|-------|--------|--------|
-| 1 | Cache `TruncatedDFA` per symbol (Issue 1) | Low | Medium |
-| 2 | Add universality caching (Issue 2) | Medium | High |
-| 3 | Use integer positions instead of string prefixes (Issue 7) | Medium | High |
-| 4 | Share epsilon closure cache across steps (Issue 4) | Low | Medium |
-| 5 | Memoize `TruncatedDFA.refine` (Issue 3) | Low | Medium |
-| 6 | Add arc cache to `LazyDeterminize` (Issue 5) | Low | Low-Medium |
-| 7 | Trim or lazily collect ARCS (Issue 6) | Low | Low |
-| 8 | Two-phase advance API (Issue 8) | Medium | Context-dependent |
+| Priority | Issue | Status | Effort | Impact |
+|----------|-------|--------|--------|--------|
+| 1 | Cache `TruncatedDFA` per symbol (Issue 1) | ✅ Done | Low | Medium |
+| 2 | Add universality caching (Issue 2) | ✅ Done | Medium | High |
+| 3 | Use integer positions instead of string prefixes (Issue 7) | Open | Medium | High |
+| 4 | Share epsilon closure cache across steps (Issue 4) | Open | Low | Medium |
+| 5 | Memoize `TruncatedDFA.refine` (Issue 3) | Open | Low | Low |
+| 6 | Add arc cache to `LazyDeterminize` (Issue 5) | Open | Low | Low-Medium |
+| 7 | Trim or lazily collect ARCS (Issue 6) | Open | Low | Low |
+| 8 | Two-phase advance API (Issue 8) | Open | Medium | Context-dependent |
 
-Issues 1–3 are the most impactful. Issue 2 (universality caching) is the
-single biggest win for general FSTs, and for BPE FSTs the `all_input_universal`
-fast path would make the universality check essentially free. Issue 7 (integer
-positions) is a cross-cutting improvement that speeds up every operation touching
-NFA states.
+Issues 1 and 2 are now fixed. Issue 2 (universality caching via `UniversalityFilter`)
+is the single biggest win for general FSTs, and for BPE FSTs the `all_input_universal`
+fast path makes the universality check essentially free. Issue 7 (integer positions)
+is the highest-impact remaining item — a cross-cutting improvement that speeds up
+every operation touching NFA states.

@@ -2,7 +2,10 @@ from transduction.base import PrecoverDecomp
 from transduction.eager_nonrecursive import Precover
 from transduction.lazy import Lazy
 from transduction.fsa import FSA, frozenset
-from transduction.fst import EPSILON
+from transduction.fst import (
+    EPSILON, check_all_input_universal, compute_ip_universal_states,
+    UniversalityFilter,
+)
 
 from arsenal import colors
 from collections import deque
@@ -25,6 +28,31 @@ from collections import deque
 #_______________________________________________________________________________
 #
 
+class FstUniversality:
+    """Precomputed universality info for an FST.  Computed once, shared across
+    all PeekabooState instances via the ``>>`` chain."""
+
+    def __init__(self, fst):
+        self.all_input_universal = check_all_input_universal(fst)
+        self.ip_universal_states = (
+            frozenset() if self.all_input_universal
+            else compute_ip_universal_states(fst)
+        )
+
+    def make_filter(self, fst, target, dfa, source_alphabet):
+        """Build a `UniversalityFilter` for one target symbol extension."""
+        witnesses = (
+            frozenset((q, target, False) for q in self.ip_universal_states)
+            if not self.all_input_universal else frozenset()
+        )
+        return UniversalityFilter(
+            fst=fst, target=target, dfa=dfa,
+            source_alphabet=source_alphabet,
+            all_input_universal=self.all_input_universal,
+            witnesses=witnesses,
+        )
+
+
 class Peekaboo:
     """
     Recursive, batched computation of next-target-symbol optimal DFA-decomposition.
@@ -33,9 +61,10 @@ class Peekaboo:
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
+        self._univ = FstUniversality(fst)
 
     def __call__(self, target):
-        s = PeekabooState(self.fst, '', parent=None)
+        s = PeekabooState(self.fst, '', parent=None, univ=self._univ)
 
         ARCS = [(i,x,j) for j, arcs in s._arcs.items() for x,i in arcs]
         for x in target:
@@ -136,7 +165,7 @@ class Peekaboo:
 
 class PeekabooState:
 
-    def __init__(self, fst, target, parent):
+    def __init__(self, fst, target, parent, *, univ=None):
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
@@ -144,6 +173,8 @@ class PeekabooState:
         self.parent = parent
 
         assert parent is None or parent.target == target[:-1]
+
+        self._univ = parent._univ if parent is not None else (univ or FstUniversality(fst))
 
         def debug(*_): pass
         #debug = print
@@ -183,6 +214,17 @@ class PeekabooState:
         # resume expansion from because they were truncated
         goo = {y: set() for y in self.target_alphabet}
 
+        # Pre-build TruncatedDFAs and UniversalityFilters per target symbol.
+        # Caching these avoids reconstructing them for every worklist state.
+        truncated_dfas = {}
+        univ_filters = {}
+        for y in self.target_alphabet:
+            td = TruncatedDFA(dfa=dfa, fst=self.fst, target=target + y)
+            truncated_dfas[y] = td
+            univ_filters[y] = self._univ.make_filter(
+                self.fst, target + y, td, self.source_alphabet,
+            )
+
         N = len(target)
         while worklist:
             state = worklist.popleft()
@@ -197,10 +239,9 @@ class PeekabooState:
             continuous = set()
             for y in relevant_symbols:
 
-                # XXX: we may have already constructed this machine
-                dfa_truncated = TruncatedDFA(dfa=dfa, fst=self.fst, target=target + y)
+                dfa_truncated = truncated_dfas[y]
 
-                if len(continuous) == 0 and dfa_truncated.accepts_universal(state, self.source_alphabet):
+                if len(continuous) == 0 and univ_filters[y].is_universal(state):
                     debug('  universal for', repr(y))
                     decomp[y].quotient.add(state)
                     continuous.add(y)
