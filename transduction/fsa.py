@@ -708,10 +708,15 @@ class FSA:
         u.add_stop(0)
         return u
 
-    def language(self):
-        "Enumerate strings in the language of this FSA up to length `max_length`."
+    def language(self, tuple=False):
+        """Enumerate strings in the language of this FSA up to length `max_length`.
+            Set tuple=True to handle symbols that are not strings
+        """
         worklist = deque()
-        worklist.extend([(i, '') for i in self.start])
+        if tuple:
+            worklist.extend([(i, ()) for i in self.start])
+        else:
+            worklist.extend([(i, '') for i in self.start])
         while worklist:
             (i, x) = worklist.popleft()
             if i in self.stop:
@@ -720,7 +725,11 @@ class FSA:
                 if a == EPSILON:
                     worklist.append((j, x))
                 else:
-                    worklist.append((j, x + a))
+                    if tuple:
+                        # Wrap symbol in tuple for concatenation
+                        worklist.append((j, x + (a,)))
+                    else:
+                        worklist.append((j, x + a))
 
 
 EPSILON = eps = ''
