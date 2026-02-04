@@ -72,9 +72,11 @@ class Peekaboo:
             ARCS.extend((i,a,j) for j, arcs in s._arcs.items() for a,i in arcs)
 
         foo = {}
+        _empty = PrecoverDecomp(set(), set())
         for y in self.target_alphabet:
-            q = FSA(start=set(s.dfa.start()), arcs=ARCS, stop=s.decomp[y].quotient)
-            r = FSA(start=set(s.dfa.start()), arcs=ARCS, stop=s.decomp[y].remainder)
+            d = s.decomp.get(y, _empty)
+            q = FSA(start=set(s.dfa.start()), arcs=ARCS, stop=d.quotient)
+            r = FSA(start=set(s.dfa.start()), arcs=ARCS, stop=d.remainder)
             foo[y] = PrecoverDecomp(q, r)
 
         return foo
@@ -195,7 +197,7 @@ class PeekabooState:
             debug(colors.orange % 'target:', repr(self.target))
             debug('GOO:', parent.goo)
 
-            p = parent.goo[target[-1]]
+            p = parent.goo.get(target[-1], set())
             debug('we need to pick up from the following states:', p)
 
             # put previous and Q and R states on the worklist
@@ -207,23 +209,27 @@ class PeekabooState:
                 _arcs[state] = set()
 
         # `decomp` is a map from next target symbols to their quotient and
-        # remainder states.
-        decomp = {y: PrecoverDecomp(set(), set()) for y in self.target_alphabet}
+        # remainder states.  Built lazily — only symbols that actually appear
+        # as relevant during the BFS get entries.
+        decomp = {}
 
         # `goo` is a map from next target symbols to the states that we need to
         # resume expansion from because they were truncated
-        goo = {y: set() for y in self.target_alphabet}
+        goo = {}
 
-        # Pre-build TruncatedDFAs and UniversalityFilters per target symbol.
-        # Caching these avoids reconstructing them for every worklist state.
+        def ensure_symbol(y):
+            """Lazily initialise per-symbol data structures on first use."""
+            if y not in decomp:
+                decomp[y] = PrecoverDecomp(set(), set())
+                goo[y] = set()
+                td = TruncatedDFA(dfa=dfa, fst=self.fst, target=target + y)
+                truncated_dfas[y] = td
+                univ_filters[y] = self._univ.make_filter(
+                    self.fst, target + y, td, self.source_alphabet,
+                )
+
         truncated_dfas = {}
         univ_filters = {}
-        for y in self.target_alphabet:
-            td = TruncatedDFA(dfa=dfa, fst=self.fst, target=target + y)
-            truncated_dfas[y] = td
-            univ_filters[y] = self._univ.make_filter(
-                self.fst, target + y, td, self.source_alphabet,
-            )
 
         N = len(target)
         while worklist:
@@ -238,6 +244,7 @@ class PeekabooState:
             # continuous. If we find one, we can stop expanding.
             continuous = set()
             for y in relevant_symbols:
+                ensure_symbol(y)
 
                 dfa_truncated = truncated_dfas[y]
 
@@ -270,6 +277,7 @@ class PeekabooState:
                     for _, ys, truncated in next_state:
                         if truncated:
                             y = ys[-1]
+                            ensure_symbol(y)
                             debug(colors.light.red % 'goo', state, repr(y), next_state)
                             goo[y].add(state)
 
