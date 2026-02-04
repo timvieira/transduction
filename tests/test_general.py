@@ -2,8 +2,16 @@ import pytest
 from transduction import examples, FSA, EPSILON, Precover
 from transduction.dfa_decomp_nonrecursive import NonrecursiveDFADecomp
 from transduction.dfa_decomp_recursive import RecursiveDFADecomp
+from transduction.token_decompose import TokenDecompose
+from transduction.fst import check_all_input_universal
 from transduction import peekaboo_nonrecursive
 from transduction import peekaboo_recursive
+
+try:
+    from transduction.rust_bridge import RustDecomp
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
 
 
 class run_recursive_dfa_decomp:
@@ -132,12 +140,86 @@ class run_nonrecursive_dfa_decomp:
                 self.run(target + y, depth - 1)
 
 
+class run_token_decompose:
+    """
+    Utility function for testing the token-level decomposition against the
+    reference implementation. Falls back to NonrecursiveDFADecomp when
+    all_input_universal is False.
+    """
+    def __init__(self, fst, target, depth, verbosity=0):
+        self.fst = fst
+        self.target_alphabet = self.fst.B - {EPSILON}
+        self.depth = depth
+        self.all_univ = check_all_input_universal(fst)
+        self.decompose = (
+            (lambda target: TokenDecompose(fst, target))
+            if self.all_univ
+            else (lambda target: NonrecursiveDFADecomp(fst, target))
+        )
+        self.reference = lambda target: Precover(fst, target)
+        self.verbosity = verbosity
+        self.run(target, depth)
+
+    def run(self, target, depth):
+        if depth == 0: return
+
+        # Check that the decomposition matches the reference implementation
+        want = {y: self.reference(target + y) for y in self.target_alphabet}
+        have = {y: self.decompose(target + y) for y in self.target_alphabet}
+        assert_equal_decomp_map(have, want)
+
+        # Recurse
+        for y in want:
+            if self.verbosity > 0: print('>', repr(target + y))
+            q = want[y].quotient.trim()
+            r = want[y].remainder.trim()
+            if q.states or r.states:
+                self.run(target + y, depth - 1)
+
+
+class run_rust_decomp:
+    """
+    Utility function for testing the Rust-accelerated decomposition against the
+    reference implementation.
+    """
+    def __init__(self, fst, target, depth, verbosity=0):
+        self.fst = fst
+        self.target_alphabet = self.fst.B - {EPSILON}
+        self.depth = depth
+        self.rust_decomp = lambda target: RustDecomp(fst, target)
+        self.reference = lambda target: Precover(fst, target)
+        self.verbosity = verbosity
+        self.run(target, depth)
+
+    def run(self, target, depth):
+        if depth == 0: return
+
+        # Check that the decomposition matches the reference implementation
+        want = {y: self.reference(target + y) for y in self.target_alphabet}
+        have = {y: self.rust_decomp(target + y) for y in self.target_alphabet}
+        assert_equal_decomp_map(have, want)
+
+        # Recurse
+        for y in want:
+            if self.verbosity > 0: print('>', repr(target + y))
+            q = want[y].quotient.trim()
+            r = want[y].remainder.trim()
+            if q.states or r.states:
+                self.run(target + y, depth - 1)
+
+
 IMPLEMENTATIONS = [
     pytest.param(run_recursive_dfa_decomp, id="recursive_dfa_decomp"),
     pytest.param(run_nonrecursive_dfa_decomp, id="nonrecursive_dfa_decomp"),
     pytest.param(run_peekaboo_recursive, id="peekaboo_recursive"),
     pytest.param(run_peekaboo_nonrecursive, id="peekaboo_nonrecursive"),
+    pytest.param(run_token_decompose, id="token_decompose"),
 ]
+
+if HAS_RUST:
+    IMPLEMENTATIONS.append(
+        pytest.param(run_rust_decomp, id="rust_decomp"),
+    )
 
 
 def assert_equal_decomp_map(have, want):
@@ -233,7 +315,10 @@ if __name__ == '__main__':
         run_nonrecursive_dfa_decomp,
         run_peekaboo_recursive,
         run_peekaboo_nonrecursive,
+        run_token_decompose,
     ]
+    if HAS_RUST:
+        algs.append(run_rust_decomp)
 
     options = {}
     env = dict(globals())

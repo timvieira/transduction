@@ -542,6 +542,62 @@ class FST:
         return sccs
 
 
+def check_all_input_universal(fst):
+    """
+    O(|arcs|) check: does the input projection of this FST accept Σ* from the
+    start state?
+
+    Works by checking that:
+    1. The eps-closed start set contains a final state
+    2. The start set has arcs for every source symbol (completeness)
+    3. Every symbol's successor eps-closure contains the start set
+
+    If (3) holds, all reachable DFA states of the input projection contain the
+    start set, hence are all final and complete → the start state is universal.
+    """
+    source_alphabet = fst.A - {eps}
+    if not source_alphabet:
+        # Empty alphabet: universal iff some start state is final
+        return any(fst.is_final(s) for s in fst.I)
+
+    # Eps-close start states over input-side ε arcs
+    def ip_eps_close(states):
+        visited = set(states)
+        worklist = deque(states)
+        while worklist:
+            s = worklist.popleft()
+            for a, _b, j in fst.arcs(s):
+                if a == eps and j not in visited:
+                    visited.add(j)
+                    worklist.append(j)
+        return visited
+
+    start_set = ip_eps_close(fst.I)
+
+    # Must contain a final state
+    if not any(fst.is_final(s) for s in start_set):
+        return False
+
+    # Group non-ε input arcs from start_set by input symbol
+    by_symbol = defaultdict(set)
+    for s in start_set:
+        for a, _b, j in fst.arcs(s):
+            if a != eps:
+                by_symbol[a].add(j)
+
+    # Must be complete on source alphabet
+    if len(by_symbol) < len(source_alphabet):
+        return False
+
+    # Check that every symbol's successor eps-closure contains the start set
+    for _sym, raw_dests in by_symbol.items():
+        closed = ip_eps_close(raw_dests)
+        if not start_set <= closed:
+            return False
+
+    return True
+
+
 def epsilon_filter_fst(Sigma):
     """
     Returns the 3-state epsilon-filtered FST, that is used in to avoid

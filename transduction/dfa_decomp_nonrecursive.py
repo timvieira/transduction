@@ -1,5 +1,6 @@
 from transduction import FSA, EPSILON
 from transduction.eager_nonrecursive import LazyPrecoverNFA
+from transduction.fst import check_all_input_universal
 from collections import deque
 
 
@@ -15,6 +16,7 @@ class NonrecursiveDFADecomp:
         # grow without bound.  This works in a surprising number of cases, but
         # it can fail to terminate (e.g., on the `triplets_of_doom`).
         dfa = LazyPrecoverNFA(fst, target).det()
+        all_input_universal = check_all_input_universal(fst)
 
         Q = FSA()
         R = FSA()
@@ -32,7 +34,7 @@ class NonrecursiveDFADecomp:
             i = worklist.popleft()
 
             if dfa.is_final(i):
-                if dfa.accepts_universal(i, self.source_alphabet):
+                if all_input_universal or dfa.accepts_universal(i, self.source_alphabet):
                     Q.add_stop(i)
                     continue       # will not expand further
                 else:

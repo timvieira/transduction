@@ -1,5 +1,6 @@
 from transduction.base import AbstractAlgorithm, PrecoverDecomp
 from transduction.fsa import FSA, EPSILON
+from transduction.fst import check_all_input_universal
 from transduction.util import display_table
 from transduction.lazy import Lazy
 
@@ -187,7 +188,10 @@ class Precover:
         P = P.materialize()
 
         # identify all universal states
-        universal_states = {i for i in P.stop if is_universal(P, i, self.source_alphabet)}
+        if check_all_input_universal(self.fst):
+            universal_states = set(P.stop)
+        else:
+            universal_states = {i for i in P.stop if is_universal(P, i, self.source_alphabet)}
 
         # copy all arcs except those leaving universal states
         arcs = [(i,a,j) for i in P.states - universal_states for a,j in P.arcs(i)]

@@ -28,3 +28,7 @@ build/
 *.pkl
 *.pdf
 out.prof*
+
+# Rust
+**/target/
+Cargo.lock

@@ -1,0 +1,18 @@
+[package]
+name = "transduction-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "transduction_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+rustc-hash = "2"
+bitvec = "1"
+smallvec = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
