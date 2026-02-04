@@ -456,6 +456,126 @@ class FST:
 
         return trimmed
 
+    def push_labels(self):
+        """Push output labels toward initial states to reduce output delay.
+
+        Returns a new FST that realizes the same relation but with output
+        produced as early as possible.  This reduces powerset state diversity
+        during decomposition by advancing the buffer position sooner.
+        """
+        t = self.trim()
+        if not t.states:
+            return t
+
+        # --- 1. Compute output delays via least fixpoint ---
+        # d(q) is the longest common prefix of all output strings reachable
+        # from q to any final state.  We use None as "unconstrained" (top of
+        # lattice) — meaning we haven't yet seen any path from q.
+
+        delay = {}
+        for q in t.states:
+            if q in t.F:
+                delay[q] = ()        # final state: empty path contributes ε
+            else:
+                delay[q] = None      # unconstrained until resolved
+
+        # Build reverse adjacency so we can propagate backwards
+        reverse_adj = defaultdict(list)   # q' -> list of (q, y_tuple)
+        for q in t.states:
+            for x, y, qp in t.arcs(q):
+                y_tuple = (y,) if y != EPSILON else ()
+                reverse_adj[qp].append((q, y_tuple))
+
+        # Iterative fixpoint
+        changed = True
+        while changed:
+            changed = False
+            for q in t.states:
+                # d(q) = LCP({concat(y, d(q')) for each arc (q, x, y, q')})
+                new_val = None
+                for x, y, qp in t.arcs(q):
+                    y_tuple = (y,) if y != EPSILON else ()
+                    d_qp = delay[qp]
+                    if d_qp is None:
+                        continue     # unconstrained successor, skip
+                    candidate = y_tuple + d_qp
+                    if new_val is None:
+                        new_val = candidate
+                    else:
+                        new_val = _lcp_pair(new_val, candidate)
+                # Also, if q is final, the empty path contributes ε
+                if q in t.F:
+                    if new_val is None:
+                        new_val = ()
+                    else:
+                        new_val = _lcp_pair(new_val, ())
+
+                if new_val is not None and new_val != delay[q]:
+                    delay[q] = new_val
+                    changed = True
+
+        # Finalize any remaining None to ()
+        for q in t.states:
+            if delay[q] is None:
+                delay[q] = ()
+
+        # --- 2. Transform arcs ---
+        result = FST()
+        counter = [0]
+        tag = object()   # unique per call so repeated pushes don't collide
+
+        def fresh():
+            counter[0] += 1
+            return ('__push__', tag, counter[0])
+
+        for q in t.states:
+            for x, y, qp in t.arcs(q):
+                y_tuple = (y,) if y != EPSILON else ()
+                full_output = y_tuple + delay[qp]
+                new_output = _strip_prefix(delay[q], full_output)
+
+                if len(new_output) == 0:
+                    result.add_arc(q, x, EPSILON, qp)
+                elif len(new_output) == 1:
+                    result.add_arc(q, x, new_output[0], qp)
+                else:
+                    # Multi-symbol output: insert ε-input intermediates
+                    prev = q
+                    for k, sym in enumerate(new_output):
+                        if k == 0:
+                            nxt = fresh()
+                            result.add_arc(prev, x, sym, nxt)
+                            prev = nxt
+                        elif k < len(new_output) - 1:
+                            nxt = fresh()
+                            result.add_arc(prev, EPSILON, sym, nxt)
+                            prev = nxt
+                        else:
+                            result.add_arc(prev, EPSILON, sym, qp)
+
+        # --- 3. Handle start states ---
+        for s in t.I:
+            d_s = delay[s]
+            if len(d_s) == 0:
+                result.add_I(s)
+            else:
+                # Prepend ε-input chain producing d(s)
+                prev = fresh()
+                result.add_I(prev)
+                for k, sym in enumerate(d_s):
+                    if k < len(d_s) - 1:
+                        nxt = fresh()
+                        result.add_arc(prev, EPSILON, sym, nxt)
+                        prev = nxt
+                    else:
+                        result.add_arc(prev, EPSILON, sym, s)
+
+        # --- 4. Final states ---
+        for q in t.F:
+            result.add_F(q)
+
+        return result.trim()
+
     # TODO: we can tighten up the code for reachable and coreachable
     # (e.g., no need to materialize `adj`).
     def reachable(self):
@@ -540,6 +660,21 @@ class FST:
                 strongconnect(v)
 
         return sccs
+
+
+def _lcp_pair(a, b):
+    """Longest common prefix of two tuples."""
+    n = min(len(a), len(b))
+    for i in range(n):
+        if a[i] != b[i]:
+            return a[:i]
+    return a[:n]
+
+
+def _strip_prefix(prefix, seq):
+    """Remove prefix from seq, returning the remainder as a tuple."""
+    assert seq[:len(prefix)] == prefix, f'{prefix} is not a prefix of {seq}'
+    return seq[len(prefix):]
 
 
 def check_all_input_universal(fst):
