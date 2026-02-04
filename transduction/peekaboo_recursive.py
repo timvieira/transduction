@@ -1,5 +1,4 @@
 from transduction.base import PrecoverDecomp
-from transduction.eager_nonrecursive import Precover
 from transduction.lazy import Lazy
 from transduction.fsa import FSA, frozenset
 from transduction.fst import (
@@ -7,7 +6,6 @@ from transduction.fst import (
     UniversalityFilter,
 )
 
-from arsenal import colors
 from collections import deque
 
 #_______________________________________________________________________________
@@ -16,7 +14,7 @@ from collections import deque
 #   that we have taken in the current implementation is truncate as early as
 #   possible - this minimizes the work in the current iteration.  However, it
 #   might lead to more work in a later iteration because more nodes are marked
-#   as trauncated, meaning that they cannot be used in the later iterations.  If
+#   as truncated, meaning that they cannot be used in the later iterations.  If
 #   we used a different truncation policy it might be the case that we could
 #   share more work.  For example, if there is a small number of nodes that we
 #   could in principle enumerate now (like the dfa_decomp strategy does) then we
@@ -133,6 +131,8 @@ class Peekaboo:
         # stops produces exactly the trim machine.
 
         s = PeekabooState(self.fst, '', parent=None, univ=self._univ)
+        # TODO: Revisit whether merging incoming dicts across depths is the
+        # right approach vs. walking the PeekabooState chain on demand.
         merged_incoming = dict(s.incoming)
         for x in target:
             s >>= x
@@ -214,6 +214,8 @@ class Peekaboo:
         return dot
 
     def check(self, target):
+        from arsenal import colors
+        from transduction.eager_nonrecursive import Precover
         from transduction import display_table
         from IPython.display import HTML
 
@@ -404,7 +406,6 @@ class PeekabooPrecover(Lazy):
                 if y == EPSILON or truncated:
                     yield (x, (j, ys, truncated))
                 else:
-                    assert not truncated
                     was = (ys + y)
                     now = was[:self.N+self.K]
                     yield (x, (j, now, (was != now)))
@@ -447,16 +448,11 @@ class PeekabooPrecover(Lazy):
 
 
 class TruncatedDFA(Lazy):
-    """NOTE: This class augments a determinized `PeekabooPrecover` semi-automaton by
-    adding an appropriate `is_final` method so that it is a valid finite-state
-    automaton that encodes `Precover(fst, target)`.
+    """Augments a determinized `PeekabooPrecover` semi-automaton with an `is_final` method,
+    producing a valid FSA that encodes `Precover(fst, target)`.
 
-
-    # In other words, for all `target` strings:
-    # dfa_truncated = TruncatedDFA(dfa=dfa, fst=self.fst, target=target)
-    # assert dfa_filtered.materialize().equal(Precover(self.fst, target).dfa)
-
-
+    Invariant: for all target strings,
+        `TruncatedDFA(dfa=dfa, fst=fst, target=target).materialize().equal(Precover(fst, target).dfa)`
     """
 
     def __init__(self, *, dfa, fst, target):
@@ -476,7 +472,6 @@ class TruncatedDFA(Lazy):
             (i, ys[:N], truncated) for i, ys, truncated in frontier     # TODO: can we use the truncated bit here?
             if ys[:min(N, len(ys))] == self.target[:min(N, len(ys))]
         )
-#        return frontier
 
     def arcs(self, state):
         for x, next_state in self.dfa.arcs(state):
