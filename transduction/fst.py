@@ -598,6 +598,162 @@ def check_all_input_universal(fst):
     return True
 
 
+def compute_ip_universal_states(fst):
+    """
+    Greatest-fixpoint computation of ip-universal FST states.
+
+    A state q is ip-universal if the input projection of the FST, started from
+    eps_close({q}), accepts Sigma*. This is strictly more general than
+    check_all_input_universal, which only checks the start set.
+
+    Algorithm:
+    1. Precompute eps_close({q}) for all FST states q
+    2. Initialize candidates = set(fst.states)
+    3. Iteratively remove states that violate universality:
+       - eps_close({q}) must contain a final state
+       - eps_close({q}) must have arcs for every symbol in Sigma
+       - For each symbol, the successor eps-closure must contain >= 1 candidate
+    4. Fixed point = set of ip-universal states
+    """
+    source_alphabet = fst.A - {eps}
+    if not source_alphabet:
+        return {q for q in fst.states if fst.is_final(q)}
+
+    def ip_eps_close(states):
+        visited = set(states)
+        worklist = deque(states)
+        while worklist:
+            s = worklist.popleft()
+            for a, _b, j in fst.arcs(s):
+                if a == eps and j not in visited:
+                    visited.add(j)
+                    worklist.append(j)
+        return frozenset(visited)
+
+    # Precompute closures
+    closures = {q: ip_eps_close({q}) for q in fst.states}
+
+    # Precompute per-closure: successor sets by symbol
+    # For each closure, for each symbol, the raw destinations (before eps-close)
+    closure_symbol_succs = {}
+    for q in fst.states:
+        by_symbol = defaultdict(set)
+        for s in closures[q]:
+            for a, _b, j in fst.arcs(s):
+                if a != eps:
+                    by_symbol[a].add(j)
+        closure_symbol_succs[q] = by_symbol
+
+    candidates = set(fst.states)
+
+    changed = True
+    while changed:
+        changed = False
+        to_remove = set()
+        for q in candidates:
+            closure = closures[q]
+
+            # Must contain a final state
+            if not any(fst.is_final(s) for s in closure):
+                to_remove.add(q)
+                continue
+
+            # Must be complete on source alphabet
+            by_symbol = closure_symbol_succs[q]
+            if not all(a in by_symbol for a in source_alphabet):
+                to_remove.add(q)
+                continue
+
+            # For each symbol, successor eps-closure must contain a candidate
+            ok = True
+            for a in source_alphabet:
+                succ_closure = ip_eps_close(by_symbol[a])
+                if not (succ_closure & candidates):
+                    ok = False
+                    break
+            if not ok:
+                to_remove.add(q)
+
+        if to_remove:
+            candidates -= to_remove
+            changed = True
+
+    return frozenset(candidates)
+
+
+class UniversalityFilter:
+    """
+    Encapsulates universality short-circuit optimizations:
+    - Fast path: if check_all_input_universal, every final state is universal
+    - #2: Per-FST-state input universality (ip-universal states)
+    - #1: Superset monotonicity cache (if S is universal, any S' >= S is too)
+    - #4: Subset monotonicity cache (if S is not universal, any S' <= S isn't either)
+    - Fallback: BFS universality check on the DFA
+    """
+
+    def __init__(self, fst, target, dfa, source_alphabet):
+        self.target = target
+        self.dfa = dfa
+        self.source_alphabet = source_alphabet
+        self.all_input_universal = check_all_input_universal(fst)
+        if self.all_input_universal:
+            self.ip_univ = frozenset()
+        else:
+            self.ip_univ = compute_ip_universal_states(fst)
+        self._pos = []   # known universal frozensets
+        self._neg = []   # known non-universal frozensets
+
+    def _bfs_universal(self, state):
+        """BFS check: does `state` accept source_alphabet* in the DFA?"""
+        visited = set()
+        worklist = deque()
+        visited.add(state)
+        worklist.append(state)
+        while worklist:
+            i = worklist.popleft()
+            if not self.dfa.is_final(i):
+                return False
+            dest = dict(self.dfa.arcs(i))
+            for a in self.source_alphabet:
+                if a not in dest:
+                    return False
+                j = dest[a]
+                if j not in visited:
+                    visited.add(j)
+                    worklist.append(j)
+        return True
+
+    def is_universal(self, dfa_state):
+        """Returns True/False for whether dfa_state accepts Sigma*."""
+
+        # Fast path: all input universal means every final state is universal
+        if self.all_input_universal:
+            return True
+
+        # #2: Does dfa_state contain an NFA state (q, target) with q ip-universal?
+        for nfa_state in dfa_state:
+            fst_state = nfa_state[0]
+            ys = nfa_state[1]
+            if ys == self.target and fst_state in self.ip_univ:
+                self._pos.append(dfa_state)
+                return True
+
+        # #1: Is dfa_state a superset of any known universal state?
+        for u in self._pos:
+            if u <= dfa_state:
+                return True
+
+        # #4: Is dfa_state a subset of any known non-universal state?
+        for nu in self._neg:
+            if dfa_state <= nu:
+                return False
+
+        # Fallback to full BFS
+        result = self._bfs_universal(dfa_state)
+        (self._pos if result else self._neg).append(dfa_state)
+        return result
+
+
 def epsilon_filter_fst(Sigma):
     """
     Returns the 3-state epsilon-filtered FST, that is used in to avoid

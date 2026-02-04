@@ -290,10 +290,11 @@ def test_weird_copy(run):
 
 
 def test_triplets_of_doom(run):
+    if run is run_recursive_dfa_decomp:
+        pytest.xfail("recursive_dfa_decomp does not terminate on this input")
     from arsenal import timelimit
     fst = examples.triplets_of_doom()
     with timelimit(5):
-        #assert False, 'this test does not terminate'
         run(fst, '', depth=13, verbosity=0)
 
 

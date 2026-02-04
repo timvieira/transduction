@@ -160,8 +160,9 @@ pub struct DecompResult {
 /// Perform the fused decomposition: given a Rust FST and a target sequence,
 /// compute the quotient (Q) and remainder (R) automata.
 #[pyfunction]
-pub fn rust_decompose(py: Python<'_>, fst: &RustFst, target: Vec<u32>) -> PyResult<DecompResult> {
-    let result = if fst.inner.all_input_universal {
+#[pyo3(signature = (fst, target, force_generic=false))]
+pub fn rust_decompose(py: Python<'_>, fst: &RustFst, target: Vec<u32>, force_generic: bool) -> PyResult<DecompResult> {
+    let result = if fst.inner.all_input_universal && !force_generic {
         token_decompose::decompose_token_level(&fst.inner, &target)
     } else {
         decompose::decompose(&fst.inner, &target)
