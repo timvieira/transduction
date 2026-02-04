@@ -293,6 +293,27 @@ class PeekabooPrecover(Lazy):
                 elif y == self.target[n]:
                     yield (x, (j, self.target[:n+1], truncated))
 
+    def arcs_x(self, state, x):
+        (i, ys, truncated) = state
+        n = len(ys)
+        m = min(self.N, n)
+        if self.target[:m] != ys[:m]:
+            return
+        if m >= self.N:
+            for y, j in self.f.arcs(i, x):
+                if y == EPSILON or truncated:
+                    yield (j, ys, truncated)
+                else:
+                    was = (ys + y)
+                    now = was[:self.N+self.K]
+                    yield (j, now, (was != now))
+        else:
+            for y, j in self.f.arcs(i, x):
+                if y == EPSILON:
+                    yield (j, ys, truncated)
+                elif y == self.target[n]:
+                    yield (j, self.target[:n+1], truncated)
+
     def start(self):
         for i in self.f.I:
             yield (i, self.target[:0], False)
@@ -338,6 +359,10 @@ class TruncatedDFA(Lazy):
     def arcs(self, state):
         for x, next_state in self.dfa.arcs(state):
             yield x, self.refine(next_state)
+
+    def arcs_x(self, state, x):
+        for next_state in self.dfa.arcs_x(state, x):
+            yield self.refine(next_state)
 
     def is_final(self, state):
         return any(ys.startswith(self.target) and self.fst.is_final(i) for (i, ys, _) in state)

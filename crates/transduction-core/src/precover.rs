@@ -111,9 +111,26 @@ impl<'a> PrecoverNFA<'a> {
             .collect()
     }
 
+    /// Is an NFA state "productive"?
+    ///
+    /// A state is productive if its FST state has at least one non-epsilon input
+    /// arc, or if the state is NFA-final. Transit-only states (epsilon-input-only,
+    /// non-final) are not productive — they serve only as intermediaries in
+    /// epsilon chains and don't contribute to DFA transitions or finality.
+    #[inline]
+    fn is_productive(&self, packed: u64) -> bool {
+        let (fst_state, buf_pos) = unpack(packed, self.target_len);
+        self.fst.has_non_eps_input[fst_state as usize]
+            || (self.fst.is_final[fst_state as usize] && buf_pos == self.target_len)
+    }
+
     /// Epsilon closure of a single NFA state, cached.
     /// This mirrors Python's `EpsilonRemove._closure_cache`.
     /// Returns Rc to avoid cloning on cache hits.
+    ///
+    /// The BFS follows all epsilon arcs to find reachable states, then filters
+    /// to keep only productive states. This collapses transit-only epsilon chains,
+    /// dramatically reducing powerset state sizes for BPE-like FSTs.
     fn eps_closure_single_cached(&self, state: u64) -> Rc<Vec<u64>> {
         // Check cache first
         if let Some(cached) = self.eps_cache.borrow().get(&state) {
@@ -122,22 +139,27 @@ impl<'a> PrecoverNFA<'a> {
         }
         *self.eps_cache_misses.borrow_mut() += 1;
 
-        // Compute using a simple Vec as visited set (states are sorted at the end anyway)
-        let mut result = Vec::new();
+        // BFS: explore all reachable states via epsilon arcs
+        let mut all_reachable = Vec::new();
         let mut worklist: VecDeque<u64> = VecDeque::new();
 
-        result.push(state);
+        all_reachable.push(state);
         worklist.push_back(state);
 
         while let Some(s) = worklist.pop_front() {
             for dest in self.arcs_x(s, EPSILON) {
-                if !result.contains(&dest) {
-                    result.push(dest);
+                if !all_reachable.contains(&dest) {
+                    all_reachable.push(dest);
                     worklist.push_back(dest);
                 }
             }
         }
 
+        // Filter to productive states only
+        let mut result: Vec<u64> = all_reachable
+            .into_iter()
+            .filter(|&s| self.is_productive(s))
+            .collect();
         result.sort_unstable();
 
         // Wrap in Rc, cache, and return

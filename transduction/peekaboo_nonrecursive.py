@@ -159,6 +159,27 @@ class PeekabooPrecover(Lazy):
             for x, _, j in self.fst.arcs(i):
                 yield (x, (j, ys))
 
+    def arcs_x(self, state, x):
+        (i, ys) = state
+        n = len(ys)
+        m = min(n, self.N)
+        if self.target[:m] != ys[:m]: return
+        if n < self.N:
+            for y, j in self.fst.arcs(i, x):
+                if y == EPSILON:
+                    yield (j, ys)
+                elif y == self.target[n]:
+                    yield (j, self.target[:n+1])
+        elif n == self.N:
+            for y, j in self.fst.arcs(i, x):
+                if y == EPSILON:
+                    yield (j, ys)
+                else:
+                    yield (j, ys + y)
+        elif n == self.N + 1:
+            for _, j in self.fst.arcs(i, x):
+                yield (j, ys)
+
     def start(self):
         for i in self.fst.I:
             yield (i, '')
@@ -184,6 +205,9 @@ class FilteredDFA(Lazy):
 
     def arcs(self, state):
         return self.dfa.arcs(state)
+
+    def arcs_x(self, state, x):
+        return self.dfa.arcs_x(state, x)
 
     def is_final(self, state):
         return any(ys.startswith(self.target) and self.fst.is_final(i) for (i, ys) in state)

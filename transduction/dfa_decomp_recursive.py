@@ -13,6 +13,11 @@ class TargetSideBuffer(Lazy):
         for x,y,j in self.f.arcs(i):
             yield x, (j, ys + y)
 
+    def arcs_x(self, state, x):
+        (i, ys) = state
+        for y, j in self.f.arcs(i, x):
+            yield (j, ys + y)
+
     def start(self):
         for i in self.f.I:
             yield (i, '')
@@ -31,6 +36,11 @@ class Relevance(Lazy):
         for x, (i, ys) in self.base.arcs(state):
             if self.target.startswith(ys) or ys.startswith(self.target):
                 yield x, (i, ys)
+
+    def arcs_x(self, state, x):
+        for (i, ys) in self.base.arcs_x(state, x):
+            if self.target.startswith(ys) or ys.startswith(self.target):
+                yield (i, ys)
 
     def start(self):
         yield from self.base.start()

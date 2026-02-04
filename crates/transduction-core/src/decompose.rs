@@ -1,7 +1,7 @@
-use crate::fst::Fst;
+use crate::fst::{compute_ip_universal_states, Fst};
 use crate::powerset::PowersetArena;
-use crate::precover::PrecoverNFA;
-use rustc_hash::FxHashSet;
+use crate::precover::{pack, PrecoverNFA};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
 use std::time::Instant;
 
@@ -57,68 +57,217 @@ pub struct DecompResult {
     pub stats: ProfileStats,
 }
 
-/// Check if a DFA state (powerset state) accepts the universal language Σ*.
-fn is_universal(
-    sid: u32,
-    nfa: &PrecoverNFA,
-    arena: &mut PowersetArena,
-    num_source_symbols: usize,
-    universal_cache: &mut FxHashSet<u32>,
-    stats: &mut ProfileStats,
-) -> bool {
-    if universal_cache.contains(&sid) {
-        return true;
-    }
+/// Universality short-circuit optimizer.
+///
+/// Encapsulates multiple strategies to determine whether a DFA state (powerset
+/// state) accepts Σ*, avoiding expensive sub-BFS whenever possible:
+///
+/// 1. Fast path: if `all_input_universal`, every final state is universal.
+/// 2. Witness check: if any NFA element in the powerset state is a known
+///    ip-universal witness, the state is universal.
+/// 3. Superset monotonicity: if a known-universal set is a subset of the
+///    current set, the current set is universal too.
+/// 4. Subset monotonicity: if the current set is a subset of a known
+///    non-universal set, it's non-universal too.
+/// 5. BFS fallback: full sub-BFS. Results are added to the positive or
+///    negative cache for future lookups.
+struct UniversalityFilter {
+    all_input_universal: bool,
+    /// Packed NFA states `(q, target_len)` for ip-universal FST states q.
+    witnesses: FxHashSet<u64>,
 
-    if !arena.is_final[sid as usize] {
-        return false;
-    }
+    /// Element-indexed positive cache (known universal NFA-state sets).
+    /// pos_index[nfa_element] = list of entry IDs whose stored set contains that element.
+    pos_index: FxHashMap<u64, Vec<u32>>,
+    /// entry_id -> size of the stored set
+    pos_sizes: Vec<usize>,
 
-    let mut sub_visited: FxHashSet<u32> = FxHashSet::default();
-    let mut sub_worklist: VecDeque<u32> = VecDeque::new();
+    /// Element-indexed negative cache (known non-universal NFA-state sets).
+    neg_index: FxHashMap<u64, Vec<u32>>,
+    neg_next: u32,
 
-    sub_visited.insert(sid);
-    sub_worklist.push_back(sid);
+}
 
-    while let Some(cur) = sub_worklist.pop_front() {
-        if !arena.is_final[cur as usize] {
-            return false;
-        }
+impl UniversalityFilter {
+    fn new(fst: &Fst, target_len: u32) -> Self {
+        let all_input_universal = fst.all_input_universal;
+        let mut witnesses = FxHashSet::default();
 
-        if universal_cache.contains(&cur) {
-            continue;
-        }
-
-        stats.universal_sub_bfs_states += 1;
-
-        let cur_set = arena.sets[cur as usize].clone();
-
-        // Batch-compute all arcs from this powerset state
-        let all_arcs = nfa.compute_all_arcs(&cur_set);
-        stats.universal_compute_arcs_calls += 1;
-
-        // Completeness check: must have exactly |source_alphabet| symbols
-        if all_arcs.len() < num_source_symbols {
-            return false;
-        }
-
-        // Follow each successor
-        for (_sym, successor) in &all_arcs {
-            let any_final = successor.iter().any(|&s| nfa.is_final(s));
-            let dest_id = arena.intern(successor.clone(), any_final);
-
-            if sub_visited.insert(dest_id) {
-                sub_worklist.push_back(dest_id);
+        if !all_input_universal {
+            let ip_univ = compute_ip_universal_states(fst);
+            for (q, &is_univ) in ip_univ.iter().enumerate() {
+                if is_univ {
+                    witnesses.insert(pack(q as u32, target_len, target_len));
+                }
             }
         }
+
+        UniversalityFilter {
+            all_input_universal,
+            witnesses,
+            pos_index: FxHashMap::default(),
+            pos_sizes: Vec::new(),
+            neg_index: FxHashMap::default(),
+            neg_next: 0,
+        }
     }
 
-    // All states in sub-BFS are universal; cache them
-    for &s in &sub_visited {
-        universal_cache.insert(s);
+    /// Add a set to the positive (known universal) cache.
+    fn add_pos(&mut self, nfa_set: &[u64]) {
+        let eid = self.pos_sizes.len() as u32;
+        self.pos_sizes.push(nfa_set.len());
+        for &e in nfa_set {
+            self.pos_index.entry(e).or_default().push(eid);
+        }
     }
 
-    true
+    /// Add a set to the negative (known non-universal) cache.
+    fn add_neg(&mut self, nfa_set: &[u64]) {
+        let eid = self.neg_next;
+        self.neg_next += 1;
+        for &e in nfa_set {
+            self.neg_index.entry(e).or_default().push(eid);
+        }
+    }
+
+    /// Is there a known-universal set u such that u ⊆ nfa_set?
+    /// Uses hit-counting: for each element in nfa_set, increment hit count
+    /// for each entry containing that element. If any entry's count reaches
+    /// its stored size, that entry is a subset.
+    fn has_pos_subset(&self, nfa_set: &[u64]) -> bool {
+        let mut hits: FxHashMap<u32, usize> = FxHashMap::default();
+        for &e in nfa_set {
+            if let Some(eids) = self.pos_index.get(&e) {
+                for &eid in eids {
+                    let h = hits.entry(eid).or_insert(0);
+                    *h += 1;
+                    if *h == self.pos_sizes[eid as usize] {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Is there a known-non-universal set nu such that nfa_set ⊆ nu?
+    /// Uses intersection of entry-ID sets: for each element of nfa_set,
+    /// look up which negative entries contain it. If the intersection across
+    /// all elements is non-empty, some negative entry is a superset.
+    fn has_neg_superset(&self, nfa_set: &[u64]) -> bool {
+        if nfa_set.is_empty() {
+            return self.neg_next > 0;
+        }
+        let mut candidates: Option<FxHashSet<u32>> = None;
+        for &e in nfa_set {
+            match self.neg_index.get(&e) {
+                None => return false,
+                Some(eids) => {
+                    let eid_set: FxHashSet<u32> = eids.iter().copied().collect();
+                    candidates = Some(match candidates {
+                        None => eid_set,
+                        Some(prev) => prev.intersection(&eid_set).copied().collect(),
+                    });
+                    if candidates.as_ref().unwrap().is_empty() {
+                        return false;
+                    }
+                }
+            }
+        }
+        candidates.map_or(false, |c| !c.is_empty())
+    }
+
+    /// BFS universality check: does the DFA state accept Σ*?
+    fn bfs_universal(
+        &self,
+        sid: u32,
+        nfa: &PrecoverNFA,
+        arena: &mut PowersetArena,
+        num_source_symbols: usize,
+        stats: &mut ProfileStats,
+    ) -> bool {
+        if !arena.is_final[sid as usize] {
+            return false;
+        }
+
+        let mut sub_visited: FxHashSet<u32> = FxHashSet::default();
+        let mut sub_worklist: VecDeque<u32> = VecDeque::new();
+
+        sub_visited.insert(sid);
+        sub_worklist.push_back(sid);
+
+        while let Some(cur) = sub_worklist.pop_front() {
+            if !arena.is_final[cur as usize] {
+                return false;
+            }
+
+            stats.universal_sub_bfs_states += 1;
+
+            let cur_set = arena.sets[cur as usize].clone();
+
+            let all_arcs = nfa.compute_all_arcs(&cur_set);
+            stats.universal_compute_arcs_calls += 1;
+
+            if all_arcs.len() < num_source_symbols {
+                return false;
+            }
+
+            for (_sym, successor) in &all_arcs {
+                let any_final = successor.iter().any(|&s| nfa.is_final(s));
+                let dest_id = arena.intern(successor.clone(), any_final);
+
+                if sub_visited.insert(dest_id) {
+                    sub_worklist.push_back(dest_id);
+                }
+            }
+        }
+
+        true
+    }
+
+    /// Main entry point: determine if a DFA state is universal.
+    fn is_universal(
+        &mut self,
+        sid: u32,
+        nfa: &PrecoverNFA,
+        arena: &mut PowersetArena,
+        num_source_symbols: usize,
+        stats: &mut ProfileStats,
+    ) -> bool {
+        // 1. Fast path: all_input_universal
+        if self.all_input_universal {
+            return true;
+        }
+
+        let nfa_set = &arena.sets[sid as usize];
+
+        // 2. Witness check: any element is an ip-universal witness
+        if nfa_set.iter().any(|e| self.witnesses.contains(e)) {
+            let set_clone = nfa_set.to_vec();
+            self.add_pos(&set_clone);
+            return true;
+        }
+
+        // 3. Superset monotonicity: is nfa_set ⊇ some known-universal set?
+        if self.has_pos_subset(nfa_set) {
+            return true;
+        }
+
+        // 4. Subset monotonicity: is nfa_set ⊆ some known-non-universal set?
+        if self.has_neg_superset(nfa_set) {
+            return false;
+        }
+
+        // 5. BFS fallback
+        let nfa_set_clone = arena.sets[sid as usize].to_vec();
+        let result = self.bfs_universal(sid, nfa, arena, num_source_symbols, stats);
+        if result {
+            self.add_pos(&nfa_set_clone);
+        } else {
+            self.add_neg(&nfa_set_clone);
+        }
+        result
+    }
 }
 
 /// Fused BFS that performs determinization + universality detection + Q/R partitioning.
@@ -173,7 +322,7 @@ pub fn decompose(fst: &Fst, target: &[u32]) -> DecompResult {
     let mut q_stop: Vec<u32> = Vec::new();
     let mut r_stop: Vec<u32> = Vec::new();
 
-    let mut universal_cache: FxHashSet<u32> = FxHashSet::default();
+    let mut filter = UniversalityFilter::new(fst, target.len() as u32);
 
     worklist.push_back(start_id);
     visited.insert(start_id);
@@ -203,18 +352,9 @@ pub fn decompose(fst: &Fst, target: &[u32]) -> DecompResult {
         }
 
         if arena.is_final[sid as usize] {
-            if fst.all_input_universal {
-                // Fast path: input projection is universally accepting,
-                // so every final state is universal.
-                stats.universal_calls += 1;
-                stats.universal_true += 1;
-                q_stop.push(sid);
-                continue;
-            }
-
             let uni_start = Instant::now();
             stats.universal_calls += 1;
-            let is_uni = is_universal(sid, &nfa, &mut arena, num_source_symbols, &mut universal_cache, &mut stats);
+            let is_uni = filter.is_universal(sid, &nfa, &mut arena, num_source_symbols, &mut stats);
             stats.universal_ms += uni_start.elapsed().as_secs_f64() * 1000.0;
 
             if is_uni {

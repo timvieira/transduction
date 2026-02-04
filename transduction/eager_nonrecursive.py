@@ -43,6 +43,26 @@ class LazyPrecoverNFAWithTruncationMarker(Lazy):
                 elif y == self.target[n]:
                     yield (x, (j, self.target[:n+1], False))
 
+    def arcs_x(self, state, x):
+        (i, ys, truncated) = state
+        n = len(ys)
+        m = min(self.N, n)
+        if self.target[:m] != ys[:m]:
+            return
+        if m == self.N:
+            for y, j in self.fst.arcs(i, x):
+                if y == EPSILON or truncated:
+                    yield (j, self.target, truncated)
+                else:
+                    yield (j, self.target, True)
+        else:
+            assert not truncated
+            for y, j in self.fst.arcs(i, x):
+                if y == EPSILON:
+                    yield (j, ys, False)
+                elif y == self.target[n]:
+                    yield (j, self.target[:n+1], False)
+
     def start(self):
         for i in self.fst.I:
             yield (i, self.target[:0], False)
@@ -90,6 +110,22 @@ class LazyPrecoverNFA(Lazy):
                 elif y == self.target[n]:
                     yield (x, (j, self.target[:n+1]))
 
+    def arcs_x(self, state, x):
+        (i, ys) = state
+        n = len(ys)
+        m = min(self.N, n)
+        if self.target[:m] != ys[:m]:
+            return
+        if m == self.N:
+            for _, j in self.fst.arcs(i, x):
+                yield (j, self.target)
+        else:
+            for y, j in self.fst.arcs(i, x):
+                if y == EPSILON:
+                    yield (j, ys)
+                elif y == self.target[n]:
+                    yield (j, self.target[:n+1])
+
     def start(self):
         for i in self.fst.I:
             yield (i, self.target[:0])
@@ -132,6 +168,19 @@ class PopPrecover(Lazy):
                     yield (x, (j, ys))
                 elif y == ys[0]:
                     yield (x, (j, ys[1:]))
+
+    def arcs_x(self, state, x):
+        (i, ys) = state
+        n = len(ys)
+        if n == 0:
+            for _, j in self.fst.arcs(i, x):
+                yield (j, ys)
+        else:
+            for y, j in self.fst.arcs(i, x):
+                if y == EPSILON:
+                    yield (j, ys)
+                elif y == ys[0]:
+                    yield (j, ys[1:])
 
     def start(self):
         for i in self.fst.I:

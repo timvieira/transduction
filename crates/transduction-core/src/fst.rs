@@ -36,6 +36,10 @@ pub struct Fst {
     /// When true, every final state in the decompose DFA is universal,
     /// so `is_universal` can be skipped entirely.
     pub all_input_universal: bool,
+
+    /// Per-state flag: true if the state has at least one arc with non-epsilon input.
+    /// Used by precover epsilon-closure filtering to identify "productive" NFA states.
+    pub has_non_eps_input: Vec<bool>,
 }
 
 /// Epsilon closure over input-side epsilon arcs (for the input projection).
@@ -99,19 +103,118 @@ fn check_all_input_universal(fst: &Fst) -> bool {
         return false;
     }
 
-    // Check that every successor's eps-closure contains the start set
+    // Check that every successor's eps-closure contains the start set.
+    // Cache closures by destination set to avoid redundant BFS (e.g., BPE FSTs
+    // where all 50K symbols route to the same hub, producing identical closures).
+    let mut closure_cache: FxHashMap<Vec<u32>, bool> = FxHashMap::default();
     for (_sym, raw_dests) in &by_symbol {
-        let raw_vec: Vec<u32> = raw_dests.iter().copied().collect();
-        let closed = ip_eps_close(&raw_vec, fst);
-        // Check start ⊆ closed (both are sorted)
-        for &s in &start {
-            if closed.binary_search(&s).is_err() {
+        let mut raw_vec: Vec<u32> = raw_dests.iter().copied().collect();
+        raw_vec.sort_unstable();
+        raw_vec.dedup();
+        if let Some(&result) = closure_cache.get(&raw_vec) {
+            if !result {
                 return false;
             }
+            continue;
+        }
+        let closed = ip_eps_close(&raw_vec, fst);
+        // Check start ⊆ closed (both are sorted)
+        let ok = start.iter().all(|&s| closed.binary_search(&s).is_ok());
+        closure_cache.insert(raw_vec, ok);
+        if !ok {
+            return false;
         }
     }
 
     true
+}
+
+/// Greatest-fixpoint computation of ip-universal FST states.
+///
+/// A state q is ip-universal if the input projection of the FST, started from
+/// ip_eps_close({q}), accepts Σ*. Returns `Vec<bool>` indexed by state ID.
+pub fn compute_ip_universal_states(fst: &Fst) -> Vec<bool> {
+    let n = fst.num_states as usize;
+    let source_alphabet: Vec<u32> = fst.source_alphabet.clone();
+
+    if source_alphabet.is_empty() {
+        // No non-eps symbols: universal iff eps-closure contains a final state
+        let mut result = vec![false; n];
+        for q in 0..n {
+            let closure = ip_eps_close(&[q as u32], fst);
+            if closure.iter().any(|&s| fst.is_final[s as usize]) {
+                result[q] = true;
+            }
+        }
+        return result;
+    }
+
+    // Precompute closures[q] = ip_eps_close({q}) for all states
+    let closures: Vec<Vec<u32>> = (0..n)
+        .map(|q| ip_eps_close(&[q as u32], fst))
+        .collect();
+
+    // Precompute by_symbol[q]: symbol -> set of raw destinations from closure[q]
+    let mut by_symbol: Vec<FxHashMap<u32, FxHashSet<u32>>> = Vec::with_capacity(n);
+    for q in 0..n {
+        let mut sym_map: FxHashMap<u32, FxHashSet<u32>> = FxHashMap::default();
+        for &s in &closures[q] {
+            for &(x, j) in &fst.index_i_xj[s as usize] {
+                if x != EPSILON {
+                    sym_map.entry(x).or_default().insert(j);
+                }
+            }
+        }
+        by_symbol.push(sym_map);
+    }
+
+    // Greatest fixpoint iteration
+    let mut candidates = vec![true; n];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for q in 0..n {
+            if !candidates[q] {
+                continue;
+            }
+
+            // Must contain a final state
+            if !closures[q].iter().any(|&s| fst.is_final[s as usize]) {
+                candidates[q] = false;
+                changed = true;
+                continue;
+            }
+
+            // Must be complete on source alphabet
+            if !source_alphabet.iter().all(|a| by_symbol[q].contains_key(a)) {
+                candidates[q] = false;
+                changed = true;
+                continue;
+            }
+
+            // For each symbol, successor eps-closure must contain >= 1 candidate
+            let mut ok = true;
+            for a in &source_alphabet {
+                if let Some(dests) = by_symbol[q].get(a) {
+                    let raw: Vec<u32> = dests.iter().copied().collect();
+                    let succ_closure = ip_eps_close(&raw, fst);
+                    if !succ_closure.iter().any(|&s| candidates[s as usize]) {
+                        ok = false;
+                        break;
+                    }
+                } else {
+                    ok = false;
+                    break;
+                }
+            }
+            if !ok {
+                candidates[q] = false;
+                changed = true;
+            }
+        }
+    }
+
+    candidates
 }
 
 impl Fst {
@@ -175,6 +278,10 @@ impl Fst {
             index_ixy_j.entry((i, x, y)).or_default().push(j);
         }
 
+        let has_non_eps_input: Vec<bool> = (0..n)
+            .map(|i| index_i_xj[i].iter().any(|&(x, _)| x != EPSILON))
+            .collect();
+
         let mut fst = Fst {
             num_states,
             start_states,
@@ -187,6 +294,7 @@ impl Fst {
             index_ixy_j,
             source_alphabet,
             all_input_universal: false,
+            has_non_eps_input,
         };
 
         fst.all_input_universal = check_all_input_universal(&fst);

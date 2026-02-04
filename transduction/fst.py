@@ -685,23 +685,72 @@ class UniversalityFilter:
     """
     Encapsulates universality short-circuit optimizations:
     - Fast path: if check_all_input_universal, every final state is universal
-    - #2: Per-FST-state input universality (ip-universal states)
-    - #1: Superset monotonicity cache (if S is universal, any S' >= S is too)
-    - #4: Subset monotonicity cache (if S is not universal, any S' <= S isn't either)
+    - ip-universal witness check via set intersection
+    - Superset monotonicity: if S is universal, any S' ⊇ S is too
+    - Subset monotonicity: if S is not universal, any S' ⊆ S isn't either
     - Fallback: BFS universality check on the DFA
+
+    Monotonicity caches use element-indexed lookups rather than linear scans.
     """
 
     def __init__(self, fst, target, dfa, source_alphabet):
-        self.target = target
         self.dfa = dfa
         self.source_alphabet = source_alphabet
         self.all_input_universal = check_all_input_universal(fst)
-        if self.all_input_universal:
-            self.ip_univ = frozenset()
-        else:
-            self.ip_univ = compute_ip_universal_states(fst)
-        self._pos = []   # known universal frozensets
-        self._neg = []   # known non-universal frozensets
+        if not self.all_input_universal:
+            ip_univ = compute_ip_universal_states(fst)
+            self._witnesses = frozenset((q, target) for q in ip_univ)
+        # Element-indexed positive cache (known universal states).
+        # _pos_index[element] = set of entry IDs whose stored set contains element.
+        # A stored set u ⊆ dfa_state iff every element of u is in dfa_state,
+        # i.e., the entry's hit count equals its size.
+        self._pos_index = defaultdict(set)
+        self._pos_sizes = {}   # entry_id -> len(stored set)
+        self._pos_next = 0
+        # Element-indexed negative cache (known non-universal states).
+        # A stored set nu ⊇ dfa_state iff every element of dfa_state is in nu,
+        # i.e., the intersection of entry-ID sets across all elements is non-empty.
+        self._neg_index = defaultdict(set)
+        self._neg_next = 0
+
+    def _add_pos(self, s):
+        eid = self._pos_next
+        self._pos_next += 1
+        self._pos_sizes[eid] = len(s)
+        for e in s:
+            self._pos_index[e].add(eid)
+
+    def _add_neg(self, s):
+        eid = self._neg_next
+        self._neg_next += 1
+        for e in s:
+            self._neg_index[e].add(eid)
+
+    def _has_pos_subset(self, dfa_state):
+        """Is there a known-universal set u such that u ⊆ dfa_state?"""
+        hits = {}
+        for e in dfa_state:
+            for eid in self._pos_index.get(e, ()):
+                h = hits.get(eid, 0) + 1
+                if h == self._pos_sizes[eid]:
+                    return True
+                hits[eid] = h
+        return False
+
+    def _has_neg_superset(self, dfa_state):
+        """Is there a known-non-universal set nu such that dfa_state ⊆ nu?"""
+        candidates = None
+        for e in dfa_state:
+            entry_ids = self._neg_index.get(e)
+            if entry_ids is None:
+                return False
+            if candidates is None:
+                candidates = set(entry_ids)
+            else:
+                candidates &= entry_ids
+            if not candidates:
+                return False
+        return bool(candidates)
 
     def _bfs_universal(self, state):
         """BFS check: does `state` accept source_alphabet* in the DFA?"""
@@ -730,27 +779,22 @@ class UniversalityFilter:
         if self.all_input_universal:
             return True
 
-        # #2: Does dfa_state contain an NFA state (q, target) with q ip-universal?
-        for nfa_state in dfa_state:
-            fst_state = nfa_state[0]
-            ys = nfa_state[1]
-            if ys == self.target and fst_state in self.ip_univ:
-                self._pos.append(dfa_state)
-                return True
+        # ip-universal witness check: short-circuits on first common element
+        if not self._witnesses.isdisjoint(dfa_state):
+            self._add_pos(dfa_state)
+            return True
 
-        # #1: Is dfa_state a superset of any known universal state?
-        for u in self._pos:
-            if u <= dfa_state:
-                return True
+        # Superset monotonicity: is dfa_state ⊇ some known-universal set?
+        if self._has_pos_subset(dfa_state):
+            return True
 
-        # #4: Is dfa_state a subset of any known non-universal state?
-        for nu in self._neg:
-            if dfa_state <= nu:
-                return False
+        # Subset monotonicity: is dfa_state ⊆ some known-non-universal set?
+        if self._has_neg_superset(dfa_state):
+            return False
 
-        # Fallback to full BFS
+        # BFS fallback
         result = self._bfs_universal(dfa_state)
-        (self._pos if result else self._neg).append(dfa_state)
+        (self._add_pos if result else self._add_neg)(dfa_state)
         return result
 
 
