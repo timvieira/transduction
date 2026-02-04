@@ -67,6 +67,10 @@ Init cost (~28ms) is token extraction + trie building. Could be cached across ca
 50/51 tests pass. The one failure (`test_triplets_of_doom[recursive_dfa_decomp]`) is a
 pre-existing timeout in the Python `RecursiveDFADecomp` implementation, not related to Rust.
 
+## Reports
+
+Generated reports go in `reports/` at the project root.
+
 ## Next Optimization Targets
 
 1. **Cache init cost**: The ~28ms init (token extraction + trie) is rebuilt each call.
