@@ -4,12 +4,14 @@ Benchmarking script for PTB (Penn Treebank) tokenizer transducer.
 Uses the fastest available decomposition algorithm (Rust backend if available,
 otherwise falls back to Python).
 """
-from transduction.benchmarking.fsts.ptb_native import (
-    build_ptb_fst_simple,
+from transduction.benchmarking.fsts.ptb_pynini import (
+    build_ptb_fst_pynini,
     string_to_byte_strs,
     decode_ptb_output,
     SEP,
+    MARKER,
 )
+from transduction.fsa import EPSILON
 from transduction.benchmarking.data import load_wikitext, wikitext_detokenize
 
 import tqdm
@@ -17,6 +19,28 @@ import time
 
 import datasets
 datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True
+
+
+def decode_with_boundaries(output_tuple, boundary_char='|'):
+    """Decode PTB FST output showing explicit word boundaries."""
+    tokens = []
+    current_token = []
+
+    for sym in output_tuple:
+        if sym == SEP:
+            if current_token:
+                byte_vals = [int(b) for b in current_token]
+                tokens.append(bytes(byte_vals).decode('utf-8', errors='replace'))
+                current_token = []
+            tokens.append(boundary_char)
+        elif sym != MARKER and sym != EPSILON:
+            current_token.append(sym)
+
+    if current_token:
+        byte_vals = [int(b) for b in current_token]
+        tokens.append(bytes(byte_vals).decode('utf-8', errors='replace'))
+
+    return ''.join(tokens)
 
 # Try to import Rust backend, fall back to Python if not available
 try:
@@ -106,7 +130,7 @@ def main():
     # Build PTB FST
     print("\nBuilding PTB FST...")
     t0 = time.perf_counter()
-    fst = build_ptb_fst_simple()
+    fst = build_ptb_fst_pynini()
     t1 = time.perf_counter()
     print(f"PTB FST built in {t1-t0:.2f}s")
     print(f"  States: {len(fst.states)}")
@@ -124,8 +148,8 @@ def main():
         print(f"\n  Sanity test failed: {e}")
 
     # Load data
-    n_pgs = 1
-    max_chars = 100
+    n_pgs = 10
+    max_chars = 1000
     print(f"\nLoading {n_pgs} wikitext paragraphs (max {max_chars} chars each)...")
 
     pgs, original, total_len = load_wikitext_paragraphs_ptb(
@@ -143,9 +167,15 @@ def main():
     for idx, pg in enumerate(pgs):
         result[idx] = []
         print(f"\n--- Paragraph {idx + 1}/{len(pgs)} ---")
-        print(f"Original: {original[idx][:60]}...")
-        print(f"Transduced: {decode_ptb_output(pg[:40])}...")
-        print(f"Transduced length: {len(pg)}")
+        print(f"Original ({len(original[idx])} chars):")
+        print(f"  {original[idx][:100]}...")
+
+        # Show tokenized output with explicit boundaries
+        sep_count = sum(1 for sym in pg if sym == SEP)
+        print(f"\nTokenized ({sep_count + 1} tokens, {len(pg)} symbols):")
+        tokenized = decode_with_boundaries(pg)
+        # Show first 150 chars of tokenized output
+        print(f"  {tokenized}")
 
         # Test various prefix lengths
         test_lengths = list(range(2, min(len(pg), 30), 4))
