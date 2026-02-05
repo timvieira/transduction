@@ -284,25 +284,43 @@ class PeekabooState:
         # the next PeekabooState (for target+y) must resume BFS expansion.
         resume_frontiers = {}
 
-        def ensure_symbol(y):
-            """Lazily initialise per-symbol data structures on first use."""
-            if y not in decomp:
-                decomp[y] = PrecoverDecomp(set(), set())
-                resume_frontiers[y] = set()
-                trunc_dfa = TruncatedDFA(dfa=dfa, fst=self.fst, target=target + y)
-                truncated_dfas[y] = trunc_dfa
-                univ_filters[y] = self._univ.make_filter(
-                    self.fst, target + y, trunc_dfa, self.source_alphabet,
-                )
+        _all_input_universal = self._univ.all_input_universal
+        if _all_input_universal:
+            def ensure_symbol(y):
+                if y not in decomp:
+                    decomp[y] = PrecoverDecomp(set(), set())
+                    resume_frontiers[y] = set()
+        else:
+            def ensure_symbol(y):
+                if y not in decomp:
+                    decomp[y] = PrecoverDecomp(set(), set())
+                    resume_frontiers[y] = set()
+                    trunc_dfa = TruncatedDFA(dfa=dfa, fst=self.fst, target=target + y)
+                    truncated_dfas[y] = trunc_dfa
+                    univ_filters[y] = self._univ.make_filter(
+                        self.fst, target + y, trunc_dfa, self.source_alphabet,
+                    )
 
         truncated_dfas = {}
         univ_filters = {}
 
         N = len(target)
+        _fst_is_final = self.fst.is_final
         while worklist:
             state = worklist.popleft()
 
-            relevant_symbols = {ys[N] for _, ys, _ in state if len(ys) > N}
+            # Single pass over NFA states: extract relevant symbols,
+            # final-for-symbol set, and the truncated flag.
+            relevant_symbols = set()
+            final_symbols = set()
+            state_has_truncated = False
+            for i, ys, truncated in state:
+                if len(ys) > N:
+                    y = ys[N]
+                    relevant_symbols.add(y)
+                    if ys.startswith(target) and _fst_is_final(i):
+                        final_symbols.add(y)
+                state_has_truncated = state_has_truncated or truncated
 
             # A state is "continuous" (universal) for symbol y if it accepts
             # all source strings — meaning Q covers everything and no further
@@ -319,20 +337,24 @@ class PeekabooState:
             # precover(target+y) ∩ precover(target+z) = ∅.  Therefore
             # Reach(S)·Σ* ⊆ ∅, but Reach(S) is non-empty (S is on the
             # worklist), giving a contradiction.
-            continuous = set()
+            continuous = False
             for y in relevant_symbols:
                 ensure_symbol(y)
 
-                dfa_truncated = truncated_dfas[y]
+                if not continuous:
+                    # For AUI FSTs, universality ↔ finality (no filter needed).
+                    is_univ = (
+                        y in final_symbols if _all_input_universal
+                        else univ_filters[y].is_universal(state)
+                    )
+                    if is_univ:
+                        decomp[y].quotient.add(state)
+                        continuous = True
+                        continue
 
-                if len(continuous) == 0 and univ_filters[y].is_universal(state):
-                    decomp[y].quotient.add(state)
-                    continuous.add(y)
-
-                elif dfa_truncated.is_final(state):
+                if y in final_symbols:
                     decomp[y].remainder.add(state)
 
-            assert len(continuous) <= 1
             if continuous:
                 continue    # we have found a quotient and can skip
 
@@ -347,7 +369,7 @@ class PeekabooState:
                 # If `state` is non-truncated but `next_state` contains a
                 # truncated element, then `state` sits on the truncation
                 # boundary — record it so the next iteration can resume here.
-                if not any(truncated for _, _, truncated in state):
+                if not state_has_truncated:
                     for _, ys, truncated in next_state:
                         if truncated:
                             y = ys[-1]
@@ -394,6 +416,16 @@ class PeekabooPrecover(Lazy):
         self.N = len(target)
         self.K = K
         assert K >= 1
+        # Arc labels are FST input symbols; epsilon arcs exist only if the
+        # FST has input-epsilon arcs.  When absent, skip EpsilonRemove in
+        # det() — the wrapper is a no-op but costs ~12-15% of runtime on
+        # trivial {state} closures.
+        self._has_eps = EPSILON in fst.A
+
+    def epsremove(self):
+        if self._has_eps:
+            return super().epsremove()
+        return self
 
     def arcs(self, state):
         (i, ys, truncated) = state
