@@ -20,6 +20,7 @@ use crate::fst::{compute_ip_universal_states, Fst, EPSILON};
 use crate::powerset::PowersetArena;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
+use std::time::Instant;
 
 // ---------------------------------------------------------------------------
 // NFA state packing
@@ -303,7 +304,6 @@ impl<'a> PeekabooNFAMapped<'a> {
 // ---------------------------------------------------------------------------
 
 struct PeekabooUniversalityFilter {
-    all_input_universal: bool,
     witnesses: FxHashSet<u64>,
     pos_index: FxHashMap<u64, Vec<u32>>,
     pos_sizes: Vec<usize>,
@@ -312,20 +312,16 @@ struct PeekabooUniversalityFilter {
 }
 
 impl PeekabooUniversalityFilter {
-    fn new(fst: &Fst, step_n: u16, y_idx: u16, ip_universal_states: &[bool]) -> Self {
-        let all_input_universal = fst.all_input_universal;
+    fn new(_fst: &Fst, step_n: u16, y_idx: u16, ip_universal_states: &[bool]) -> Self {
         let mut witnesses = FxHashSet::default();
 
-        if !all_input_universal {
-            for (q, &is_univ) in ip_universal_states.iter().enumerate() {
-                if is_univ {
-                    witnesses.insert(pack_peekaboo(q as u32, step_n + 1, y_idx, false));
-                }
+        for (q, &is_univ) in ip_universal_states.iter().enumerate() {
+            if is_univ {
+                witnesses.insert(pack_peekaboo(q as u32, step_n + 1, y_idx, false));
             }
         }
 
         PeekabooUniversalityFilter {
-            all_input_universal,
             witnesses,
             pos_index: FxHashMap::default(),
             pos_sizes: Vec::new(),
@@ -438,10 +434,6 @@ impl PeekabooUniversalityFilter {
             return false;
         }
 
-        if self.all_input_universal {
-            return true;
-        }
-
         if projected.iter().any(|e| self.witnesses.contains(e)) {
             self.add_pos(&projected);
             return true;
@@ -542,8 +534,48 @@ impl PeekabooUniversalityFilter {
 
 use crate::decompose::FsaResult;
 
+pub struct PeekabooProfileStats {
+    pub total_ms: f64,
+    pub init_ms: f64,
+    pub bfs_ms: f64,
+    pub extract_ms: f64,
+
+    // Per-step data
+    pub num_steps: u32,
+    pub per_step_visited: Vec<u32>,
+    pub per_step_frontier_size: Vec<u32>,
+
+    // BFS aggregates
+    pub total_bfs_visited: u64,
+    pub compute_arcs_ms: f64,
+    pub compute_arcs_calls: u64,
+    pub intern_ms: f64,
+    pub intern_calls: u64,
+    pub universal_ms: f64,
+    pub universal_calls: u64,
+    pub universal_true: u64,
+    pub universal_false: u64,
+
+    // Arena stats
+    pub arena_size: u32,
+    pub max_powerset_size: usize,
+    pub avg_powerset_size: f64,
+
+    // Merged incoming stats
+    pub merged_incoming_states: u32,
+    pub merged_incoming_arcs: u64,
+
+    // Eps cache
+    pub eps_cache_clears: u32,
+
+    // Per-symbol result sizes
+    pub per_symbol_q_stops: Vec<(u32, u32)>,  // (sym, count)
+    pub per_symbol_r_stops: Vec<(u32, u32)>,
+}
+
 pub struct PeekabooResult {
     pub per_symbol: FxHashMap<u32, (FsaResult, FsaResult)>,
+    pub stats: PeekabooProfileStats,
 }
 
 // ---------------------------------------------------------------------------
@@ -551,7 +583,10 @@ pub struct PeekabooResult {
 // ---------------------------------------------------------------------------
 
 pub fn peekaboo_decompose(fst: &Fst, target: &[u32]) -> PeekabooResult {
+    let total_start = Instant::now();
     let target_len = target.len();
+
+    let init_start = Instant::now();
 
     // Build the output alphabet.
     let mut output_alphabet: Vec<u32> = Vec::new();
@@ -579,15 +614,27 @@ pub fn peekaboo_decompose(fst: &Fst, target: &[u32]) -> PeekabooResult {
         "Too many output symbols for u16 encoding"
     );
 
-    let ip_universal_states = if fst.all_input_universal {
-        vec![]
-    } else {
-        compute_ip_universal_states(fst)
-    };
+    let ip_universal_states = compute_ip_universal_states(fst);
+
+    let init_ms = init_start.elapsed().as_secs_f64() * 1000.0;
 
     let mut arena = PowersetArena::new();
     let num_source_symbols = fst.source_alphabet.len();
     let mut eps_cache: FxHashMap<u64, Vec<u64>> = FxHashMap::default();
+
+    // Profiling accumulators
+    let mut per_step_visited: Vec<u32> = Vec::new();
+    let mut per_step_frontier_size: Vec<u32> = Vec::new();
+    let mut total_bfs_visited: u64 = 0;
+    let mut compute_arcs_ms: f64 = 0.0;
+    let mut compute_arcs_calls: u64 = 0;
+    let mut intern_ms: f64 = 0.0;
+    let mut intern_calls: u64 = 0;
+    let mut universal_ms: f64 = 0.0;
+    let mut universal_calls: u64 = 0;
+    let mut universal_true: u64 = 0;
+    let mut universal_false: u64 = 0;
+    let mut eps_cache_clears: u32 = 0;
 
     // Per-symbol decomp data (only the LAST step's results matter).
     let mut decomp_q: FxHashMap<u16, Vec<u32>> = FxHashMap::default();
@@ -600,6 +647,8 @@ pub fn peekaboo_decompose(fst: &Fst, target: &[u32]) -> PeekabooResult {
 
     let mut global_start_id: u32 = 0;
 
+    let bfs_start = Instant::now();
+
     for step in 0..=target_len {
         let step_n = step as u16;
 
@@ -607,9 +656,11 @@ pub fn peekaboo_decompose(fst: &Fst, target: &[u32]) -> PeekabooResult {
 
         // Must clear eps_cache because NFA arcs change with step_n.
         eps_cache.clear();
+        eps_cache_clears += 1;
 
         let mut worklist: VecDeque<u32> = VecDeque::new();
         let mut incoming: FxHashMap<u32, Vec<(u32, u32)>> = FxHashMap::default();
+        let mut step_visited: u32 = 0;
 
         if step == 0 {
             let raw_starts = nfa.start_states();
@@ -620,21 +671,21 @@ pub fn peekaboo_decompose(fst: &Fst, target: &[u32]) -> PeekabooResult {
 
             worklist.push_back(start_id);
             incoming.insert(start_id, Vec::new());
+            per_step_frontier_size.push(1);
         } else {
             // Resume from previous step's frontiers.
-            // NO translation — use frontier states as-is. The NFA at the new step
-            // correctly handles these states via effective_state() / prefix compatibility.
             let prev_target_sym = target[step - 1];
             let prev_y_idx = sym_to_idx[&prev_target_sym];
 
+            let mut frontier_sz: u32 = 0;
             if let Some(frontier) = resume_frontiers.remove(&prev_y_idx) {
+                frontier_sz = frontier.len() as u32;
                 for sid in frontier {
-                    // Verify the state has no truncated elements (invariant from Python).
-                    // The frontier should only contain non-truncated states.
                     worklist.push_back(sid);
                     incoming.insert(sid, Vec::new());
                 }
             }
+            per_step_frontier_size.push(frontier_sz);
         }
 
         // Reset per-symbol data for this step.
@@ -645,11 +696,10 @@ pub fn peekaboo_decompose(fst: &Fst, target: &[u32]) -> PeekabooResult {
 
         // BFS for this step.
         while let Some(sid) = worklist.pop_front() {
+            step_visited += 1;
             let nfa_set = arena.sets[sid as usize].clone();
 
-            // Find relevant symbols: extra_sym values for NFA states with buf_len > step_n.
-            // We need to account for effective state — an off-target state that gets
-            // re-interpreted as on-target at this step should not contribute its extra_sym.
+            // Find relevant symbols.
             let mut relevant_syms = FxHashSet::default();
             for &packed in &nfa_set {
                 let (_, buf_len, extra_sym, _truncated) = unpack_peekaboo(packed);
@@ -674,6 +724,8 @@ pub fn peekaboo_decompose(fst: &Fst, target: &[u32]) -> PeekabooResult {
                 }
 
                 if continuous.is_none() {
+                    let uni_start = Instant::now();
+                    universal_calls += 1;
                     let filter = univ_filters.get_mut(&y_idx).unwrap();
                     let is_univ = filter.is_universal(
                         &nfa_set,
@@ -684,11 +736,15 @@ pub fn peekaboo_decompose(fst: &Fst, target: &[u32]) -> PeekabooResult {
                         num_source_symbols,
                         step_n,
                     );
+                    universal_ms += uni_start.elapsed().as_secs_f64() * 1000.0;
 
                     if is_univ {
+                        universal_true += 1;
                         decomp_q.entry(y_idx).or_default().push(sid);
                         continuous = Some(y_idx);
                         continue;
+                    } else {
+                        universal_false += 1;
                     }
                 }
 
@@ -703,11 +759,17 @@ pub fn peekaboo_decompose(fst: &Fst, target: &[u32]) -> PeekabooResult {
             }
 
             // Expand arcs.
+            let arcs_start = Instant::now();
             let all_arcs = nfa.compute_all_arcs(&nfa_set, &mut eps_cache);
+            compute_arcs_ms += arcs_start.elapsed().as_secs_f64() * 1000.0;
+            compute_arcs_calls += 1;
 
             for (x, successor) in all_arcs {
+                let intern_start = Instant::now();
                 let succ_final = successor.iter().any(|&s| nfa.is_final(s));
                 let dest_id = arena.intern(successor.clone(), succ_final);
+                intern_ms += intern_start.elapsed().as_secs_f64() * 1000.0;
+                intern_calls += 1;
 
                 if !incoming.contains_key(&dest_id) {
                     worklist.push_back(dest_id);
@@ -727,13 +789,11 @@ pub fn peekaboo_decompose(fst: &Fst, target: &[u32]) -> PeekabooResult {
                     for &packed in dest_set {
                         let (_, buf_len, extra_sym, truncated) = unpack_peekaboo(packed);
                         if truncated && extra_sym != NO_EXTRA {
-                            // Determine the effective extra at this step.
                             let prefix_len = if buf_len > 0 { buf_len - 1 } else { 0 };
                             let eff_extra = if prefix_len >= step_n {
                                 extra_sym
                             } else {
-                                // Re-interpreted: check if matches target
-                                continue; // This truncated state is actually incompatible
+                                continue;
                             };
                             if !univ_filters.contains_key(&eff_extra) {
                                 univ_filters.insert(
@@ -749,6 +809,9 @@ pub fn peekaboo_decompose(fst: &Fst, target: &[u32]) -> PeekabooResult {
                 }
             }
         }
+
+        per_step_visited.push(step_visited);
+        total_bfs_visited += step_visited as u64;
 
         // Q and R states that are non-truncated also sit on the boundary.
         for (&y_idx, q_states) in &decomp_q {
@@ -787,12 +850,35 @@ pub fn peekaboo_decompose(fst: &Fst, target: &[u32]) -> PeekabooResult {
         }
     }
 
+    let bfs_ms = bfs_start.elapsed().as_secs_f64() * 1000.0;
+
+    // Compute arena stats.
+    let arena_size = arena.len() as u32;
+    let mut max_powerset_size: usize = 0;
+    let total_nfa_states: usize = arena.sets.iter().map(|s| {
+        let sz = s.len();
+        if sz > max_powerset_size {
+            max_powerset_size = sz;
+        }
+        sz
+    }).sum();
+    let avg_powerset_size = if arena_size > 0 {
+        total_nfa_states as f64 / arena_size as f64
+    } else {
+        0.0
+    };
+
+    // Merged incoming stats.
+    let merged_incoming_states = merged_incoming.len() as u32;
+    let merged_incoming_arcs: u64 = merged_incoming.values().map(|v| v.len() as u64).sum();
+
     // Extract trimmed FSAs via backward BFS from Q/R stops.
+    let extract_start = Instant::now();
     let start_id = global_start_id;
 
-    let mut result = PeekabooResult {
-        per_symbol: FxHashMap::default(),
-    };
+    let mut per_symbol_result: FxHashMap<u32, (FsaResult, FsaResult)> = FxHashMap::default();
+    let mut per_symbol_q_stops: Vec<(u32, u32)> = Vec::new();
+    let mut per_symbol_r_stops: Vec<(u32, u32)> = Vec::new();
 
     for &sym in &output_alphabet {
         let y_idx = sym_to_idx[&sym];
@@ -800,13 +886,47 @@ pub fn peekaboo_decompose(fst: &Fst, target: &[u32]) -> PeekabooResult {
         let q_stops: Vec<u32> = decomp_q.get(&y_idx).cloned().unwrap_or_default();
         let r_stops: Vec<u32> = decomp_r.get(&y_idx).cloned().unwrap_or_default();
 
+        per_symbol_q_stops.push((sym, q_stops.len() as u32));
+        per_symbol_r_stops.push((sym, r_stops.len() as u32));
+
         let q_fsa = trimmed_fsa(start_id, &q_stops, &merged_incoming);
         let r_fsa = trimmed_fsa(start_id, &r_stops, &merged_incoming);
 
-        result.per_symbol.insert(sym, (q_fsa, r_fsa));
+        per_symbol_result.insert(sym, (q_fsa, r_fsa));
     }
 
-    result
+    let extract_ms = extract_start.elapsed().as_secs_f64() * 1000.0;
+    let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
+
+    PeekabooResult {
+        per_symbol: per_symbol_result,
+        stats: PeekabooProfileStats {
+            total_ms,
+            init_ms,
+            bfs_ms,
+            extract_ms,
+            num_steps: (target_len + 1) as u32,
+            per_step_visited,
+            per_step_frontier_size,
+            total_bfs_visited,
+            compute_arcs_ms,
+            compute_arcs_calls,
+            intern_ms,
+            intern_calls,
+            universal_ms,
+            universal_calls,
+            universal_true,
+            universal_false,
+            arena_size,
+            max_powerset_size,
+            avg_powerset_size,
+            merged_incoming_states,
+            merged_incoming_arcs,
+            eps_cache_clears,
+            per_symbol_q_stops,
+            per_symbol_r_stops,
+        },
+    }
 }
 
 /// Build a trimmed FSA by backward BFS from stop states through the incoming graph.

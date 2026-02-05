@@ -1,7 +1,6 @@
 use pyo3::prelude::*;
 use crate::fst::Fst;
 use crate::decompose;
-use crate::token_decompose;
 use crate::peekaboo;
 
 /// Python-visible FST wrapper. Constructed once from Python arrays, then
@@ -161,13 +160,8 @@ pub struct DecompResult {
 /// Perform the fused decomposition: given a Rust FST and a target sequence,
 /// compute the quotient (Q) and remainder (R) automata.
 #[pyfunction]
-#[pyo3(signature = (fst, target, force_generic=false))]
-pub fn rust_decompose(py: Python<'_>, fst: &RustFst, target: Vec<u32>, force_generic: bool) -> PyResult<DecompResult> {
-    let result = if fst.inner.all_input_universal && !force_generic {
-        token_decompose::decompose_token_level(&fst.inner, &target)
-    } else {
-        decompose::decompose(&fst.inner, &target)
-    };
+pub fn rust_decompose(py: Python<'_>, fst: &RustFst, target: Vec<u32>) -> PyResult<DecompResult> {
+    let result = decompose::decompose(&fst.inner, &target);
 
     let q = Py::new(
         py,
@@ -232,6 +226,79 @@ pub fn rust_decompose(py: Python<'_>, fst: &RustFst, target: Vec<u32>, force_gen
 // Peekaboo decomposition
 // ---------------------------------------------------------------------------
 
+/// Python-visible peekaboo profiling stats.
+#[pyclass]
+pub struct RustPeekabooStats {
+    #[pyo3(get)]
+    pub total_ms: f64,
+    #[pyo3(get)]
+    pub init_ms: f64,
+    #[pyo3(get)]
+    pub bfs_ms: f64,
+    #[pyo3(get)]
+    pub extract_ms: f64,
+    #[pyo3(get)]
+    pub num_steps: u32,
+    #[pyo3(get)]
+    pub per_step_visited: Vec<u32>,
+    #[pyo3(get)]
+    pub per_step_frontier_size: Vec<u32>,
+    #[pyo3(get)]
+    pub total_bfs_visited: u64,
+    #[pyo3(get)]
+    pub compute_arcs_ms: f64,
+    #[pyo3(get)]
+    pub compute_arcs_calls: u64,
+    #[pyo3(get)]
+    pub intern_ms: f64,
+    #[pyo3(get)]
+    pub intern_calls: u64,
+    #[pyo3(get)]
+    pub universal_ms: f64,
+    #[pyo3(get)]
+    pub universal_calls: u64,
+    #[pyo3(get)]
+    pub universal_true: u64,
+    #[pyo3(get)]
+    pub universal_false: u64,
+    #[pyo3(get)]
+    pub arena_size: u32,
+    #[pyo3(get)]
+    pub max_powerset_size: usize,
+    #[pyo3(get)]
+    pub avg_powerset_size: f64,
+    #[pyo3(get)]
+    pub merged_incoming_states: u32,
+    #[pyo3(get)]
+    pub merged_incoming_arcs: u64,
+    #[pyo3(get)]
+    pub eps_cache_clears: u32,
+}
+
+#[pymethods]
+impl RustPeekabooStats {
+    fn __repr__(&self) -> String {
+        format!(
+            "PeekabooStats(\n\
+             \x20 total={:.2}ms  init={:.2}ms  bfs={:.2}ms  extract={:.2}ms\n\
+             \x20 steps={}, total_bfs_visited={}\n\
+             \x20 compute_arcs: {:.2}ms ({} calls)\n\
+             \x20 intern: {:.2}ms ({} calls)\n\
+             \x20 universal: {:.2}ms ({} calls, {} true, {} false)\n\
+             \x20 arena: {} states, max_pset={}, avg_pset={:.1}\n\
+             \x20 incoming: {} states, {} arcs\n\
+             )",
+            self.total_ms, self.init_ms, self.bfs_ms, self.extract_ms,
+            self.num_steps, self.total_bfs_visited,
+            self.compute_arcs_ms, self.compute_arcs_calls,
+            self.intern_ms, self.intern_calls,
+            self.universal_ms, self.universal_calls, self.universal_true, self.universal_false,
+            self.arena_size, self.max_powerset_size, self.avg_powerset_size,
+            self.merged_incoming_states, self.merged_incoming_arcs,
+        )
+    }
+}
+
 /// Python-visible peekaboo decomposition result.
 /// Contains per-symbol (quotient, remainder) pairs.
 #[pyclass]
@@ -240,6 +307,8 @@ pub struct PeekabooDecompResult {
     per_symbol: rustc_hash::FxHashMap<u32, (Py<RustFsa>, Py<RustFsa>)>,
     /// All output symbols in sorted order (for iteration).
     symbols: Vec<u32>,
+    /// Profiling stats.
+    stats: Py<RustPeekabooStats>,
 }
 
 #[pymethods]
@@ -262,6 +331,11 @@ impl PeekabooDecompResult {
     /// Get all output symbols.
     fn symbols(&self) -> Vec<u32> {
         self.symbols.clone()
+    }
+
+    /// Get profiling stats.
+    fn stats(&self, py: Python<'_>) -> Py<RustPeekabooStats> {
+        self.stats.clone_ref(py)
     }
 }
 
@@ -303,5 +377,31 @@ pub fn rust_peekaboo(py: Python<'_>, fst: &RustFst, target: Vec<u32>) -> PyResul
         per_symbol.insert(sym, (q, r));
     }
 
-    Ok(PeekabooDecompResult { per_symbol, symbols })
+    let s = &result.stats;
+    let stats = Py::new(py, RustPeekabooStats {
+        total_ms: s.total_ms,
+        init_ms: s.init_ms,
+        bfs_ms: s.bfs_ms,
+        extract_ms: s.extract_ms,
+        num_steps: s.num_steps,
+        per_step_visited: s.per_step_visited.clone(),
+        per_step_frontier_size: s.per_step_frontier_size.clone(),
+        total_bfs_visited: s.total_bfs_visited,
+        compute_arcs_ms: s.compute_arcs_ms,
+        compute_arcs_calls: s.compute_arcs_calls,
+        intern_ms: s.intern_ms,
+        intern_calls: s.intern_calls,
+        universal_ms: s.universal_ms,
+        universal_calls: s.universal_calls,
+        universal_true: s.universal_true,
+        universal_false: s.universal_false,
+        arena_size: s.arena_size,
+        max_powerset_size: s.max_powerset_size,
+        avg_powerset_size: s.avg_powerset_size,
+        merged_incoming_states: s.merged_incoming_states,
+        merged_incoming_arcs: s.merged_incoming_arcs,
+        eps_cache_clears: s.eps_cache_clears,
+    })?;
+
+    Ok(PeekabooDecompResult { per_symbol, symbols, stats })
 }
