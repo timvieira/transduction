@@ -342,7 +342,7 @@ class PeekabooState:
                 ensure_symbol(y)
 
                 if not continuous:
-                    # For AUI FSTs, universality ↔ finality (no filter needed).
+                    # For AUI (all-input-universal) FSTs, universality ↔ finality (no filter needed).
                     is_univ = (
                         y in final_symbols if _all_input_universal
                         else univ_filters[y].is_universal(state)
