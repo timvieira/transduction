@@ -543,3 +543,255 @@ via backward BFS over merged `incoming` graph) eliminates redundant arc storage 
 produces minimal machines per symbol. Issue 7 (integer positions) is the highest-impact
 remaining item — a cross-cutting improvement that speeds up every operation touching
 NFA states.
+
+---
+
+## Revised Efficiency Analysis (2025-02-04)
+
+The earlier issue list (above) was written before a careful analysis of where computation
+actually occurs in the BFS. Several impact assessments were overstated. This section
+provides a corrected analysis grounded in the traversal structure.
+
+### Key Structural Property: Each DFA State Is Expanded Exactly Once
+
+The main BFS in `PeekabooState.__init__` uses the `incoming` dict as its visited set.
+A state is added to the worklist only when `next_state not in incoming` (line 341).
+Therefore `dfa.arcs(state)` at line 339 is called **exactly once per DFA state** per
+depth. There is no redundancy in the main BFS arc computations.
+
+Furthermore, the PeekabooPrecover NFA is genuinely different at each depth — the
+truncation boundary moves from $N+K$ to $(N+1)+K$ — so resume frontier states produce
+different successors at depth $d+1$ than at depth $d$. Re-expanding them is not
+redundant work; it discovers new states that were beyond the truncation boundary at the
+previous depth.
+
+### Where Additional `arcs()` Calls Actually Happen
+
+The only place where `arcs()` is called outside the main BFS is inside
+`UniversalityFilter._bfs_universal` (fst.py:897-915). This sub-BFS checks whether a
+DFA state accepts $\Sigma^*$ by traversing the `TruncatedDFA` graph. It explores
+**refined** states — subsets of the main BFS states produced by `TruncatedDFA.refine()`,
+which filters to NFA states compatible with a specific target extension $y$ and clips
+buffer strings to length $N$.
+
+These refined states are distinct from the main BFS states, so the sub-BFS is genuinely
+exploring new territory. However, it is bounded by the `UniversalityFilter` cascade:
+
+1. **`all_input_universal` fast path** (BPE case): `_bfs_universal` is **never called**.
+   Every final state is immediately classified as universal. This is the primary use case.
+
+2. **Witness check**: ip-universal witness intersection, O(min(|witnesses|, |state|)).
+
+3. **Monotonicity caches**: Subset/superset lookups against known-universal and
+   known-non-universal states.
+
+4. **`_bfs_universal`**: Only reached when all fast paths miss.
+
+A subtlety: `_bfs_universal` caches the **starting state's** result (via `_add_pos` /
+`_add_neg`), but intermediate states visited during the sub-BFS are NOT individually
+cached. Two different main-BFS states triggering `_bfs_universal` could explore
+overlapping sub-BFS regions. The monotonicity caches partially mitigate this (a known
+universal/non-universal starting state can short-circuit via subset/superset), but
+they don't cover intermediate states.
+
+### Corrected Impact of Issues 3 and 5
+
+**Issue 3 (refine allocations)** and **Issue 5 (LazyDeterminize arc cache)** were
+originally motivated by the assumption that `arcs()` is called multiple times per state.
+Given that the main BFS calls `arcs()` once per state, these are relevant only inside
+`_bfs_universal` sub-BFS calls, which:
+
+- Never fire for BPE FSTs (`all_input_universal = true`)
+- Are bounded by the monotonicity cache for general FSTs
+- Operate on refined states distinct from the main BFS
+
+Their actual impact is **low** unless the FST triggers many `_bfs_universal` fallbacks
+(e.g., non-BPE FSTs with few ip-universal witnesses and poor monotonicity cache hit
+rates). In that specific scenario, caching the underlying `LazyDeterminize.arcs()` and
+memoizing `refine()` would help reduce the cost of overlapping sub-BFS graphs.
+
+### Corrected Impact of Issue 4 (Epsilon Closure Sharing) — Empirical Study
+
+Each depth creates a fresh `EpsilonRemove` with an empty `_closure_cache`. The
+`PeekabooPrecover` NFA has epsilon transitions only when the FST has **input-side**
+epsilon arcs (`EPSILON in fst.A`). For FSTs without them (the common case: BPE
+tokenizers, simple replacement FSTs), `EpsilonRemove` is a pure no-op wrapper.
+
+#### Empirical hit/miss study
+
+Instrumented all test examples to measure:
+- **LD arcs**: `LazyDeterminize.arcs()` calls from main BFS vs universality sub-BFS
+- **Cross-depth eps closure**: correctness of sharing (would cached result be right?)
+- **Universality filter**: which cascade level resolves each check
+- **Time in eps closure**: fraction of total runtime
+
+```
+Example                eps? | XDepth closure (correct/WRONG/miss)     | Univ filter (AUI/other)
+abc                       N |    2461 correct /    0 WRONG /  781 miss |  2930 AUI /     0 other
+delete_b                  N |      47 correct /    0 WRONG /    7 miss |    21 AUI /     0 other
+samuel                    Y |     124 correct /    7 WRONG /   14 miss |     0 AUI /    42 other
+small                     N |     192 correct /    0 WRONG /   34 miss |     0 AUI /   130 other
+duplicate                 Y |     567 correct /  214 WRONG /  156 miss |   815 AUI /     0 other
+number_comma_sep          Y |    1328 correct /   45 WRONG /  254 miss |     0 AUI /   951 other
+lookahead                 N |     872 correct /    0 WRONG /   72 miss |     0 AUI /   358 other
+weird_copy                Y |     257 correct /    0 WRONG /   63 miss |   258 AUI /     0 other
+triplets_of_doom          N |    4241 correct /    0 WRONG /  349 miss |     0 AUI /   512 other
+infinite_quotient         Y |      12 correct /    0 WRONG /    2 miss |     0 AUI /     2 other
+parity                    Y |      33 correct /    3 WRONG /    2 miss |     0 AUI /     6 other
+```
+
+**Key finding 1: `_bfs_universal` is never reached.** The "univ" (from-universality)
+column was **all zeros** across every example. The UniversalityFilter always short-circuits
+via `all_input_universal`, witnesses, or monotonicity caches before reaching the BFS
+fallback. This means **DFA transition caching (Issue 5) has zero benefit** for these
+examples, and **refine memoization (Issue 3) has zero benefit** since `refine` is only
+called inside `_bfs_universal` sub-BFS.
+
+**Key finding 2: Cross-depth eps closure sharing is unsafe for eps FSTs.** The WRONG
+column shows that naively sharing the cache would produce incorrect results for FSTs
+with input-epsilon arcs (duplicate: 214 WRONG = 22.8%). The incorrect entries are for
+NFA states at the truncation boundary (`len(ys) >= N_previous`), whose transitions
+change when the target length grows. For no-eps FSTs, WRONG is always 0 — but closures
+are trivially `{state}`, so there's nothing meaningful to cache.
+
+**Key finding 3: Eps closure is 11-19% of total runtime.**
+
+```
+Example                eps? |  total_ms  closure_ms    pct
+abc                       N |     51 ms     8.3 ms  13.7%
+triplets_of_doom          N |     43 ms     8.1 ms  14.5%
+lookahead                 N |     13 ms     1.7 ms  11.7%
+duplicate                 Y |     19 ms     5.1 ms  19.1%
+number_comma_sep          Y |     25 ms     4.8 ms  13.7%
+```
+
+For no-eps FSTs, this is pure function call overhead on trivial `{state}` closures
+(~2μs each). The fix is not caching — it's **bypassing `EpsilonRemove` entirely**.
+
+#### Fix applied: bypass EpsilonRemove for no-eps FSTs ✅
+
+Added `PeekabooPrecover.epsremove()` override that returns `self` (no wrapper) when
+`EPSILON not in fst.A`. Benchmark results (best of 5 runs):
+
+```
+Example                has_eps |  old_ms  new_ms  speedup
+abc                          N |   47.5    40.4    1.18x
+delete_b                     N |    0.6     0.5    1.11x
+small                        N |    3.4     3.1    1.09x
+lookahead                    N |   12.0     8.9    1.35x
+triplets_of_doom             N |   38.3    31.2    1.23x
+samuel                       Y |    1.7     1.9    1.00x  (unaffected)
+duplicate                    Y |   16.6    17.0    1.00x  (unaffected)
+```
+
+**1.09x–1.35x speedup** for FSTs without input-epsilon arcs. No effect on eps FSTs.
+
+#### Cross-depth sharing: attempted and abandoned
+
+Also implemented cross-depth sharing with selective invalidation (copy parent's cache,
+remove entries where `len(ys) >= N_previous`). Benchmarked separately: the dict
+comprehension overhead offset the savings — neutral to slightly negative on all eps-FST
+examples. The closure computations are cheap enough (~2-5μs) that the copy cost dominates.
+Reverted.
+
+### Remaining Optimizations
+
+The following are the recommendations that survive the corrected analysis and empirical
+study.  They are ordered by expected impact, but note the caveats raised by the study.
+
+#### 1. Integer-Encode NFA States (replaces strings with arithmetic)
+
+**Current**: NFA states are `(fst_state, ys_string, truncated)`. The `ys` string is
+always either a prefix of the target (when `len(ys) <= N`) or `target + one_symbol`
+(when `len(ys) == N+1`). The first $N$ characters are redundant — they're always
+`target[:len(ys)]`.
+
+**Proposed**: Replace with `(fst_state, progress: int, ext_sym: Optional[symbol], truncated: bool)`:
+- `progress` ∈ {0, ..., N}: how many target symbols have been matched
+- `ext_sym`: the one lookahead symbol (meaningful only when `progress == N`; `None` otherwise)
+- `truncated`: bool (meaningful only when `progress == N`)
+
+This turns:
+- String hashing → integer/tuple hashing (O(1) instead of O(N))
+- String slicing and concatenation → integer increment
+- Prefix comparison in `PeekabooPrecover.arcs()` → impossible by construction (progress always tracks a valid prefix position)
+- `refine()` → simple filter on `ext_sym == y` (no string slicing)
+
+Since NFA states are elements of frozenset DFA states, the improvement compounds:
+hashing a DFA state of size $k$ goes from O($k \times N$) to O($k$).
+
+**Caveat**: The empirical study shows the main BFS visits each state exactly once.
+The hashing cost is real but may be modest relative to the arc-computation cost in
+`LazyDeterminize.arcs()` (iterating NFA states, grouping by symbol, building frozensets).
+The improvement is asymptotic in $N$ (target length), so it matters more for long targets.
+
+#### 2. Integer-Intern DFA States (frozenset → int ID)
+
+**Current**: DFA states are `frozenset`s. Every `incoming` lookup, worklist membership
+check, and dict key operation hashes the full frozenset — O(|state|) per operation.
+
+**Proposed**: Assign each unique frozenset an integer ID via an interner (cf. the
+`Integerizer` from arsenal, or the approach in Rust `powerset.rs`). Benefits:
+- O(1) hash/compare for all DFA state operations
+- Enables integer-indexed transition tables
+- Metadata (is_truncated, relevant_symbols, is_final_for_symbol) can be stored in
+  arrays indexed by ID, computed once at interning time
+
+The interning cost is paid once per new DFA state. All subsequent operations are O(1).
+
+**Caveat**: Every operation that needs the NFA states inside a DFA state (arc computation,
+metadata extraction, universality checks) must unpack via a reverse lookup. The main BFS
+calls `LazyDeterminize.arcs(Q)` once per state, which iterates `for i in Q:` — this
+would become a table lookup + iteration over the stored frozenset. Whether the net effect
+is positive depends on how many hash/compare operations are saved vs how many unpack
+operations are added. The study suggests caution: the main BFS is the dominant cost, and
+arc computation (not hashing) is its bottleneck.
+
+#### 3. Single Backward BFS for All Symbols in `_trimmed_fsa`
+
+**Current**: `Peekaboo.__call__` runs a separate `_trimmed_fsa` backward BFS for each
+symbol $y$ in the target alphabet (line 150-151). For byte-level alphabets (|Σ| = 256),
+this means 256 separate backward BFS traversals through the same `merged_incoming` graph.
+
+**Proposed**: Run one backward BFS from the union of all Q/R stop states, tagging each
+backward-reachable state with which symbols it serves. Then partition the tagged graph
+into per-symbol FSAs. This replaces O(|Σ| × |states|) work with O(|states| + |Σ|).
+
+In practice, many symbols may have empty Q/R (no decomposition), so the savings depend
+on how many symbols are active. But for large alphabets this could be significant.
+
+#### 4. Adaptive Truncation Policy (Algorithmic Change)
+
+**Current**: K=1 always. Every DFA state that has output beyond the target by more than
+one symbol is truncated, generating resume frontier entries for the next depth.
+
+The comment at lines 11-26 of `peekaboo_recursive.py` already identifies this as a
+cost-benefit knob. Aggressive truncation (small K) minimizes per-depth work but
+maximizes the number of truncated states (larger resume frontiers, more work deferred
+to later depths). Lazy truncation (larger K) allows more resolution at the current
+depth but risks a larger intermediate state space.
+
+Ideas for smarter policies:
+- **Adaptive K**: If the sub-automaton reachable from a state is small (few states,
+  no cycles), don't truncate — resolve it entirely now.
+- **Cycle detection**: Only truncate states on cycles. Acyclic sub-automata are finite
+  and will terminate without truncation.
+- **Depth-varying K**: Use larger K at later depths where the target prefix constrains
+  the state space more tightly.
+
+This is the deepest algorithmic lever — potentially changing total work across depths —
+but also the hardest to evaluate without empirical measurement on real FSTs.
+
+### Revised Priority Table (Empirically Informed)
+
+| Priority | Recommendation | Status | Impact |
+|----------|---------------|--------|--------|
+| 1 | Bypass EpsilonRemove for no-eps FSTs | ✅ Done | 1.09x–1.35x on no-eps FSTs |
+| 2 | Integer-encode NFA states | Open | Scales with N; unclear constant factor |
+| 3 | Integer-intern DFA states | Open | Saves hashing; adds unpack overhead |
+| 4 | Single backward BFS for all symbols | Open | Scales with |Σ| |
+| 5 | Adaptive truncation policy | Open | Unknown; needs experiments |
+| — | ~~DFA transition cache (Issue 5)~~ | Rejected | `_bfs_universal` never called |
+| — | ~~Refine memoization (Issue 3)~~ | Rejected | `_bfs_universal` never called |
+| — | ~~Epsilon closure sharing across depths~~ | Rejected | Unsafe for eps FSTs; overhead ≥ savings |
+| — | ~~Persist UniversalityFilter caches~~ | Rejected | `_bfs_universal` never called |

@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 use crate::fst::Fst;
 use crate::decompose;
 use crate::token_decompose;
+use crate::peekaboo;
 
 /// Python-visible FST wrapper. Constructed once from Python arrays, then
 /// passed to `decompose()` repeatedly.
@@ -225,4 +226,82 @@ pub fn rust_decompose(py: Python<'_>, fst: &RustFst, target: Vec<u32>, force_gen
         remainder: r,
         stats,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Peekaboo decomposition
+// ---------------------------------------------------------------------------
+
+/// Python-visible peekaboo decomposition result.
+/// Contains per-symbol (quotient, remainder) pairs.
+#[pyclass]
+pub struct PeekabooDecompResult {
+    /// Map from u32 output symbol to (RustFsa, RustFsa).
+    per_symbol: rustc_hash::FxHashMap<u32, (Py<RustFsa>, Py<RustFsa>)>,
+    /// All output symbols in sorted order (for iteration).
+    symbols: Vec<u32>,
+}
+
+#[pymethods]
+impl PeekabooDecompResult {
+    /// Get (quotient, remainder) for a specific output symbol.
+    fn get(&self, py: Python<'_>, symbol: u32) -> PyResult<Option<(Py<RustFsa>, Py<RustFsa>)>> {
+        Ok(self.per_symbol.get(&symbol).map(|(q, r)| (q.clone_ref(py), r.clone_ref(py))))
+    }
+
+    /// Get the quotient FSA for a specific output symbol.
+    fn quotient(&self, py: Python<'_>, symbol: u32) -> PyResult<Option<Py<RustFsa>>> {
+        Ok(self.per_symbol.get(&symbol).map(|(q, _)| q.clone_ref(py)))
+    }
+
+    /// Get the remainder FSA for a specific output symbol.
+    fn remainder(&self, py: Python<'_>, symbol: u32) -> PyResult<Option<Py<RustFsa>>> {
+        Ok(self.per_symbol.get(&symbol).map(|(_, r)| r.clone_ref(py)))
+    }
+
+    /// Get all output symbols.
+    fn symbols(&self) -> Vec<u32> {
+        self.symbols.clone()
+    }
+}
+
+/// Perform peekaboo decomposition: given a Rust FST and a target sequence,
+/// compute per-symbol quotient and remainder automata for the next target symbol.
+#[pyfunction]
+pub fn rust_peekaboo(py: Python<'_>, fst: &RustFst, target: Vec<u32>) -> PyResult<PeekabooDecompResult> {
+    let result = peekaboo::peekaboo_decompose(&fst.inner, &target);
+
+    let mut per_symbol = rustc_hash::FxHashMap::default();
+    let mut symbols: Vec<u32> = result.per_symbol.keys().copied().collect();
+    symbols.sort_unstable();
+
+    for (sym, (q_fsa, r_fsa)) in result.per_symbol {
+        let q = Py::new(
+            py,
+            RustFsa {
+                num_states: q_fsa.num_states,
+                start: q_fsa.start,
+                stop: q_fsa.stop,
+                src: q_fsa.arc_src,
+                lbl: q_fsa.arc_lbl,
+                dst: q_fsa.arc_dst,
+            },
+        )?;
+
+        let r = Py::new(
+            py,
+            RustFsa {
+                num_states: r_fsa.num_states,
+                start: r_fsa.start,
+                stop: r_fsa.stop,
+                src: r_fsa.arc_src,
+                lbl: r_fsa.arc_lbl,
+                dst: r_fsa.arc_dst,
+            },
+        )?;
+
+        per_symbol.insert(sym, (q, r));
+    }
+
+    Ok(PeekabooDecompResult { per_symbol, symbols })
 }
