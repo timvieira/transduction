@@ -1,9 +1,13 @@
 """
 PTB Tokenizer FST built using pynini.
 
-This uses pynini's cdrewrite rules to create a compact FST (~130 states) that matches
-NLTK's TreebankWordTokenizer behavior. The pynini FST is then converted to our native
+This uses pynini's cdrewrite rules to create a compact FST that matches
+NLTK's TreebankWordTokenizer behavior. The pynini FST is then converted to the native
 FST format for use with the Rust decomposition backend.
+
+To match NLTK's behavior for period handling, input text must be terminated
+with an end-of-string marker (EOS = '\x03'). NLTK's TreebankWordTokenizer only separates periods when
+followed by EOS. Use string_to_byte_strs() which automatically appends EOS.
 
 Based on the reference implementation in ptb.py.
 """
@@ -14,10 +18,11 @@ from transduction.fst import FST
 from transduction.fsa import EPSILON as NATIVE_EPSILON
 
 
-# Special symbols
+# TODO better handling of these symbols, need to change EOS
 EPS = "<eps>"
 MARKER = '0'  # Null byte used as internal word boundary marker
 SEP = '258'   # Output separator symbol (word boundary in final output)
+EOS = '3'     # End-of-string marker (ETX byte) - used to detect string end for period handling
 
 
 def char_to_byte_str(ch):
@@ -25,9 +30,17 @@ def char_to_byte_str(ch):
     return str(ord(ch))
 
 
-def string_to_byte_strs(s):
-    """Convert a string to tuple of byte value strings."""
-    return tuple(str(b) for b in s.encode('utf-8'))
+def string_to_byte_strs(s, add_eos=True):
+    """Convert a string to tuple of byte value strings.
+
+    Args:
+        s: Input string
+        add_eos: If True, append end-of-string marker (required for NLTK-compatible period handling)
+    """
+    byte_strs = tuple(str(b) for b in s.encode('utf-8'))
+    if add_eos:
+        byte_strs = byte_strs + (EOS,)
+    return byte_strs
 
 
 def decode_ptb_output(output_tuple):
@@ -41,7 +54,7 @@ def decode_ptb_output(output_tuple):
                 byte_vals = [int(b) for b in current_token]
                 tokens.append(bytes(byte_vals).decode('utf-8', errors='replace'))
                 current_token = []
-        elif sym != MARKER and sym != NATIVE_EPSILON:
+        elif sym != MARKER and sym != NATIVE_EPSILON and sym != EOS:
             current_token.append(sym)
 
     if current_token:
@@ -124,6 +137,7 @@ def build_ptb_fst_pynini():
 
     # Common acceptors
     MARKER_ACC = pynini.accep("0", token_type=symbols)
+    EOS_ACC = pynini.accep(EOS, token_type=symbols)  # End-of-string marker
     SPACE = cb(" ")
     APOS = cb("'")
     QUOTE = cb('"')
@@ -132,11 +146,11 @@ def build_ptb_fst_pynini():
     BACKTICK = cb("`")
     DOUBLE_BACKTICK = BACKTICK + BACKTICK
 
-    # Build sigma (all bytes 0-255)
+    # Build sigma (all bytes 0-255 including EOS)
     sigma = pynini.union(*[pynini.accep(str(i), token_type=symbols) for i in range(256)])
     sigma_star = pynini.closure(sigma)
 
-    # Identity FST as base
+    # Identity FST as base (passes through all bytes including EOS)
     identity_fst = pynini.Fst()
     s = identity_fst.add_state()
     identity_fst.set_start(s)
@@ -148,6 +162,12 @@ def build_ptb_fst_pynini():
     identity_fst.set_output_symbols(symbols)
     identity_fst = identity_fst.closure()
 
+    # EOS stripper - removes the end-of-string marker from output
+    eos_strip = cdrewrite(
+        cross(EOS_ACC, pynini.accep("", token_type=symbols)),  # Delete EOS
+        "", "", sigma_star
+    ).optimize()
+
     # === Quote handling ===
     # We process quotes in a specific order:
     # 1. Convert closing quotes (after word chars) to ''
@@ -156,11 +176,16 @@ def build_ptb_fst_pynini():
     # 4. Wrap existing `` with markers
 
     # Characters that can precede a CLOSING quote
+    # Include UTF-8 continuation bytes (128-191 / 0x80-0xBF) for accented characters
+    UTF8_CONTINUATION_BYTES = union(*[pynini.accep(str(i), token_type=symbols) for i in range(128, 192)])
     WORD_CHARS = union(
         *[cb(chr(i)) for i in range(ord('a'), ord('z')+1)],  # lowercase
         *[cb(chr(i)) for i in range(ord('A'), ord('Z')+1)],  # uppercase
         *[cb(chr(i)) for i in range(ord('0'), ord('9')+1)],  # digits
-        APOS, cb("!"), cb("?"), cb("."), cb(")")  # punctuation that can end before closing quote
+        APOS, cb("!"), cb("?"), cb("."), cb(")"), cb(","),  # punctuation
+        cb(";"), cb(":"),  # semicolon and colon can precede closing quote
+        cb("]"),  # closing bracket can precede closing quote
+        UTF8_CONTINUATION_BYTES,  # UTF-8 continuation bytes for accented chars
     )
 
     # Characters that can precede an OPENING quote
@@ -199,17 +224,20 @@ def build_ptb_fst_pynini():
     DIGIT = union(*[cb(str(i)) for i in range(10)])
     NON_DIGIT = pynini.difference(sigma, DIGIT).optimize()
 
-    # , and : before non-digit or at end
+    # , and : before non-digit
+    # NLTK regex: ([:,])([^\d]) - only separate when followed by non-digit
     punct_1 = cdrewrite(
         cross(cb(","), MARKER_ACC + cb(",") + MARKER_ACC) |
         cross(cb(":"), MARKER_ACC + cb(":") + MARKER_ACC),
         "", NON_DIGIT, sigma_star
     )
 
+    # , and : at end of string only (before EOS)
+    # NLTK regex: ([:,])$ - only at end of string
     punct_2 = cdrewrite(
         cross(cb(","), MARKER_ACC + cb(",") + MARKER_ACC) |
         cross(cb(":"), MARKER_ACC + cb(":") + MARKER_ACC),
-        "", pynini.accep("", token_type=symbols), sigma_star
+        "", EOS_ACC, sigma_star
     )
 
     # Ellipsis
@@ -225,15 +253,29 @@ def build_ptb_fst_pynini():
         "", "", sigma_star
     )
 
-    # Period at end
+    # Period at end - ONLY separate when followed by EOS (end of string)
+    # This matches NLTK's behavior which uses $ regex anchor
+    # NLTK regex: ([^\.])(\.)([\]\)}>"']*)\s*$
+    # Period is separated when followed by optional closing punct, optional whitespace, then EOS
     NON_DOT = pynini.difference(sigma, DOT).optimize()
+
+    # Optional closing punctuation that can appear after period before EOS
+    # Note: quotes are already converted to '' by quotes_fst at this point
+    # The marker bytes around '' are from the quote conversion
+    CLOSING_PUNCT = union(
+        cb("]"), cb(")"), cb("}"), cb(">"),
+        APOS,  # Single apostrophe
+        MARKER_ACC,  # Marker bytes from quote conversion
+    )
+    CLOSING_PUNCT_STAR = pynini.closure(CLOSING_PUNCT)
+
+    # Optional whitespace (spaces) before EOS
+    WHITESPACE_STAR = pynini.closure(SPACE)
+
     punct_5 = cdrewrite(
         cross(DOT, MARKER_ACC + DOT),
         NON_DOT,
-        union(
-            pynini.accep("", token_type=symbols),
-            APOS + APOS + pynini.accep("", token_type=symbols)
-        ),
+        CLOSING_PUNCT_STAR + WHITESPACE_STAR + EOS_ACC,  # Period followed by optional closing punct, optional spaces, then EOS
         sigma_star
     )
 
@@ -261,8 +303,8 @@ def build_ptb_fst_pynini():
 
     # === Clitics and contractions ===
     NON_APOS_OR_SPACE_OR_MARKER = pynini.difference(sigma, union(APOS, SPACE, MARKER_ACC)).optimize()
-    # Use only actual characters for right context boundaries (not empty string)
-    SEP_CHARS = union(MARKER_ACC, SPACE)
+    # Right context for clitics: space, marker, apostrophe (for 's' followed by quote), or EOS
+    SEP_CHARS = union(MARKER_ACC, SPACE, APOS, EOS_ACC)
 
     # Clitics: 's 'm 'd
     clitics_1 = [cs(c) for c in ["'s", "'m", "'d", "'S", "'M", "'D"]]
@@ -283,10 +325,12 @@ def build_ptb_fst_pynini():
         NON_APOS_OR_SPACE_OR_MARKER, SEP_CHARS, sigma_star
     )
 
-    # Standalone apostrophe at word end
+    # Standalone apostrophe at word end (before space or EOS)
+    # NLTK rule: ([^' ])(' ) - separates trailing ' before space
+    SEP_CHARS_OR_EOS = union(MARKER_ACC, SPACE, EOS_ACC)
     apos_rule = cdrewrite(
         cross(APOS, MARKER_ACC + APOS),
-        NON_APOS_OR_SPACE_OR_MARKER, SEP_CHARS, sigma_star
+        NON_APOS_OR_SPACE_OR_MARKER, SEP_CHARS_OR_EOS, sigma_star
     )
 
     clitics_fst = (endq_3 @ endq_4 @ apos_rule).optimize()
@@ -339,6 +383,7 @@ def build_ptb_fst_pynini():
     core_fst = (core_fst @ clitics_fst).optimize()  # Handle clitics ('s, 'll, n't, etc.)
     core_fst = (core_fst @ contractions_fst).optimize()
     core_fst = (core_fst @ space_to_marker).optimize()
+    core_fst = (core_fst @ eos_strip).optimize()  # Strip EOS marker from output
 
     print(f"Core PTB FST: {core_fst.num_states()} states")
 
