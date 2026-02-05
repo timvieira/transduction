@@ -1,13 +1,23 @@
-from transduction import FST, FSA, EPSILON, PrecoverDecomp, examples, Precover
-from transduction.util import display_table
+from transduction import Precover, LazyPrecoverNFA
 
 import numpy as np
-from arsenal.datastructures import LocatorMaxHeap
 from dataclasses import dataclass
+from arsenal.datastructures import LocatorMaxHeap
 
 from arsenal import colors
 from arsenal.maths import sample
-from tokenization.util import logsumexp, Chart
+
+
+def logsumexp(arr):
+    arr = np.array(arr, dtype=np.float64)
+    arr = arr[arr > -np.inf]
+    if len(arr) == 0: return -np.inf
+    vmax = arr.max()
+    arr -= vmax
+    np.exp(arr, out=arr)
+    out = np.log(arr.sum())
+    out += vmax
+    return out
 
 
 @dataclass(frozen=False, eq=True, unsafe_hash=True)
@@ -21,9 +31,18 @@ class Item:
 
 
 class prioritized_enumeration:
-    def __init__(self, lm, fst, target, max_steps, empty='', extend=(lambda x,y: x+y)):
+    def __init__(self, lm, fst, target, max_steps, decompose=None):
+        """
+        Args:
+            decompose: A callable ``(fst, target) -> PrecoverDecomp`` returning
+                an object with ``.quotient`` and ``.remainder`` FSAs.  Defaults
+                to ``Precover``.  Examples: ``NonrecursiveDFADecomp``,
+                ``RustDecomp``, ``TokenDecompose``.
+        """
 
-        precover = Precover(fst, target)
+        if decompose is None:
+            decompose = Precover
+        precover = decompose(fst, target)
         dfa = precover.quotient
         Q = precover.quotient.stop
         R = precover.remainder.stop
@@ -43,7 +62,6 @@ class prioritized_enumeration:
         self.Q = Q
         self.R = R
         self.precover = precover
-        self.dfa = dfa
         self.lm = lm
 
         self.run(max_steps)
@@ -51,7 +69,7 @@ class prioritized_enumeration:
     def run(self, max_steps):
         lm = self.lm
         EOS = lm.eos
-        
+
         t = 0
         while self.queue:
             t += 1
@@ -73,7 +91,8 @@ class prioritized_enumeration:
                 ))
             for x, next_state in self.dfa.arcs(item.state):
                 next_weight = float(item.weight + lm_logp_next[x])   # use LM state here
-                if next_weight == -np.inf: continue
+                if next_weight == -np.inf:
+                    continue
                 next_item = Item(
                     weight = next_weight,
                     state = next_state,
@@ -85,9 +104,18 @@ class prioritized_enumeration:
 
 class importance_sampling:
 
-    def __init__(self, lm, fst, target):
+    def __init__(self, lm, fst, target, decompose=None):
+        """
+        Args:
+            decompose: A callable ``(fst, target) -> PrecoverDecomp`` returning
+                an object with ``.quotient`` and ``.remainder`` FSAs.  Defaults
+                to ``Precover``.  Examples: ``NonrecursiveDFADecomp``,
+                ``RustDecomp``, ``TokenDecompose``.
+        """
 
-        precover = Precover(fst, target)
+        if decompose is None:
+            decompose = Precover
+        precover = decompose(fst, target)
         dfa = precover.quotient
         Q = precover.quotient.stop
         R = precover.remainder.stop
@@ -100,7 +128,6 @@ class importance_sampling:
         self.Q = Q
         self.R = R
         self.precover = precover
-        self.dfa = dfa
         self.lm = lm
 
     def sample(self, max_length=np.inf):

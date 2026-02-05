@@ -32,11 +32,6 @@ pub struct Fst {
 
     pub source_alphabet: Vec<u32>,
 
-    /// True if the input projection of this FST accepts Σ* from the start state.
-    /// When true, every final state in the decompose DFA is universal,
-    /// so `is_universal` can be skipped entirely.
-    pub all_input_universal: bool,
-
     /// Per-state flag: true if the state has at least one arc with non-epsilon input.
     /// Used by precover epsilon-closure filtering to identify "productive" NFA states.
     pub has_non_eps_input: Vec<bool>,
@@ -63,70 +58,6 @@ fn ip_eps_close(states: &[u32], fst: &Fst) -> Vec<u32> {
     let mut result: Vec<u32> = visited.into_iter().collect();
     result.sort_unstable();
     result
-}
-
-/// Quick O(N) check: is the input projection universal from the start state?
-///
-/// Works by checking that:
-/// 1. The start set is final
-/// 2. The start set is complete (has arcs for all source symbols)
-/// 3. Every successor's eps-closure contains the start set
-///
-/// If 3 holds, all reachable DFA states contain the start set, hence are
-/// all final and complete, hence the start state is universal.
-fn check_all_input_universal(fst: &Fst) -> bool {
-    let source_alpha_len = fst.source_alphabet.len();
-    if source_alpha_len == 0 {
-        return fst.start_states.iter().any(|&s| fst.is_final[s as usize]);
-    }
-
-    // Start set: eps-close of start states
-    let start = ip_eps_close(&fst.start_states, fst);
-
-    // Must be final
-    if !start.iter().any(|&s| fst.is_final[s as usize]) {
-        return false;
-    }
-
-    // Batch-compute all non-epsilon arcs from the start set
-    let mut by_symbol: FxHashMap<u32, FxHashSet<u32>> = FxHashMap::default();
-    for &s in &start {
-        for &(x, j) in &fst.index_i_xj[s as usize] {
-            if x != EPSILON {
-                by_symbol.entry(x).or_default().insert(j);
-            }
-        }
-    }
-
-    // Must be complete
-    if by_symbol.len() < source_alpha_len {
-        return false;
-    }
-
-    // Check that every successor's eps-closure contains the start set.
-    // Cache closures by destination set to avoid redundant BFS (e.g., BPE FSTs
-    // where all 50K symbols route to the same hub, producing identical closures).
-    let mut closure_cache: FxHashMap<Vec<u32>, bool> = FxHashMap::default();
-    for (_sym, raw_dests) in &by_symbol {
-        let mut raw_vec: Vec<u32> = raw_dests.iter().copied().collect();
-        raw_vec.sort_unstable();
-        raw_vec.dedup();
-        if let Some(&result) = closure_cache.get(&raw_vec) {
-            if !result {
-                return false;
-            }
-            continue;
-        }
-        let closed = ip_eps_close(&raw_vec, fst);
-        // Check start ⊆ closed (both are sorted)
-        let ok = start.iter().all(|&s| closed.binary_search(&s).is_ok());
-        closure_cache.insert(raw_vec, ok);
-        if !ok {
-            return false;
-        }
-    }
-
-    true
 }
 
 /// Greatest-fixpoint computation of ip-universal FST states.
@@ -282,7 +213,7 @@ impl Fst {
             .map(|i| index_i_xj[i].iter().any(|&(x, _)| x != EPSILON))
             .collect();
 
-        let mut fst = Fst {
+        Fst {
             num_states,
             start_states,
             is_final,
@@ -293,13 +224,8 @@ impl Fst {
             index_ix_j,
             index_ixy_j,
             source_alphabet,
-            all_input_universal: false,
             has_non_eps_input,
-        };
-
-        fst.all_input_universal = check_all_input_universal(&fst);
-
-        fst
+        }
     }
 
     /// Iterate arcs from a given source state.
@@ -332,24 +258,5 @@ mod tests {
         assert_eq!(fst.num_states, 1);
         assert!(fst.is_final[0]);
         assert_eq!(fst.arcs_from(0).len(), 2);
-        assert!(fst.all_input_universal);
-    }
-
-    #[test]
-    fn test_non_universal() {
-        // FST where state 0 → state 1 on input 0, but state 1 has no arcs
-        // Input projection: {0} on input 0 → {1}. {1} is not final → not universal.
-        let fst = Fst::new(
-            2,
-            vec![0],
-            &[0],
-            &[0],
-            &[0],
-            &[10],
-            &[1],
-            vec![0],
-        );
-
-        assert!(!fst.all_input_universal);
     }
 }

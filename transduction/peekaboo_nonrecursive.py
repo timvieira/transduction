@@ -35,6 +35,15 @@ class PeekabooStrings:
 
             # Shortcut: At most one of the `relevant_symbols` can be
             # continuous. If we find one, we can stop expanding.
+            #
+            # Proof (functional FSTs): Suppose state S is universal for
+            # both y and z (y != z).  FilteredDFA(target+y) recognises
+            # precover(target+y).  Universality from S means
+            # Reach(S)·Σ* ⊆ precover(target+y), and likewise for z.
+            # For a functional FST each input has a unique output, so
+            # precover(target+y) ∩ precover(target+z) = ∅.  Therefore
+            # Reach(S)·Σ* ⊆ ∅, but Reach(S) is non-empty (S is on the
+            # worklist), giving a contradiction.
             continuous = set()
             for y in relevant_symbols:
                 dfa_filtered = FilteredDFA(dfa=dfa, fst=self.fst, target=target + y)
@@ -82,6 +91,7 @@ class Peekaboo:
 
             # Shortcut: At most one of the `relevant_symbols` can be
             # continuous. If we find one, we can stop expanding.
+            # (See PeekabooStrings above for the proof sketch.)
             continuous = set()
             for y in relevant_symbols:
                 dfa_filtered = FilteredDFA(dfa=dfa, fst=self.fst, target=target + y)

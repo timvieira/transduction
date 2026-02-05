@@ -9,6 +9,7 @@ Usage:
 """
 
 from transduction.fsa import FSA, EPSILON
+from transduction.base import PrecoverDecomp
 from arsenal import Integerizer
 
 
@@ -110,3 +111,34 @@ class RustDecomp:
 
         self.quotient = to_python_fsa(result.quotient, sym_map)
         self.remainder = to_python_fsa(result.remainder, sym_map)
+
+
+class RustPeekaboo:
+    """Drop-in replacement for peekaboo_recursive.Peekaboo using the Rust backend."""
+
+    def __init__(self, fst):
+        self.fst = fst
+        self.rust_fst, self.sym_map, self.state_map = to_rust_fst(fst)
+        self.target_alphabet = fst.B - {EPSILON}
+
+    def __call__(self, target):
+        import transduction_core
+
+        target_u32 = [self.sym_map(y) for y in target]
+        result = transduction_core.rust_peekaboo(self.rust_fst, target_u32)
+
+        inv_sym = {v: k for k, v in self.sym_map.items()}
+        output = {}
+        for y in self.target_alphabet:
+            y_u32 = self.sym_map(y)
+            q_rust = result.quotient(y_u32)
+            r_rust = result.remainder(y_u32)
+            if q_rust is not None and r_rust is not None:
+                q_fsa = to_python_fsa(q_rust, self.sym_map)
+                r_fsa = to_python_fsa(r_rust, self.sym_map)
+            else:
+                q_fsa = FSA()
+                r_fsa = FSA()
+            output[y] = PrecoverDecomp(q_fsa, r_fsa)
+
+        return output

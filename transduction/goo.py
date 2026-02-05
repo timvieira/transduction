@@ -3,7 +3,7 @@ from transduction.fsa import FSA
 from transduction.fst import FST
 from collections import deque
 
-from genlm.backend.tokenization.bytes import get_byte_vocab
+from transduction.lm.statelm import decode_hf_tokenizer
 
 
 
@@ -11,7 +11,8 @@ def bpe_wfst(tokenizer, readable=False):
     m = FST()
     m.add_start(())
     drop = {x.encode() for x in tokenizer.all_special_tokens}
-    for i, x in enumerate(get_byte_vocab(tokenizer)):
+    _, _, _decode, _ = decode_hf_tokenizer(tokenizer)
+    for i, x in enumerate(_decode):
         if x in drop:
             continue
         _x = x

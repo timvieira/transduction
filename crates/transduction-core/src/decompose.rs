@@ -62,8 +62,7 @@ pub struct DecompResult {
 /// Encapsulates multiple strategies to determine whether a DFA state (powerset
 /// state) accepts Σ*, avoiding expensive sub-BFS whenever possible:
 ///
-/// 1. Fast path: if `all_input_universal`, every final state is universal.
-/// 2. Witness check: if any NFA element in the powerset state is a known
+/// 1. Witness check: if any NFA element in the powerset state is a known
 ///    ip-universal witness, the state is universal.
 /// 3. Superset monotonicity: if a known-universal set is a subset of the
 ///    current set, the current set is universal too.
@@ -72,7 +71,6 @@ pub struct DecompResult {
 /// 5. BFS fallback: full sub-BFS. Results are added to the positive or
 ///    negative cache for future lookups.
 struct UniversalityFilter {
-    all_input_universal: bool,
     /// Packed NFA states `(q, target_len)` for ip-universal FST states q.
     witnesses: FxHashSet<u64>,
 
@@ -90,20 +88,16 @@ struct UniversalityFilter {
 
 impl UniversalityFilter {
     fn new(fst: &Fst, target_len: u32) -> Self {
-        let all_input_universal = fst.all_input_universal;
         let mut witnesses = FxHashSet::default();
 
-        if !all_input_universal {
-            let ip_univ = compute_ip_universal_states(fst);
-            for (q, &is_univ) in ip_univ.iter().enumerate() {
-                if is_univ {
-                    witnesses.insert(pack(q as u32, target_len, target_len));
-                }
+        let ip_univ = compute_ip_universal_states(fst);
+        for (q, &is_univ) in ip_univ.iter().enumerate() {
+            if is_univ {
+                witnesses.insert(pack(q as u32, target_len, target_len));
             }
         }
 
         UniversalityFilter {
-            all_input_universal,
             witnesses,
             pos_index: FxHashMap::default(),
             pos_sizes: Vec::new(),
@@ -234,26 +228,21 @@ impl UniversalityFilter {
         num_source_symbols: usize,
         stats: &mut ProfileStats,
     ) -> bool {
-        // 1. Fast path: all_input_universal
-        if self.all_input_universal {
-            return true;
-        }
-
         let nfa_set = &arena.sets[sid as usize];
 
-        // 2. Witness check: any element is an ip-universal witness
+        // 1. Witness check: any element is an ip-universal witness
         if nfa_set.iter().any(|e| self.witnesses.contains(e)) {
             let set_clone = nfa_set.to_vec();
             self.add_pos(&set_clone);
             return true;
         }
 
-        // 3. Superset monotonicity: is nfa_set ⊇ some known-universal set?
+        // 2. Superset monotonicity: is nfa_set ⊇ some known-universal set?
         if self.has_pos_subset(nfa_set) {
             return true;
         }
 
-        // 4. Subset monotonicity: is nfa_set ⊆ some known-non-universal set?
+        // 3. Subset monotonicity: is nfa_set ⊆ some known-non-universal set?
         if self.has_neg_superset(nfa_set) {
             return false;
         }

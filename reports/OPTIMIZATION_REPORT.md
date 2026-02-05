@@ -1,214 +1,225 @@
-# Optimization Report: Rust Acceleration of `decompose()`
+# Optimization Report: Decomposition Algorithms
 
-## 1. Which Python Implementation is Closest to the Rust?
+This report documents the optimizations employed across Python and Rust implementations
+of the precover decomposition algorithm.
 
-The Rust implementation is closest to **`NonrecursiveDFADecomp`** in `dfa_decomp_nonrecursive.py`. Both follow the same high-level algorithm:
+## Current State (2026-02-04)
+
+### Implementations
+
+| Algorithm | Language | File | Use Case |
+|-----------|----------|------|----------|
+| `Precover` | Python | `eager_nonrecursive.py` | Reference implementation |
+| `NonrecursiveDFADecomp` | Python | `dfa_decomp_nonrecursive.py` | Single-target decomposition |
+| `Peekaboo` | Python | `peekaboo_recursive.py` | Batched next-symbol (recommended) |
+| `TokenDecompose` | Python | `token_decompose.py` | BPE fast path (5000x+ speedup) |
+| `RustDecomp` | Rust | `decompose.rs` | Single-target (3-10x faster) |
+| `RustPeekaboo` | Rust | `peekaboo.rs` | Batched next-symbol (3-25x faster) |
+
+### Test Status
+
+- 102/103 tests pass (1 expected xfail: `RecursiveDFADecomp` timeout on adversarial input)
+- 7 implementations tested in `test_general.py`
+- 12 enumeration tests including BPE-scale GPT-2 integration
+
+### Dependencies
+
+Library: `numpy`, `torch`, `transformers`, `arsenal`
+Test-only: `genparse`
+Eliminated: `genlm`, `tokenization` (inlined into `transduction/lm/statelm.py`)
+
+---
+
+## 1. Algorithm Correspondence
+
+The Rust `decompose.rs` is closest to Python `NonrecursiveDFADecomp`:
 
 ```
-1. Build a precover NFA: LazyPrecoverNFA(fst, target)
-2. On-the-fly determinize it (powerset construction)
-3. BFS over DFA states, checking universality of final states
-4. Universal finals → Q stops (don't expand further)
+1. Build precover NFA: LazyPrecoverNFA(fst, target)
+2. On-the-fly determinize (powerset construction)
+3. BFS over DFA states, check universality of finals
+4. Universal finals → Q stops (don't expand)
    Non-universal finals → R stops (keep expanding)
 5. Return Q and R sharing the same arc set
 ```
 
-The Python pipeline chains lazy wrappers: `LazyPrecoverNFA(fst, target).det()` produces a `LazyDeterminize(EpsilonRemove(LazyPrecoverNFA(...)))`. Each call to `dfa.arcs(state)` triggers:
-
+The Python pipeline chains lazy wrappers:
 ```
 LazyDeterminize.arcs(frozenset)
   → for each NFA state in frozenset:
       EpsilonRemove.arcs(state)
-        → LazyPrecoverNFA.arcs(state)   # get raw NFA arcs
-        → for each dest: eps_closure(dest)  # BFS for ε-reachable states
+        → LazyPrecoverNFA.arcs(state)
+        → for each dest: eps_closure(dest)
       group by input symbol → frozenset per symbol
 ```
 
-The Rust `decompose.rs` fuses all of this into a single BFS loop, eliminating the lazy wrapper overhead. The NFA states are packed as `u64` (instead of Python tuples), and powerset states are interned as `u32` IDs (instead of Python frozensets).
+Rust fuses this into a single BFS loop with packed `u64` NFA states and interned `u32` DFA states.
 
-However, there are **two Rust paths**. For BPE-like FSTs where the input projection accepts Σ*, the dispatch in `py.rs:164` routes to `token_decompose.rs`, which is a fundamentally different algorithm (described below).
+---
 
-## 2. Optimizations Employed
+## 2. Optimizations Catalog
 
-### Optimization A: Fused State Representation (general)
+### A: Fused State Representation
 
-**Python:** NFA states are `(fst_state, target_prefix_string)` tuples — e.g., `(0, 'Hel')`. The `LazyPrecoverNFA_slower` in `goo.py` improves this to `(fst_state, int_position)` — e.g., `(0, 3)` — avoiding string slicing.
+| | Python | Rust |
+|---|---|---|
+| NFA state | `(fst_state, position)` tuple | `u64` packed as `fst_state * (N+1) + pos` |
+| Status | Done (`LazyPrecoverNFA` uses `(i, n)`) | Done |
 
-**Rust:** Packs `(fst_state, buf_pos)` into a single `u64` via `fst_state * (target_len + 1) + buf_pos`. No heap allocation. O(1) hashing. This is identical to what `LazyPrecoverNFA_slower` does with `(i, n)` tuples, but avoids Python tuple overhead.
+### B: Precomputed FST Indexes
 
-**Generality:** This is the same trick `LazyPrecoverNFA` already uses (the optimized version in `goo.py`). The Rust version just avoids the per-tuple allocation.
-
-**Pullback to Python:** Already done in `LazyPrecoverNFA` (the `(i, n)` representation). No further improvement needed on this front.
-
-### Optimization B: Precomputed FST Indexes (general)
-
-**Python:** `LazyPrecoverNFA` in `goo.py` builds 4 index dictionaries on the FST, cached via `try/except AttributeError`:
+Both Python and Rust build 4 index dictionaries:
 - `index_iy_xj`: `(state, output)` → `{(input, dest)}`
 - `index_i_xj`: `state` → `{(input, dest)}`
 - `index_ix_j`: `(state, input)` → `{dest}`
 - `index_ixy_j`: `(state, input, output)` → `{dest}`
 
-**Rust:** Builds the same 4 indexes in `Fst::new()` using `FxHashMap` (a faster hasher than Python's built-in). The Rust indexes use the same keys and structure.
+| | Python | Rust |
+|---|---|---|
+| Location | `LazyPrecoverNFA.__init__` | `Fst::new()` |
+| Hasher | Python built-in | FxHashMap |
+| Status | Done | Done |
 
-**Generality:** Fully general. Any FST benefits from these indexes.
+### C: Arena-Interned Powerset States
 
-**Pullback to Python:** Already done — `LazyPrecoverNFA` builds these indexes. The only Python improvement would be to use a faster hash (but Python doesn't easily allow that).
+| | Python | Rust |
+|---|---|---|
+| DFA state repr | `frozenset` | `u32` ID via `PowersetArena` |
+| Single-element fast path | No | Yes (hashes `u64` not `Vec`) |
+| Status | Could add `Integerizer` | Done |
 
-### Optimization C: Arena-Interned Powerset States (general)
+### D: Cached Epsilon Closures
 
-**Python:** `LazyDeterminize` represents DFA states as `frozenset` objects. Each `frozenset` is heap-allocated and compared by value. The `accepts_universal` function stores these in a Python `set`, which hashes the frozenset on every insert/lookup.
+| | Python | Rust |
+|---|---|---|
+| Cache | `EpsilonRemove._closure_cache` | `Rc<Vec<u64>>` in `eps_cache` |
+| Status | Done | Done |
 
-**Rust:** `PowersetArena` interns sorted `Vec<u64>` → `u32` IDs. After interning, all DFA operations use cheap `u32` comparisons. A fast path handles single-element sets (99% of cases in BPE) by hashing a `u64` instead of a `Vec`.
+### E: Batch Arc Computation
 
-**Generality:** Fully general. Any powerset construction benefits from interning.
-
-**Pullback to Python:** **Yes, this would help.** You could add an `Integerizer` (which you already have in `arsenal`) to the `LazyDeterminize` class to map frozensets to integers. This avoids repeated frozenset hashing:
-
+Both iterate arcs from states (not symbols in alphabet):
 ```python
-class LazyDeterminize(Lazy):
-    def __init__(self, fsa):
-        self.fsa = fsa.epsremove()
-        self.intern = Integerizer()  # frozenset → int
-
-    def arcs(self, Q_id):
-        Q = self.intern[Q_id]  # recover frozenset
-        tmp = defaultdict(set)
-        for i in Q:
-            for a, j in self.fsa.arcs(i):
-                tmp[a].add(j)
-        for a, j in tmp.items():
-            yield a, self.intern(frozenset(j))  # intern result
+# O(active arcs), not O(|alphabet|)
+for i in powerset_state:
+    for a, j in nfa.arcs(i):
+        tmp[a].add(j)
 ```
 
-The `visited` set and `worklist` in the BFS would then use integers instead of frozensets — much cheaper.
+| | Python | Rust |
+|---|---|---|
+| Location | `LazyDeterminize.arcs()` | `compute_all_arcs()` |
+| Status | Done | Done |
 
-### Optimization D: Cached Epsilon Closures (general)
+### F: `all_input_universal` Precomputation ✅
 
-**Python:** `EpsilonRemove._closure_cache` stores `{state: set_of_states}`. Each cache hit returns the same `set` object (no copy needed in Python since sets are mutable but the cache values are only read).
+**The single highest-impact optimization for BPE/replace FSTs.**
 
-**Rust:** `eps_cache: FxHashMap<u64, Rc<Vec<u64>>>`. Returns `Rc::clone()` on cache hit (refcount bump, no data copy). The cache avoids recomputing BFS for epsilon transitions.
+Instead of O(N²) universality sub-BFS per final state, do one O(|arcs|) check upfront:
+1. ε-close start states (input-side only)
+2. Check start is final and complete (has arcs for all symbols)
+3. Check every successor's ε-closure contains start
 
-**Generality:** Fully general. Any NFA with ε-transitions benefits.
+When true, all final states are universal → skip `accepts_universal` entirely.
 
-**Pullback to Python:** Already done — `EpsilonRemove._closure_cache` is the Python equivalent.
+| | Python | Rust |
+|---|---|---|
+| Location | `check_all_input_universal()` in `fst.py` | `check_all_input_universal()` in `fst.rs` |
+| Status | Done | Done |
 
-### Optimization E: Batch Arc Computation (moderate generality)
+**Impact:** 500-token vocab: 58ms → <1ms. 5000-token vocab: 11.5s → <1ms.
 
-**Python:** `LazyDeterminize.arcs(Q)` iterates over each NFA state in the powerset, calls `self.fsa.arcs(i)` for each, and groups by input symbol. This is **driven by the NFA arcs, not by the alphabet**. For a BPE FST with 50K input symbols but where each intermediate state has only 1-2 active arcs, this is O(active arcs), not O(50K).
+### G: Token-Level Position Tracking (BPE-specific) ✅
 
-**Rust:** `compute_all_arcs()` does the same thing — iterates NFA states in the set, collects their arcs, groups by symbol. The key insight is the same: iterate *arcs from states*, not *symbols in the alphabet*.
+For hub-structured FSTs (BPE tokenizers), collapse FST states:
 
-**Generality:** This is already the Python approach. The Rust version is faster because it avoids Python per-arc overhead, but the algorithm is the same.
+| Approach | NFA states | DFA states |
+|----------|-----------|-----------|
+| Generic | `(fst_state, position)` — O(7000×N) | O(6000) per byte |
+| Token-level | `position` only — O(N) | O(N) total |
 
-**Pullback to Python:** Already done — `LazyDeterminize.arcs()` iterates arcs, not the alphabet.
+Algorithm:
+1. Extract token byte sequences from FST
+2. Build byte trie
+3. NFA states are positions `{0..N}`
+4. Match tokens via trie at each position
 
-### Optimization F: `all_input_universal` Precomputation (moderate generality)
+| | Python | Rust |
+|---|---|---|
+| Implementation | `TokenDecompose` in `token_decompose.py` | Removed (was `token_decompose.rs`) |
+| Status | Done | N/A |
 
-**Python:** `accepts_universal(state, alphabet)` does a sub-BFS from each final DFA state. For each state in the sub-BFS, it calls `dict(dfa.arcs(i))` and then checks all symbols in `alphabet`. This is O(sub-BFS states × |alphabet|) per call. For BPE, every final state is universal, and each sub-BFS re-discovers the same universal automaton — leading to O(N²) total cost.
+**Impact:** 5000x+ speedup for BPE FSTs at long target lengths.
 
-**Rust:** `check_all_input_universal()` in `fst.rs` is a one-time O(|FST arcs|) check during FST construction. It verifies that the FST's input projection accepts Σ* by checking:
-1. The ε-closed start set is final
-2. The start set is complete (has arcs for all source symbols)
-3. Every successor's ε-closure contains the start set (so all reachable DFA states are supersets of start → also final and complete)
+---
 
-When true, `decompose()` skips `is_universal` entirely, marking all final states as Q stops.
+## 3. Rust-Specific Optimizations
 
-**Generality:** Applies to any FST whose input projection is universal (Σ*). This includes all BPE tokenizers and any "replace" FST (like `examples.replace()`). Does NOT help FSTs whose input projection has constraints (e.g., number format validators).
+### Peekaboo (batched next-symbol)
 
-**Pullback to Python:** **Yes, this is the single highest-impact optimization to pull back.**
+`RustPeekaboo` in `peekaboo.rs` implements the Peekaboo algorithm:
+- Computes Q/R for all next symbols in one pass
+- 3-25x faster than Python `peekaboo_recursive.Peekaboo`
+- Uses same PowersetArena and eps-caching as generic decompose
+
+Benchmark (see `PEEKABOO_BENCHMARK.md`):
+| Example | Rust | Python | Speedup |
+|---------|------|--------|---------|
+| newspeak2 (depth=3) | 3.0 ms | 67.0 ms | 22x |
+| triplets_of_doom (depth=13) | 27 µs | 278 µs | 10x |
+| parity (depth=5) | 13 µs | 318 µs | 25x |
+
+### Single-Element Intern Fast Path
+
+99% of BPE DFA states are single-element sets. `PowersetArena` hashes a `u64`
+directly instead of a `Vec` for these, avoiding allocation and Vec hashing.
+
+### Rc<Vec<u64>> for Epsilon Cache
+
+Epsilon closure cache returns `Rc::clone()` on hit (refcount bump, no data copy).
+
+---
+
+## 4. Summary Table
+
+| Optimization | Impact | Generality | Python | Rust |
+|--------------|--------|------------|--------|------|
+| F: `all_input_universal` | Critical | BPE + replace | ✅ | ✅ |
+| G: Token-level positions | Major | Hub FSTs | ✅ | Removed |
+| C: Arena interning | Moderate | All FSTs | Partial | ✅ |
+| B: FST indexes | Important | All FSTs | ✅ | ✅ |
+| D: Eps closure cache | Important | NFAs with ε | ✅ | ✅ |
+| A: Packed state repr | Minor | All FSTs | ✅ | ✅ |
+| Peekaboo batching | Major | All FSTs | ✅ | ✅ |
+
+---
+
+## 5. Choosing an Implementation
+
+| Use Case | Recommendation |
+|----------|----------------|
+| Autoregressive decoding | `RustPeekaboo` (or Python `Peekaboo` if Rust unavailable) |
+| BPE tokenizer, long targets | `TokenDecompose` (Python) — check `check_all_input_universal` first |
+| One-shot decomposition | `RustDecomp` or `NonrecursiveDFADecomp` |
+| Reference/testing | `Precover` |
+
+---
+
+## 6. LM Integration
+
+The enumeration algorithms (`prioritized_enumeration`, `importance_sampling`) combine
+decomposition with language model scoring:
 
 ```python
-def check_all_input_universal(fst):
-    """O(|arcs|) check: does the input projection accept Σ*?"""
-    source_alpha = fst.A - {EPSILON}
-    if not source_alpha:
-        return any(fst.is_final(s) for s in fst.I)
+from transduction.lm import StateLM
+from transduction.enumeration import prioritized_enumeration
 
-    # eps-close the start states (input-side epsilon arcs only)
-    start = eps_close_input(fst, fst.I)
+lm = StateLM.initial('gpt2')
+pe = prioritized_enumeration(lm, fst, target='the', max_steps=20)
 
-    # Must be final
-    if not any(fst.is_final(s) for s in start):
-        return False
-
-    # Must be complete
-    by_symbol = defaultdict(set)
-    for s in start:
-        for x, _, j in fst.arcs(s):
-            if x != EPSILON:
-                by_symbol[x].add(j)
-    if len(by_symbol) < len(source_alpha):
-        return False
-
-    # Every successor's eps-closure must contain the start set
-    for sym, raw_dests in by_symbol.items():
-        closed = eps_close_input(fst, raw_dests)
-        if not start <= closed:
-            return False
-    return True
+for item in pe.quotient_terms:
+    print(f"{item.source}: {item.weight:.3f}")
 ```
 
-Then in `NonrecursiveDFADecomp.__init__`, skip `accepts_universal` when this returns true:
-
-```python
-if check_all_input_universal(fst):
-    # All final states are universal — skip the expensive sub-BFS
-    if dfa.is_final(i):
-        Q.add_stop(i)
-        continue
-```
-
-This would eliminate the O(N²) bottleneck that made 500-token vocabularies take 58ms and 5000-token vocabularies take 11.5s. With this fix, those drop to <1ms.
-
-### Optimization G: Token-Level Position Tracking (BPE-specific)
-
-This is the **biggest** optimization and the most domain-specific. It's implemented in `token_decompose.rs` and applies only when `all_input_universal=true` AND the FST has "hub" structure (all tokens start and end at the same state).
-
-**Python:** The precover NFA has states `(fst_state, buf_pos)`. For a BPE FST with ~7000 internal states and target length N, the NFA state space is ~7000×N. The DFA (powerset) over this space has ~6000 states per target byte.
-
-**Rust `token_decompose`:**
-1. Extract each token's byte sequence from the FST (follow ε-chains)
-2. Build a byte trie over all token byte sequences
-3. NFA states are just **positions** `{0, 1, ..., target_len}` — no FST state component, because the FST always returns to the hub state after each token
-4. DFA states are subsets of positions — typically O(N) states total
-5. For each position p, use the trie to find which tokens match target[p..] in O(match length) time
-
-This collapses the 7000 intermediate FST states per token into a single position transition. Instead of O(7000×N) NFA states, there are O(N) positions. The DFA has O(N) states instead of O(7000×N).
-
-**Generality:** Specific to "hub" FSTs where all tokens start and end at the same state(s). This includes BPE tokenizers but NOT general FSTs (e.g., FSTs with multi-state paths that don't return to a hub).
-
-**Pullback to Python:** **Yes, this is feasible and would be the second-highest-impact optimization.** The trie + position-set approach is purely algorithmic — no Rust-specific tricks. A Python implementation would look like:
-
-```python
-class TokenLevelDecomp:
-    def __init__(self, fst, target):
-        # 1. Extract token byte sequences
-        tokens = extract_token_bytes(fst)
-
-        # 2. Build prefix trie
-        trie = build_trie(tokens)
-
-        # 3. Precompute matches at each position
-        matches = [trie.matches_at(target, p) for p in range(len(target))]
-
-        # 4. BFS over position sets
-        start = frozenset({0})
-        worklist = deque([start])
-        visited = {start}
-        ...
-```
-
-The speedup from this in Python wouldn't be as dramatic as in Rust (Python loop overhead), but it would reduce the DFA from ~300K states at target_len=50 to ~51 states — a ~6000x reduction in state space that would translate to a large wall-clock improvement even in Python.
-
-## 3. Summary: What to Pull Back
-
-| Optimization | Impact | Generality | Already in Python? |
-|---|---|---|---|
-| **F: `all_input_universal`** | **Critical** — eliminates O(N²) universality check | BPE + replace FSTs | **No — highest priority pullback** |
-| **G: Token-level positions** | **Major** — O(N) states instead of O(7000N) | Hub-structured FSTs | **No — second priority pullback** |
-| **C: Arena interning** | Moderate — faster DFA state lookups | All FSTs | Partially (could add Integerizer) |
-| **B: FST indexes** | Important | All FSTs | Yes (`LazyPrecoverNFA`) |
-| **D: Eps closure cache** | Important | All NFAs with ε | Yes (`_closure_cache`) |
-| **A: Packed state repr** | Minor in Python | All FSTs | Yes (`(i, n)` tuples) |
-
-The two optimizations worth pulling back are **F** and **G**. Together they would make the Python `NonrecursiveDFADecomp` handle full GPT-2 (50K tokens) at long target lengths, which is currently impossible.
+The `StateLM` class (in `transduction/lm/statelm.py`) wraps HuggingFace causal LMs
+with KV-cache-based incremental decoding. All tokenization dependencies have been
+inlined — no external `genlm` or `tokenization` packages required.

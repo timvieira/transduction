@@ -1,5 +1,4 @@
 from transduction.base import PrecoverDecomp
-from transduction.eager_nonrecursive import Precover
 from transduction.lazy import Lazy
 from transduction.fsa import FSA, frozenset
 from transduction.fst import (
@@ -7,7 +6,6 @@ from transduction.fst import (
     UniversalityFilter,
 )
 
-from arsenal import colors
 from collections import deque
 
 #_______________________________________________________________________________
@@ -16,7 +14,7 @@ from collections import deque
 #   that we have taken in the current implementation is truncate as early as
 #   possible - this minimizes the work in the current iteration.  However, it
 #   might lead to more work in a later iteration because more nodes are marked
-#   as trauncated, meaning that they cannot be used in the later iterations.  If
+#   as truncated, meaning that they cannot be used in the later iterations.  If
 #   we used a different truncation policy it might be the case that we could
 #   share more work.  For example, if there is a small number of nodes that we
 #   could in principle enumerate now (like the dfa_decomp strategy does) then we
@@ -27,6 +25,36 @@ from collections import deque
 #   truncating at N+1 (even for the triplets of doom example).
 #_______________________________________________________________________________
 #
+
+def _trimmed_fsa(start_states, stop_states, incoming):
+    """Build a trimmed FSA by backward BFS from stop states through the
+    reverse-arc graph.  All states in `incoming` are forward-reachable
+    (guaranteed by the BFS that built them), so backward reachability
+    from stops gives exactly the trim (forward ∩ backward reachable) set."""
+    if not stop_states:
+        return FSA()
+    backward_reachable = set()
+    worklist = deque(stop_states)
+    while worklist:
+        state = worklist.popleft()
+        if state in backward_reachable:
+            continue
+        backward_reachable.add(state)
+        for _, pred in incoming.get(state, ()):
+            if pred not in backward_reachable:
+                worklist.append(pred)
+    arcs = [
+        (pred, x, state)
+        for state in backward_reachable
+        for x, pred in incoming.get(state, ())
+        if pred in backward_reachable
+    ]
+    return FSA(
+        start={s for s in start_states if s in backward_reachable},
+        arcs=arcs,
+        stop=stop_states,
+    )
+
 
 class FstUniversality:
     """Precomputed universality info for an FST.  Computed once, shared across
@@ -64,22 +92,66 @@ class Peekaboo:
         self._univ = FstUniversality(fst)
 
     def __call__(self, target):
-        s = PeekabooState(self.fst, '', parent=None, univ=self._univ)
+        # Merge reverse-arc (incoming) dicts from every depth into one
+        # shared graph, then extract per-symbol trimmed FSAs via backward
+        # reachability from Q/R stop states.
+        #
+        # Cross-depth merging correctness argument
+        # ------------------------------------------
+        # Each depth d uses a different DFA (PeekabooPrecover with
+        # target[:d]).  At resume-frontier boundaries a single DFA state
+        # may have incoming arcs from *two* depths (d and d+1) with
+        # potentially different predecessors for the same input symbol,
+        # making the merged graph nondeterministic.  We argue the extra
+        # arcs from earlier depths are harmless:
+        #
+        #   Structural invariant: at depth d the PeekabooPrecover NFA
+        #   states have output buffers of length ≤ d+1 (= N+K with
+        #   K=1).  DFA states are frozensets of such NFA states, so
+        #   every DFA state reachable via depth-d arcs contains only
+        #   NFA states with len(ys) ≤ d+1.
+        #
+        #   The Q/R stop states live at the final depth N=len(target)
+        #   and contain NFA states with len(ys) = N+1 (specifically
+        #   ys = target+y for the quotient of symbol y).  For any
+        #   earlier depth d < N we have d+1 < N+1, so depth-d DFA
+        #   states are distinct frozensets from depth-N Q/R stops.
+        #
+        #   Therefore backward reachability from Q/R stops can never
+        #   reach a state that only exists at depth d < N via a
+        #   depth-d-only arc.  The backward BFS follows the merged
+        #   incoming arcs, but the only paths that reach Q/R stops
+        #   traverse the correct depth sequence 0 → 1 → … → N through
+        #   the resume-frontier boundaries.  Depth-d arcs that lead
+        #   into depth-d-only states are never visited because those
+        #   states are not backward-reachable from the stops.
+        #
+        # Combined with forward reachability (every state in `incoming`
+        # was discovered by BFS from start), the backward BFS from
+        # stops produces exactly the trim machine.
 
-        ARCS = [(i,x,j) for j, arcs in s._arcs.items() for x,i in arcs]
+        s = PeekabooState(self.fst, '', parent=None, univ=self._univ)
+        # TODO: Revisit whether merging incoming dicts across depths is the
+        # right approach vs. walking the PeekabooState chain on demand.
+        merged_incoming = dict(s.incoming)
         for x in target:
             s >>= x
-            ARCS.extend((i,a,j) for j, arcs in s._arcs.items() for a,i in arcs)
+            for state, arcs in s.incoming.items():
+                if state in merged_incoming:
+                    merged_incoming[state] |= arcs
+                else:
+                    merged_incoming[state] = set(arcs)
 
-        foo = {}
+        start_states = set(s.dfa.start())
+        result = {}
         _empty = PrecoverDecomp(set(), set())
         for y in self.target_alphabet:
             d = s.decomp.get(y, _empty)
-            q = FSA(start=set(s.dfa.start()), arcs=ARCS, stop=d.quotient)
-            r = FSA(start=set(s.dfa.start()), arcs=ARCS, stop=d.remainder)
-            foo[y] = PrecoverDecomp(q, r)
+            q = _trimmed_fsa(start_states, d.quotient, merged_incoming)
+            r = _trimmed_fsa(start_states, d.remainder, merged_incoming)
+            result[y] = PrecoverDecomp(q, r)
 
-        return foo
+        return result
 
     def graphviz(self, target):
         #
@@ -112,13 +184,13 @@ class Peekaboo:
                     curr = PeekabooState(self.fst, '', parent=None)
                 else:
                     curr = helper(target[:-1], inner) >> target[-1]
-                for j, arcs in curr._arcs.items():
+                for j, arcs in curr.incoming.items():
                     for x,i in arcs:
                         inner.edge(str(i), str(j), label=x)
-                for y, tmp in curr.decomp.items():
-                    for j in tmp.quotient:
+                for y, parts in curr.decomp.items():
+                    for j in parts.quotient:
                         inner.node(str(j), fillcolor='#90EE90')
-                    for j in tmp.remainder:
+                    for j in parts.remainder:
                         inner.node(str(j), fillcolor='#f26fec')
                 return curr
 
@@ -142,6 +214,8 @@ class Peekaboo:
         return dot
 
     def check(self, target):
+        from arsenal import colors
+        from transduction.eager_nonrecursive import Precover
         from transduction import display_table
         from IPython.display import HTML
 
@@ -178,119 +252,142 @@ class PeekabooState:
 
         self._univ = parent._univ if parent is not None else (univ or FstUniversality(fst))
 
-        def debug(*_): pass
-        #debug = print
-
         dfa = PeekabooPrecover(self.fst, target).det()
 
         if len(target) == 0:
             assert parent is None
             worklist = deque()
-            _arcs = {}
+            incoming = {}
             for state in dfa.start():
                 worklist.append(state)
-                _arcs[state] = set()
-                debug(colors.orange % 'init:', state)
+                incoming[state] = set()
 
         else:
 
-            debug(colors.orange % 'target:', repr(self.target))
-            debug('GOO:', parent.goo)
-
-            p = parent.goo.get(target[-1], set())
-            debug('we need to pick up from the following states:', p)
+            resume_states = parent.resume_frontiers.get(target[-1], set())
 
             # put previous and Q and R states on the worklist
             worklist = deque()
-            _arcs = {}
-            for state in p:
-                assert not any(truncated for _, ys, truncated in state)
+            incoming = {}
+            for state in resume_states:
+                assert not any(truncated for _, _, truncated in state)
                 worklist.append(state)
-                _arcs[state] = set()
+                incoming[state] = set()
 
         # `decomp` is a map from next target symbols to their quotient and
         # remainder states.  Built lazily — only symbols that actually appear
         # as relevant during the BFS get entries.
         decomp = {}
 
-        # `goo` is a map from next target symbols to the states that we need to
-        # resume expansion from because they were truncated
-        goo = {}
+        # `resume_frontiers` maps each next-target symbol y to the set of
+        # non-truncated DFA states on the truncation boundary, from which
+        # the next PeekabooState (for target+y) must resume BFS expansion.
+        resume_frontiers = {}
 
-        def ensure_symbol(y):
-            """Lazily initialise per-symbol data structures on first use."""
-            if y not in decomp:
-                decomp[y] = PrecoverDecomp(set(), set())
-                goo[y] = set()
-                td = TruncatedDFA(dfa=dfa, fst=self.fst, target=target + y)
-                truncated_dfas[y] = td
-                univ_filters[y] = self._univ.make_filter(
-                    self.fst, target + y, td, self.source_alphabet,
-                )
+        _all_input_universal = self._univ.all_input_universal
+        if _all_input_universal:
+            def ensure_symbol(y):
+                if y not in decomp:
+                    decomp[y] = PrecoverDecomp(set(), set())
+                    resume_frontiers[y] = set()
+        else:
+            def ensure_symbol(y):
+                if y not in decomp:
+                    decomp[y] = PrecoverDecomp(set(), set())
+                    resume_frontiers[y] = set()
+                    trunc_dfa = TruncatedDFA(dfa=dfa, fst=self.fst, target=target + y)
+                    truncated_dfas[y] = trunc_dfa
+                    univ_filters[y] = self._univ.make_filter(
+                        self.fst, target + y, trunc_dfa, self.source_alphabet,
+                    )
 
         truncated_dfas = {}
         univ_filters = {}
 
         N = len(target)
+        _fst_is_final = self.fst.is_final
         while worklist:
             state = worklist.popleft()
-            debug()
-            debug(colors.cyan % 'work:', state)
 
-            relevant_symbols = {ys[N] for _, ys, _ in state if len(ys) > N}
-            debug(f'  {relevant_symbols=}')
+            # Single pass over NFA states: extract relevant symbols,
+            # final-for-symbol set, and the truncated flag.
+            relevant_symbols = set()
+            final_symbols = set()
+            state_has_truncated = False
+            for i, ys, truncated in state:
+                if len(ys) > N:
+                    y = ys[N]
+                    relevant_symbols.add(y)
+                    if ys.startswith(target) and _fst_is_final(i):
+                        final_symbols.add(y)
+                state_has_truncated = state_has_truncated or truncated
 
-            # Shortcut: At most one of the `relevant_symbols` can be
-            # continuous. If we find one, we can stop expanding.
-            continuous = set()
+            # A state is "continuous" (universal) for symbol y if it accepts
+            # all source strings — meaning Q covers everything and no further
+            # BFS expansion is needed for that symbol.  At most one of the
+            # `relevant_symbols` can be continuous; if we find one we can
+            # stop expanding.
+            #
+            # Proof (functional FSTs): Suppose state S is universal for
+            # both y and z (y != z).  TruncatedDFA(target+y) recognises
+            # precover(target+y) (the buffer length N+1 = len(target+y)
+            # suffices for an exact match).  Universality from S means
+            # Reach(S)·Σ* ⊆ precover(target+y), and likewise for z.
+            # For a functional FST each input has a unique output, so
+            # precover(target+y) ∩ precover(target+z) = ∅.  Therefore
+            # Reach(S)·Σ* ⊆ ∅, but Reach(S) is non-empty (S is on the
+            # worklist), giving a contradiction.
+            continuous = False
             for y in relevant_symbols:
                 ensure_symbol(y)
 
-                dfa_truncated = truncated_dfas[y]
+                if not continuous:
+                    # For AUI (all-input-universal) FSTs, universality ↔ finality (no filter needed).
+                    is_univ = (
+                        y in final_symbols if _all_input_universal
+                        else univ_filters[y].is_universal(state)
+                    )
+                    if is_univ:
+                        decomp[y].quotient.add(state)
+                        continuous = True
+                        continue
 
-                if len(continuous) == 0 and univ_filters[y].is_universal(state):
-                    debug('  universal for', repr(y))
-                    decomp[y].quotient.add(state)
-                    continuous.add(y)
-
-                elif dfa_truncated.is_final(state):
-                    debug('  accepting for', repr(y))
+                if y in final_symbols:
                     decomp[y].remainder.add(state)
 
-                else:
-                    debug('  pass on', repr(y))
-
-            assert len(continuous) <= 1
-            #debug(f'{continuous=}')
             if continuous:
                 continue    # we have found a quotient and can skip
 
             for x, next_state in dfa.arcs(state):
 
-                if next_state not in _arcs:
+                if next_state not in incoming:
                     worklist.append(next_state)
-                    _arcs[next_state] = set()
+                    incoming[next_state] = set()
 
-                _arcs[next_state].add((x, state))
+                incoming[next_state].add((x, state))
 
-                if not any(truncated for _, ys, truncated in state):
+                # If `state` is non-truncated but `next_state` contains a
+                # truncated element, then `state` sits on the truncation
+                # boundary — record it so the next iteration can resume here.
+                if not state_has_truncated:
                     for _, ys, truncated in next_state:
                         if truncated:
                             y = ys[-1]
                             ensure_symbol(y)
-                            debug(colors.light.red % 'goo', state, repr(y), next_state)
-                            goo[y].add(state)
+                            resume_frontiers[y].add(state)
 
+        # Q and R states that are non-truncated also sit on the boundary:
+        # the next iteration needs to expand from them because they are
+        # "live" endpoints of the current precover.
         for y in decomp:
             for state in decomp[y].quotient | decomp[y].remainder:
                 if not any(truncated for _, ys, truncated in state):
-                    debug(colors.light.red % 'goo+', state)
-                    goo[y].add(state)
+                    resume_frontiers[y].add(state)
 
         self.decomp = decomp
-        self.goo = goo
+        self.resume_frontiers = resume_frontiers
         self.dfa = dfa
-        self._arcs = _arcs
+        self.incoming = incoming
 
     def __rshift__(self, y):
         assert y in self.target_alphabet, repr(y)
@@ -299,7 +396,7 @@ class PeekabooState:
 
 # TODO: in order to predict EOS, we need to extract the preimage from Q and R
 #
-# Should we unify this class with `peekaboo.PeekabooPrecover`?
+# TODO: Should we unify this class with `peekaboo.PeekabooPrecover`?
 #
 #    No, the non-recursive algorithm doesnt need to worry about the truncation
 #    bits, so we probably do not need to unify them.  That said, we might want
@@ -311,13 +408,24 @@ class PeekabooState:
 # buffer so that the state space is finite.
 #
 class PeekabooPrecover(Lazy):
+    """Precover NFA with truncated output buffers for bounded-lookahead decomposition."""
 
-    def __init__(self, f, target, K=1):
-        self.f = f
+    def __init__(self, fst, target, K=1):
+        self.fst = fst
         self.target = target
         self.N = len(target)
         self.K = K
         assert K >= 1
+        # Arc labels are FST input symbols; epsilon arcs exist only if the
+        # FST has input-epsilon arcs.  When absent, skip EpsilonRemove in
+        # det() — the wrapper is a no-op but costs ~12-15% of runtime on
+        # trivial {state} closures.
+        self._has_eps = EPSILON in fst.A
+
+    def epsremove(self):
+        if self._has_eps:
+            return super().epsremove()
+        return self
 
     def arcs(self, state):
         (i, ys, truncated) = state
@@ -326,17 +434,16 @@ class PeekabooPrecover(Lazy):
         if self.target[:m] != ys[:m]:      # target and ys are not prefixes of one another.
             return
         if m >= self.N:                    # i.e, target <= ys
-            for x, y, j in self.f.arcs(i):
+            for x, y, j in self.fst.arcs(i):
                 if y == EPSILON or truncated:
                     yield (x, (j, ys, truncated))
                 else:
-                    assert not truncated
                     was = (ys + y)
                     now = was[:self.N+self.K]
                     yield (x, (j, now, (was != now)))
         else:                              # i.e, ys < target)
             assert not truncated
-            for x, y, j in self.f.arcs(i):
+            for x, y, j in self.fst.arcs(i):
                 if y == EPSILON:
                     yield (x, (j, ys, truncated))
                 elif y == self.target[n]:
@@ -349,7 +456,7 @@ class PeekabooPrecover(Lazy):
         if self.target[:m] != ys[:m]:
             return
         if m >= self.N:
-            for y, j in self.f.arcs(i, x):
+            for y, j in self.fst.arcs(i, x):
                 if y == EPSILON or truncated:
                     yield (j, ys, truncated)
                 else:
@@ -357,32 +464,27 @@ class PeekabooPrecover(Lazy):
                     now = was[:self.N+self.K]
                     yield (j, now, (was != now))
         else:
-            for y, j in self.f.arcs(i, x):
+            for y, j in self.fst.arcs(i, x):
                 if y == EPSILON:
                     yield (j, ys, truncated)
                 elif y == self.target[n]:
                     yield (j, self.target[:n+1], truncated)
 
     def start(self):
-        for i in self.f.I:
+        for i in self.fst.I:
             yield (i, self.target[:0], False)
 
     def is_final(self, state):
         (i, ys, _) = state
-        return self.f.is_final(i) and ys.startswith(self.target) and len(ys) > self.N
+        return self.fst.is_final(i) and ys.startswith(self.target) and len(ys) > self.N
 
 
 class TruncatedDFA(Lazy):
-    """NOTE: This class augments a determinized `PeekabooPrecover` semi-automaton by
-    adding an appropriate `is_final` method so that it is a valid finite-state
-    automaton that encodes `Precover(fst, target)`.
+    """Augments a determinized `PeekabooPrecover` semi-automaton with an `is_final` method,
+    producing a valid FSA that encodes `Precover(fst, target)`.
 
-
-    # In other words, for all `target` strings:
-    # dfa_truncated = TruncatedDFA(dfa=dfa, fst=self.fst, target=target)
-    # assert dfa_filtered.materialize().equal(Precover(self.fst, target).dfa)
-
-
+    Invariant: for all target strings,
+        `TruncatedDFA(dfa=dfa, fst=fst, target=target).materialize().equal(Precover(fst, target).dfa)`
     """
 
     def __init__(self, *, dfa, fst, target):
@@ -393,17 +495,23 @@ class TruncatedDFA(Lazy):
     def start(self):
         return self.dfa.start()
 
-    # TODO: I think this is optional, but possibly less efficient
+    # Refine is not required for correctness — the TruncatedDFA recognizes
+    # the same language without it.  It is a normalization step that removes
+    # NFA states committed to a different next symbol (e.g., buffer target+z
+    # when we're computing Precover(target+y) for z ≠ y).  These states are
+    # "passengers" that don't affect is_final results, but they inflate
+    # powerset states (more elements to hash/compare) and generate irrelevant
+    # successors during the universality sub-BFS.  In practice the impact is
+    # unclear: most universality checks short-circuit via witnesses or the
+    # monotonicity cache before reaching the sub-BFS.
     def refine(self, frontier):
-        # clip the target side to `y` in order to mimic the states of the
-        # composition machine that we used in the new lazy, nonrecursive
-        # algorithm.
+        """Clip buffer strings to target length and filter to prefix-compatible
+        states.  This normalization ensures equivalent DFA states are identified."""
         N = len(self.target)
         return frozenset(
-            (i, ys[:N], truncated) for i, ys, truncated in frontier     # TODO: can we use the truncated bit here?
+            (i, ys[:N], truncated) for i, ys, truncated in frontier
             if ys[:min(N, len(ys))] == self.target[:min(N, len(ys))]
         )
-#        return frontier
 
     def arcs(self, state):
         for x, next_state in self.dfa.arcs(state):

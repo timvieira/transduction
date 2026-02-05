@@ -8,7 +8,7 @@ from transduction import peekaboo_nonrecursive
 from transduction import peekaboo_recursive
 
 try:
-    from transduction.rust_bridge import RustDecomp
+    from transduction.rust_bridge import RustDecomp, RustPeekaboo
     HAS_RUST = True
 except ImportError:
     HAS_RUST = False
@@ -208,6 +208,37 @@ class run_rust_decomp:
                 self.run(target + y, depth - 1)
 
 
+class run_rust_peekaboo:
+    """
+    Utility function for testing the Rust peekaboo decomposition against the
+    reference implementation.
+    """
+    def __init__(self, fst, target, depth, verbosity=0):
+        self.fst = fst
+        self.target_alphabet = self.fst.B - {EPSILON}
+        self.depth = depth
+        self.peekaboo = RustPeekaboo(fst)
+        self.reference = lambda target: Precover(fst, target)
+        self.verbosity = verbosity
+        self.run(target, depth)
+
+    def run(self, target, depth):
+        if depth == 0: return
+
+        # Check that the decomposition matches the reference implementation
+        want = {y: self.reference(target + y) for y in self.target_alphabet}
+        have = self.peekaboo(target)
+        assert_equal_decomp_map(have, want)
+
+        # recurse
+        for y in want:
+            if self.verbosity > 0: print('>', repr(target + y))
+            q = want[y].quotient.trim()
+            r = want[y].remainder.trim()
+            if q.states or r.states:
+                self.run(target + y, depth - 1)
+
+
 IMPLEMENTATIONS = [
     pytest.param(run_recursive_dfa_decomp, id="recursive_dfa_decomp"),
     pytest.param(run_nonrecursive_dfa_decomp, id="nonrecursive_dfa_decomp"),
@@ -219,6 +250,9 @@ IMPLEMENTATIONS = [
 if HAS_RUST:
     IMPLEMENTATIONS.append(
         pytest.param(run_rust_decomp, id="rust_decomp"),
+    )
+    IMPLEMENTATIONS.append(
+        pytest.param(run_rust_peekaboo, id="rust_peekaboo"),
     )
 
 
@@ -320,6 +354,7 @@ if __name__ == '__main__':
     ]
     if HAS_RUST:
         algs.append(run_rust_decomp)
+        algs.append(run_rust_peekaboo)
 
     options = {}
     env = dict(globals())

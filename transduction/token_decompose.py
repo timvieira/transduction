@@ -1,6 +1,12 @@
 """
 Token-level decomposition for BPE-like FSTs.
 
+**EXPERIMENTAL** — This module is a specialized optimization that only applies
+to FSTs satisfying the ``all_input_universal`` property (see
+``fst.check_all_input_universal``). It is not a general-purpose decomposition
+algorithm. See ``reports/token_decompose_applicability.ipynb`` for a detailed
+analysis of which FST classes qualify.
+
 Instead of tracking (fst_state, buf_pos) pairs through intermediate states,
 this module collapses each token into a single transition that advances buf_pos
 by the token's byte length. DFA states are position subsets {0..target_len}
@@ -106,12 +112,58 @@ class ByteTrie:
 
         return result
 
+    def graphviz(self):
+        """Render the trie as a graphviz Digraph."""
+        from graphviz import Digraph
+        import html as html_mod
+        g = Digraph(
+            graph_attr=dict(rankdir='TB'),
+            node_attr=dict(
+                fontname='Monospace', fontsize='9',
+                height='.05', width='.05',
+                margin='0.06,0.04', shape='circle', style='filled',
+                fillcolor='white',
+            ),
+            edge_attr=dict(
+                arrowsize='0.3', fontname='Monospace', fontsize='9',
+            ),
+        )
+        for nid in range(len(self.children)):
+            completions = self.completions[nid]
+            if completions:
+                labels = ', '.join(
+                    html_mod.escape(repr(tid)) for tid, _blen in completions
+                )
+                g.node(str(nid), label=labels,
+                       shape='box', style='filled,rounded',
+                       fillcolor='#90EE90')
+            else:
+                g.node(str(nid), label='' if nid > 0 else 'root',
+                       shape='circle')
+            for byte_val, child in self.children[nid].items():
+                g.edge(str(nid), str(child),
+                       label=f' {html_mod.escape(repr(byte_val))} ')
+        return g
+
+    def _repr_mimebundle_(self, *args, **kwargs):
+        return self.graphviz()._repr_mimebundle_(*args, **kwargs)
+
     def _collect_subtree(self, node, advance_cap, result):
         """Collect all tokens in the subtree below node."""
         for _byte, child in self.children[node].items():
             for (tid, _byte_len) in self.completions[child]:
                 result.append((tid, advance_cap))
             self._collect_subtree(child, advance_cap, result)
+
+
+def build_trie(fst):
+    """Build a ByteTrie from an FST's extracted tokens."""
+    token_list = extract_token_bytes(fst)
+    trie = ByteTrie()
+    for token_id, byte_seq in token_list:
+        if byte_seq:
+            trie.insert(token_id, byte_seq)
+    return trie
 
 
 class TokenDecompose:
