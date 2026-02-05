@@ -101,3 +101,18 @@ Most examples show one of two patterns:
 3. **Universality fast path**: When `all_input_universal` (BPE-like FSTs), every
    final-containing projected state is automatically universal. This avoids the witness
    lookup and BFS entirely.
+
+## Usage
+
+```python
+from transduction.rust_bridge import RustPeekaboo
+from transduction import examples
+
+fst = examples.newspeak2()
+peekaboo = RustPeekaboo(fst)
+
+# Get Q(y·z) and R(y·z) for every next symbol z
+decomps = peekaboo('ba')
+for symbol, decomp in decomps.items():
+    print(f"'{symbol}': Q={len(decomp.quotient.states)}, R={len(decomp.remainder.states)}")
+```

@@ -6,7 +6,18 @@ from arsenal.datastructures import LocatorMaxHeap
 
 from arsenal import colors
 from arsenal.maths import sample
-from tokenization.util import logsumexp
+
+
+def logsumexp(arr):
+    arr = np.array(arr, dtype=np.float64)
+    arr = arr[arr > -np.inf]
+    if len(arr) == 0: return -np.inf
+    vmax = arr.max()
+    arr -= vmax
+    np.exp(arr, out=arr)
+    out = np.log(arr.sum())
+    out += vmax
+    return out
 
 
 @dataclass(frozen=False, eq=True, unsafe_hash=True)
