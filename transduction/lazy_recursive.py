@@ -89,13 +89,13 @@ class BuggyLazyRecursive:
 
     def candidacy(self, xs, target):
         return any(
-            (ys[:len(target)] == target or target[:len(ys)] == ys)
+            (ys.startswith(target) or target.startswith(ys))
             for (s, ys) in self.frontier(xs)
         )
 
     def discontinuity(self, xs, target):   # pylint: disable=W0613
         return any((s in self.fst.F) for (s, ys) in self.frontier(xs)
-                   if ys[:len(target)] == target)
+                   if ys.startswith(target))
 
     # XXX: technically, this state depends on the `target` as it was used for filtering.
     @memoize
@@ -146,7 +146,7 @@ class BuggyLazyRecursive:
         Warning: this test is not exact, and it leads to a suboptimal quotient.
         """
         return self.is_universal(frozenset(s for (s, ys) in self.frontier(xs)
-                                           if ys[:len(target)] == target))
+                                           if ys.startswith(target)))
 
     # TODO: using lazy determinization with the search for acceptance and
     # completeness of all downstream states is likely faster here, as we may find a

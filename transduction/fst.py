@@ -190,26 +190,25 @@ class FST:
         section (we do so efficiently by representing it as a WFSA).
         """
 
-        def normalize(obj):
-            if isinstance(obj, str) or isinstance(obj, tuple):
-                return FST.from_string(obj)
-            return obj
-
         if x is not None and y is not None:
-            x = normalize(x)
-            y = normalize(y)
+            if isinstance(x, str):
+                x = FST.from_string(x)
+            if isinstance(y, str):
+                y = FST.from_string(y)
             return (x @ self @ y)
 
         elif x is not None and y is None:
-            x = normalize(x)
+            if isinstance(x, str):
+                x = FST.from_string(x)
             return (x @ self).project(1)
 
         elif x is None and y is not None:
-            y = normalize(y)
+            if isinstance(y, str):
+                y = FST.from_string(y)
             return (self @ y).project(0)
 
-        return self
-
+        else:
+            return self
 
     @classmethod
     def from_string(cls, xs):
