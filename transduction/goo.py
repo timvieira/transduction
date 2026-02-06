@@ -1,6 +1,6 @@
 from transduction.lazy import Lazy, EPSILON
 from transduction.fsa import FSA
-from transduction.fst import FST
+from transduction.fst import FST, UniversalityFilter
 from collections import deque
 
 from transduction.lm.statelm import decode_hf_tokenizer
@@ -88,54 +88,13 @@ class LazyPrecoverNFA(Lazy):
         self.fst = fst
         self.target = target
         self.N = len(target)
+        fst.ensure_arc_indexes()
+        self._has_eps = EPSILON in fst.A
 
-        try:
-            fst.index_iy_xj
-        except AttributeError:
-            index_iy_xj = {}
-            for i in fst.states:
-                for x, y, j in fst.arcs(i):
-                    if (i, y) not in index_iy_xj:
-                        index_iy_xj[i, y] = set()
-                    index_iy_xj[i, y].add((x, j))
-            fst.index_iy_xj = index_iy_xj
-            del index_iy_xj
-
-        try:
-            fst.index_i_xj
-        except AttributeError:
-            index_i_xj = {}
-            for i in fst.states:
-                for x, _, j in fst.arcs(i):
-                    if i not in index_i_xj:
-                        index_i_xj[i] = set()
-                    index_i_xj[i].add((x, j))
-            fst.index_i_xj = index_i_xj
-            del index_i_xj
-
-        try:
-            fst.index_ix_j
-        except AttributeError:
-            index_ix_j = {}
-            for i in fst.states:
-                for x, y, j in fst.arcs(i):
-                    if (i, x) not in index_ix_j:
-                        index_ix_j[i, x] = set()
-                    index_ix_j[i, x].add(j)
-            fst.index_ix_j = index_ix_j
-            del index_ix_j
-
-        try:
-            fst.index_ixy_j
-        except AttributeError:
-            index_ixy_j = {}
-            for i in fst.states:
-                for x, y, j in fst.arcs(i):
-                    if (i, x, y) not in index_ixy_j:
-                        index_ixy_j[i, x, y] = set()
-                    index_ixy_j[i, x, y].add(j)
-            fst.index_ixy_j = index_ixy_j
-            del index_ixy_j
+    def epsremove(self):
+        if self._has_eps:
+            return super().epsremove()
+        return self
 
     def arcs(self, state):
         (i, n) = state
@@ -183,6 +142,7 @@ class NonrecursiveDFADecomp:
         # it can fail to terminate (e.g., on the `triplets_of_doom`).
         fsa = LazyPrecoverNFA(fst, target).materialize().renumber().trim()
         dfa = fsa.lazy().det()
+        filt = UniversalityFilter(fst, target, dfa, self.source_alphabet)
 
         Q = FSA()
         R = FSA()
@@ -200,7 +160,7 @@ class NonrecursiveDFADecomp:
             i = worklist.popleft()
 
             if dfa.is_final(i):
-                if dfa.accepts_universal(i, self.source_alphabet):
+                if filt.is_universal(i):
                     Q.add_stop(i)
                     continue       # will not expand further
                 else:

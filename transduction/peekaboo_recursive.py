@@ -416,6 +416,7 @@ class PeekabooPrecover(Lazy):
         self.N = len(target)
         self.K = K
         assert K >= 1
+        fst.ensure_arc_indexes()
         # Arc labels are FST input symbols; epsilon arcs exist only if the
         # FST has input-epsilon arcs.  When absent, skip EpsilonRemove in
         # det() — the wrapper is a no-op but costs ~12-15% of runtime on
@@ -434,20 +435,23 @@ class PeekabooPrecover(Lazy):
         if self.target[:m] != ys[:m]:      # target and ys are not prefixes of one another.
             return
         if m >= self.N:                    # i.e, target <= ys
-            for x, y, j in self.fst.arcs(i):
-                if y == EPSILON or truncated:
-                    yield (x, (j, ys, truncated))
-                else:
-                    was = (ys + y)
-                    now = was[:self.N+self.K]
-                    yield (x, (j, now, (was != now)))
+            if truncated:
+                for x, j in self.fst.index_i_xj.get(i, ()):
+                    yield (x, (j, ys, True))
+            else:
+                for x, y, j in self.fst.arcs(i):
+                    if y == EPSILON:
+                        yield (x, (j, ys, False))
+                    else:
+                        was = (ys + y)
+                        now = was[:self.N+self.K]
+                        yield (x, (j, now, (was != now)))
         else:                              # i.e, ys < target)
             assert not truncated
-            for x, y, j in self.fst.arcs(i):
-                if y == EPSILON:
-                    yield (x, (j, ys, truncated))
-                elif y == self.target[n]:
-                    yield (x, (j, self.target[:n+1], truncated))
+            for x, j in self.fst.index_iy_xj.get((i, EPSILON), ()):
+                yield (x, (j, ys, False))
+            for x, j in self.fst.index_iy_xj.get((i, self.target[n]), ()):
+                yield (x, (j, self.target[:n+1], False))
 
     def arcs_x(self, state, x):
         (i, ys, truncated) = state
@@ -456,19 +460,22 @@ class PeekabooPrecover(Lazy):
         if self.target[:m] != ys[:m]:
             return
         if m >= self.N:
-            for y, j in self.fst.arcs(i, x):
-                if y == EPSILON or truncated:
-                    yield (j, ys, truncated)
-                else:
-                    was = (ys + y)
-                    now = was[:self.N+self.K]
-                    yield (j, now, (was != now))
+            if truncated:
+                for j in self.fst.index_ix_j.get((i, x), ()):
+                    yield (j, ys, True)
+            else:
+                for y, j in self.fst.arcs(i, x):
+                    if y == EPSILON:
+                        yield (j, ys, False)
+                    else:
+                        was = (ys + y)
+                        now = was[:self.N+self.K]
+                        yield (j, now, (was != now))
         else:
-            for y, j in self.fst.arcs(i, x):
-                if y == EPSILON:
-                    yield (j, ys, truncated)
-                elif y == self.target[n]:
-                    yield (j, self.target[:n+1], truncated)
+            for j in self.fst.index_ixy_j.get((i, x, EPSILON), ()):
+                yield (j, ys, False)
+            for j in self.fst.index_ixy_j.get((i, x, self.target[n]), ()):
+                yield (j, self.target[:n+1], False)
 
     def start(self):
         for i in self.fst.I:

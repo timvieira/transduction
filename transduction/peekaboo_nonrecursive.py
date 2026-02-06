@@ -141,6 +141,13 @@ class PeekabooPrecover(Lazy):
         self.fst = fst
         self.target = target
         self.N = len(target)
+        fst.ensure_arc_indexes()
+        self._has_eps = EPSILON in fst.A
+
+    def epsremove(self):
+        if self._has_eps:
+            return super().epsremove()
+        return self
 
     def arcs(self, state):
         (i, ys) = state
@@ -150,14 +157,14 @@ class PeekabooPrecover(Lazy):
 
         # case: grow the buffer until we have covered all of the target string
         if n < self.N:
-            for x, y, j in self.fst.arcs(i):
-                if y == EPSILON:
-                    yield (x, (j, ys))
-                elif y == self.target[n]:
-                    yield (x, (j, self.target[:n+1]))
+            for x, j in self.fst.index_iy_xj.get((i, EPSILON), ()):
+                yield (x, (j, ys))
+            for x, j in self.fst.index_iy_xj.get((i, self.target[n]), ()):
+                yield (x, (j, self.target[:n+1]))
 
         # extend the buffer beyond the target string by one symbol
         elif n == self.N:
+            # Need y for ys + y, keep fst.arcs(i)
             for x, y, j in self.fst.arcs(i):
                 if y == EPSILON:
                     yield (x, (j, ys))
@@ -166,7 +173,7 @@ class PeekabooPrecover(Lazy):
 
         # truncate the buffer after the (N+1)th symbol
         elif n == self.N + 1:
-            for x, _, j in self.fst.arcs(i):
+            for x, j in self.fst.index_i_xj.get(i, ()):
                 yield (x, (j, ys))
 
     def arcs_x(self, state, x):
@@ -175,19 +182,19 @@ class PeekabooPrecover(Lazy):
         m = min(n, self.N)
         if self.target[:m] != ys[:m]: return
         if n < self.N:
-            for y, j in self.fst.arcs(i, x):
-                if y == EPSILON:
-                    yield (j, ys)
-                elif y == self.target[n]:
-                    yield (j, self.target[:n+1])
+            for j in self.fst.index_ixy_j.get((i, x, EPSILON), ()):
+                yield (j, ys)
+            for j in self.fst.index_ixy_j.get((i, x, self.target[n]), ()):
+                yield (j, self.target[:n+1])
         elif n == self.N:
+            # Need y for ys + y, keep fst.arcs(i, x)
             for y, j in self.fst.arcs(i, x):
                 if y == EPSILON:
                     yield (j, ys)
                 else:
                     yield (j, ys + y)
         elif n == self.N + 1:
-            for _, j in self.fst.arcs(i, x):
+            for j in self.fst.index_ix_j.get((i, x), ()):
                 yield (j, ys)
 
     def start(self):
