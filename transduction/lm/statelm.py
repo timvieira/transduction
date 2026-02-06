@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import transformers
+from transformers.cache_utils import DynamicCache
 
 from arsenal.maths import sample_dict
 from functools import cached_property
@@ -245,9 +246,16 @@ class StateLM:
                 (_, x) = self.context
                 i = lm._encode[x]
                 input_ids = torch.LongTensor([[i]], device=lm.device)
+                past_kv = self.parent.out.past_key_values
+                if isinstance(past_kv, DynamicCache):
+                    raise TypeError(
+                        "StateLM does not support DynamicCache (mutates in-place, "
+                        "breaks tree-structured branching). See: "
+                        "https://github.com/timvieira/transduction/issues/1"
+                    )
                 return self.lm.model(
                     input_ids=input_ids,
-                    past_key_values=self.parent.out.past_key_values,
+                    past_key_values=past_kv,
                     use_cache=True,
                 )
 
