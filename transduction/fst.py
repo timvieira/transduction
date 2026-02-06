@@ -85,6 +85,24 @@ class FST:
     add_start = add_I
     add_stop = add_F
 
+    def ensure_arc_indexes(self):
+        if hasattr(self, 'index_iy_xj'):
+            return
+        index_iy_xj = {}
+        index_i_xj = {}
+        index_ix_j = {}
+        index_ixy_j = {}
+        for i in self.states:
+            for x, y, j in self.arcs(i):
+                index_iy_xj.setdefault((i, y), set()).add((x, j))
+                index_i_xj.setdefault(i, set()).add((x, j))
+                index_ix_j.setdefault((i, x), set()).add(j)
+                index_ixy_j.setdefault((i, x, y), set()).add(j)
+        self.index_iy_xj = index_iy_xj
+        self.index_i_xj = index_i_xj
+        self.index_ix_j = index_ix_j
+        self.index_ixy_j = index_ixy_j
+
     def arcs(self, i, x=None):
         if x is None:
             for a, A in self.delta[i].items():

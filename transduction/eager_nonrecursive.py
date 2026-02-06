@@ -22,6 +22,13 @@ class LazyPrecoverNFAWithTruncationMarker(Lazy):
         self.fst = fst
         self.target = target
         self.N = len(target)
+        fst.ensure_arc_indexes()
+        self._has_eps = EPSILON in fst.A
+
+    def epsremove(self):
+        if self._has_eps:
+            return super().epsremove()
+        return self
 
     def arcs(self, state):
         (i, ys, truncated) = state
@@ -30,18 +37,22 @@ class LazyPrecoverNFAWithTruncationMarker(Lazy):
         if self.target[:m] != ys[:m]:      # target and ys are incompatible
             return
         if m == self.N:                    # i.e, target <= ys
-            for x, y, j in self.fst.arcs(i):
-                if y == EPSILON or truncated:
-                    yield (x, (j, self.target, truncated))
-                else:
+            if truncated:
+                for x, j in self.fst.index_i_xj.get(i, ()):
                     yield (x, (j, self.target, True))
+            else:
+                # Need y to distinguish EPSILON from non-EPSILON
+                for x, y, j in self.fst.arcs(i):
+                    if y == EPSILON:
+                        yield (x, (j, self.target, False))
+                    else:
+                        yield (x, (j, self.target, True))
         else:                              # i.e, ys < target)
             assert not truncated
-            for x, y, j in self.fst.arcs(i):
-                if y == EPSILON:
-                    yield (x, (j, ys, False))
-                elif y == self.target[n]:
-                    yield (x, (j, self.target[:n+1], False))
+            for x, j in self.fst.index_iy_xj.get((i, EPSILON), ()):
+                yield (x, (j, ys, False))
+            for x, j in self.fst.index_iy_xj.get((i, self.target[n]), ()):
+                yield (x, (j, self.target[:n+1], False))
 
     def arcs_x(self, state, x):
         (i, ys, truncated) = state
@@ -50,18 +61,22 @@ class LazyPrecoverNFAWithTruncationMarker(Lazy):
         if self.target[:m] != ys[:m]:
             return
         if m == self.N:
-            for y, j in self.fst.arcs(i, x):
-                if y == EPSILON or truncated:
-                    yield (j, self.target, truncated)
-                else:
+            if truncated:
+                for j in self.fst.index_ix_j.get((i, x), ()):
                     yield (j, self.target, True)
+            else:
+                # Need y to distinguish EPSILON from non-EPSILON
+                for y, j in self.fst.arcs(i, x):
+                    if y == EPSILON:
+                        yield (j, self.target, False)
+                    else:
+                        yield (j, self.target, True)
         else:
             assert not truncated
-            for y, j in self.fst.arcs(i, x):
-                if y == EPSILON:
-                    yield (j, ys, False)
-                elif y == self.target[n]:
-                    yield (j, self.target[:n+1], False)
+            for j in self.fst.index_ixy_j.get((i, x, EPSILON), ()):
+                yield (j, ys, False)
+            for j in self.fst.index_ixy_j.get((i, x, self.target[n]), ()):
+                yield (j, self.target[:n+1], False)
 
     def start(self):
         for i in self.fst.I:
@@ -93,6 +108,13 @@ class LazyPrecoverNFA(Lazy):
         self.fst = fst
         self.target = target
         self.N = len(target)
+        fst.ensure_arc_indexes()
+        self._has_eps = EPSILON in fst.A
+
+    def epsremove(self):
+        if self._has_eps:
+            return super().epsremove()
+        return self
 
     def arcs(self, state):
         (i, ys) = state
@@ -101,14 +123,13 @@ class LazyPrecoverNFA(Lazy):
         if self.target[:m] != ys[:m]:      # target and ys are not prefixes of one another.
             return
         if m == self.N:                    # i.e, target <= ys
-            for x, _, j in self.fst.arcs(i):
+            for x, j in self.fst.index_i_xj.get(i, ()):
                 yield (x, (j, self.target))
         else:                              # i.e, ys < target)
-            for x, y, j in self.fst.arcs(i):
-                if y == EPSILON:
-                    yield (x, (j, ys))
-                elif y == self.target[n]:
-                    yield (x, (j, self.target[:n+1]))
+            for x, j in self.fst.index_iy_xj.get((i, EPSILON), ()):
+                yield (x, (j, ys))
+            for x, j in self.fst.index_iy_xj.get((i, self.target[n]), ()):
+                yield (x, (j, self.target[:n+1]))
 
     def arcs_x(self, state, x):
         (i, ys) = state
@@ -117,14 +138,13 @@ class LazyPrecoverNFA(Lazy):
         if self.target[:m] != ys[:m]:
             return
         if m == self.N:
-            for _, j in self.fst.arcs(i, x):
+            for j in self.fst.index_ix_j.get((i, x), ()):
                 yield (j, self.target)
         else:
-            for y, j in self.fst.arcs(i, x):
-                if y == EPSILON:
-                    yield (j, ys)
-                elif y == self.target[n]:
-                    yield (j, self.target[:n+1])
+            for j in self.fst.index_ixy_j.get((i, x, EPSILON), ()):
+                yield (j, ys)
+            for j in self.fst.index_ixy_j.get((i, x, self.target[n]), ()):
+                yield (j, self.target[:n+1])
 
     def start(self):
         for i in self.fst.I:
