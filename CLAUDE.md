@@ -22,6 +22,8 @@
 
 Self-contained language model interface for use with enumeration/sampling:
 
+- `transduction/lm/base.py` — `LMState` ABC (defines `logp_next`, `eos`, `__lshift__`, plus `advance`, `greedy_decode`, `sample_decode`)
+- `transduction/lm/ngram.py` — `ByteNgramLM`, `CharNgramLM` (lightweight n-gram LMs for testing)
 - `transduction/lm/statelm.py` — `StateLM`, `TokenizedLLM`, `load_model_by_name`
   - Wraps HuggingFace causal LMs with KV-cache-based incremental decoding
   - `StateLM.initial('gpt2')` loads a model and returns the initial state
@@ -30,6 +32,7 @@ Self-contained language model interface for use with enumeration/sampling:
   - `state.eos` returns the EOS token (bytes)
   - Includes inlined dependencies: `decode_hf_tokenizer`, `LazyProb`, `flatten`/`unflatten`
   - External deps: `torch`, `transformers`, `arsenal`
+- `transduction/lm/transduced.py` — `TransducedLM`, `TransducedState` (pushforward of an inner LM through an FST)
 
 ### Rust Acceleration (`crates/transduction-core/`)
 
@@ -75,4 +78,5 @@ python -m pytest tests/test_enumeration.py -v
 
 ## Reports
 
-Generated reports go in `output/` at the project root (gitignored).
+Generated reports go in `reports/` at the project root.
+Generated data goes in `output/` at the project root (gitignored).

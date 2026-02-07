@@ -42,9 +42,12 @@ have terminated. Both are represented as finite automata.
 
 | Class | File | Description |
 |-------|------|-------------|
+| `LMState` | `lm/base.py` | ABC: `logp_next`, `eos`, `<<`, `advance`, `greedy_decode`, `sample_decode` |
+| `ByteNgramLM` / `CharNgramLM` | `lm/ngram.py` | Lightweight n-gram LMs for testing |
 | `StateLM` | `lm/statelm.py` | Incremental LM state with KV-cache |
 | `TokenizedLLM` | `lm/statelm.py` | Wraps HuggingFace causal LMs |
 | `load_model_by_name` | `lm/statelm.py` | Load `'gpt2'`, `'meta-llama/...'`, etc. |
+| `TransducedLM` | `lm/transduced.py` | Pushforward of an inner LM through an FST |
 
 Self-contained (no external tokenization deps). Example:
 ```python

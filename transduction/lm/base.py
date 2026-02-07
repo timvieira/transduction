@@ -2,24 +2,65 @@ import numpy as np
 from abc import ABC, abstractmethod
 
 
+class LogpNext:
+    """Dict-backed log-probability lookup with top-k support.
+
+    Convention: items() includes ALL tokens in the distribution,
+    including EOS. __getitem__ returns -inf for unknown tokens.
+    """
+
+    def __init__(self, scores):
+        self._scores = scores
+
+    def __getitem__(self, token):
+        v = self._scores.get(token)
+        return v if v is not None else -np.inf
+
+    def __contains__(self, token):
+        return token in self._scores
+
+    def keys(self):
+        return self._scores.keys()
+
+    def items(self):
+        return self._scores.items()
+
+    def materialize(self, top=None):
+        items = sorted(self._scores.items(), key=lambda kv: kv[1], reverse=True)
+        if top is not None:
+            items = items[:int(top)]
+        return dict(items)
+
+    def top(self, K):
+        return self.materialize(top=K)
+
+    def argmax(self):
+        """Return the token with the highest log-probability."""
+        return max(self._scores, key=self._scores.__getitem__)
+
+    def sample(self):
+        """Sample a token from the distribution."""
+        toks = list(self._scores.keys())
+        logps = np.array(list(self._scores.values()), dtype=np.float64)
+        logps -= logps.max()
+        probs = np.exp(logps)
+        probs /= probs.sum()
+        return toks[np.random.choice(len(toks), p=probs)]
+
+
 class LMState(ABC):
     """Abstract base class for LM state objects.
 
-    Subclasses must implement:
+    Subclasses must provide:
         logp_next  — dict-like with items() → (token, logp) pairs
                      and __getitem__(token) → logp
-        eos        — EOS sentinel token
+        eos        — EOS sentinel token (attribute or property)
         __lshift__ — advance state by one token, returns new state
     """
 
     @property
     @abstractmethod
     def logp_next(self):
-        ...
-
-    @property
-    @abstractmethod
-    def eos(self):
         ...
 
     @abstractmethod
@@ -31,10 +72,7 @@ class LMState(ABC):
         state = self
         tokens = []
         for _ in range(max_len):
-            best_tok, best_lp = state.eos, state.logp_next[state.eos]
-            for tok, lp in state.logp_next.items():
-                if lp > best_lp:
-                    best_tok, best_lp = tok, lp
+            best_tok = state.logp_next.argmax()
             if best_tok == state.eos:
                 break
             tokens.append(best_tok)
@@ -48,48 +86,21 @@ class LMState(ABC):
             s = s << x
         return s
 
-    def sample_next_token(self):
-        """Sample a single next token from logp_next (including EOS)."""
-        toks = []
-        logps = []
-        for tok, lp in self.logp_next.items():
-            toks.append(tok)
-            logps.append(lp)
-        toks.append(self.eos)
-        logps.append(self.logp_next[self.eos])
-        logps = np.array(logps, dtype=np.float64)
-        logps -= logps.max()
-        probs = np.exp(logps)
-        probs /= probs.sum()
-        return toks[np.random.choice(len(toks), p=probs)]
-
     def sample(self):
         """Sample one token and advance. Returns new state (or self if EOS)."""
-        tok = self.sample_next_token()
+        tok = self.logp_next.sample()
         if tok == self.eos:
             return self
         return self << tok
 
-    def sample_decode(self, max_len=100, temperature=1.0):
+    def sample_decode(self, max_len=100):
         """Sample autoregressively until EOS or max_len. Returns list of tokens."""
         state = self
         tokens = []
         for _ in range(max_len):
-            toks = []
-            logps = []
-            for tok, lp in state.logp_next.items():
-                toks.append(tok)
-                logps.append(lp)
-            toks.append(state.eos)
-            logps.append(state.logp_next[state.eos])
-            logps = np.array(logps, dtype=np.float64)
-            logps /= temperature
-            logps -= logps.max()
-            probs = np.exp(logps)
-            probs /= probs.sum()
-            idx = np.random.choice(len(toks), p=probs)
-            if toks[idx] == state.eos:
+            tok = state.logp_next.sample()
+            if tok == state.eos:
                 break
-            tokens.append(toks[idx])
-            state = state << toks[idx]
+            tokens.append(tok)
+            state = state << tok
         return tokens

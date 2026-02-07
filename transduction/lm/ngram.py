@@ -22,51 +22,20 @@ Usage:
 import numpy as np
 from collections import Counter
 
-from transduction.lm.base import LMState
+from transduction.lm.base import LMState, LogpNext
 
 
 # ===========================================================================
 # Byte-level n-gram LM
 # ===========================================================================
 
-class NgramLogpNext:
-    """Lazy log-probability lookup for next byte, matching LazyProb interface."""
-
-    def __init__(self, log_probs):
-        # log_probs: np.array of shape (256,) indexed by byte value
-        self._log_probs = log_probs
-
-    def _to_byte(self, token):
-        """Coerce token to a byte value (int 0-255)."""
-        if isinstance(token, (bytes, bytearray)):
-            return token[0] if len(token) == 1 else None
-        if isinstance(token, int):
-            return token
-        if isinstance(token, str):
-            # FST arc symbols are strings like '116' for byte 116
-            try:
-                return int(token)
-            except ValueError:
-                return None
-        return None
-
-    def __getitem__(self, token):
-        b = self._to_byte(token)
-        if b is not None:
-            return float(self._log_probs[b])
-        return 0.0
-
-    def keys(self):
-        return [bytes([i]) for i in range(256)]
-
-    def items(self):
-        return [(bytes([i]), float(self._log_probs[i])) for i in range(256)]
-
-    def materialize(self, top=None):
-        idx = self._log_probs.argsort()
-        if top is not None:
-            idx = idx[-int(top):]
-        return {bytes([i]): float(self._log_probs[i]) for i in reversed(idx)}
+def _to_byte(token):
+    """Coerce token to a byte value (int 0-255)."""
+    if isinstance(token, (bytes, bytearray)):
+        return token[0] if len(token) == 1 else None
+    if isinstance(token, int):
+        return token
+    return None
 
 
 class NgramState(LMState):
@@ -81,19 +50,16 @@ class NgramState(LMState):
 
     def __init__(self, lm, context, logp, history=()):
         self.lm = lm
+        self.eos = lm.eos
         self._context = context      # last (n-1) bytes as tuple
         self.logp = logp
         self.history = history        # full path as nested tuple (like StateLM.context)
 
-    @property
-    def eos(self):
-        return self.lm.eos
-
     def __lshift__(self, token):
-        byte_val = self.logp_next._to_byte(token)
-        if byte_val is None:
-            raise ValueError(f"Cannot convert {token!r} to byte")
-        lp = float(self.logp_next._log_probs[byte_val])
+        byte_val = _to_byte(token)
+        if byte_val is None or bytes([byte_val]) == self.eos:
+            raise ValueError(f"Out of vocabulary: {token!r}")
+        lp = self.logp_next[token]
         n = self.lm.n
         new_ctx = (self._context + (byte_val,))[-(n - 1):] if n > 1 else ()
         return NgramState(self.lm, new_ctx, self.logp + lp,
@@ -105,8 +71,7 @@ class NgramState(LMState):
 
     @property
     def p_next(self):
-        lp = self.logp_next
-        return NgramLogpNext(np.exp(lp._log_probs))
+        return LogpNext({k: np.exp(v) for k, v in self.logp_next.items()})
 
     def path(self):
         """Recover the full sequence of tokens from the history."""
@@ -120,7 +85,7 @@ class NgramState(LMState):
 
     def path_bytes(self):
         """Recover the full input as a bytes object."""
-        return bytes(self.logp_next._to_byte(t) for t in self.path())
+        return bytes(_to_byte(t) for t in self.path())
 
     def __repr__(self):
         ctx_bytes = bytes(self._context)
@@ -158,13 +123,14 @@ class ByteNgramLM:
         self._uniform = np.full(256, np.log(1.0 / 256))
 
     def _logp_next(self, context):
-        """Return NgramLogpNext for a given context tuple."""
+        """Return LogpNext for a given context tuple."""
         # Try full context, then back off to shorter contexts
         for start in range(len(context) + 1):
             ctx = context[start:]
             if ctx in self._tables:
-                return NgramLogpNext(self._tables[ctx])
-        return NgramLogpNext(self._uniform)
+                lp = self._tables[ctx]
+                return LogpNext({bytes([i]): float(lp[i]) for i in range(256)})
+        return LogpNext({bytes([i]): float(self._uniform[i]) for i in range(256)})
 
     def initial(self):
         return NgramState(self, (), 0.0)
@@ -211,32 +177,6 @@ class ByteNgramLM:
 # Character-level n-gram LM
 # ===========================================================================
 
-class CharNgramLogpNext:
-    """Dict-like log-probability lookup for character n-gram."""
-
-    def __init__(self, log_probs):
-        # log_probs: dict mapping symbol → log prob
-        self._log_probs = log_probs
-
-    def __getitem__(self, token):
-        return self._log_probs.get(token, -np.inf)
-
-    def __contains__(self, token):
-        return token in self._log_probs
-
-    def keys(self):
-        return list(self._log_probs.keys())
-
-    def items(self):
-        return list(self._log_probs.items())
-
-    def materialize(self, top=None):
-        items = sorted(self._log_probs.items(), key=lambda kv: kv[1], reverse=True)
-        if top is not None:
-            items = items[:int(top)]
-        return dict(items)
-
-
 class CharNgramState(LMState):
     """Immutable char-level n-gram LM state, compatible with StateLM interface.
 
@@ -249,15 +189,14 @@ class CharNgramState(LMState):
 
     def __init__(self, lm, context, logp, history=()):
         self.lm = lm
+        self.eos = lm.eos
         self._context = context      # last (n-1) symbols as tuple
         self.logp = logp
         self.history = history
 
-    @property
-    def eos(self):
-        return self.lm.eos
-
     def __lshift__(self, token):
+        if token not in self.logp_next or token == self.eos:
+            raise ValueError(f"Out of vocabulary: {token!r}")
         lp = self.logp_next[token]
         n = self.lm.n
         new_ctx = (self._context + (token,))[-(n - 1):] if n > 1 else ()
@@ -320,13 +259,13 @@ class CharNgramLM:
         self._uniform = {s: np.log(1.0 / V) for s in self.alphabet}
 
     def _logp_next(self, context):
-        """Return CharNgramLogpNext for a given context tuple."""
+        """Return LogpNext for a given context tuple."""
         # Try full context, then back off to shorter contexts
         for start in range(len(context) + 1):
             ctx = context[start:]
             if ctx in self._tables:
-                return CharNgramLogpNext(self._tables[ctx])
-        return CharNgramLogpNext(self._uniform)
+                return LogpNext(self._tables[ctx])
+        return LogpNext(self._uniform)
 
     def initial(self):
         return CharNgramState(self, (), 0.0)

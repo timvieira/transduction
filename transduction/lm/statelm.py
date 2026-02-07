@@ -33,6 +33,9 @@ _encode_bytes_str = [
 _default_byte_decoder = {s: i for i, s in enumerate(_encode_bytes_str)}
 
 
+# TODO: Add some documentation here about what's going on and what assumptions
+# are being made.  This decoding method might not work for all hugging face
+# tokenizers.
 def decode_hf_tokenizer(tokenizer):
     "Extract what we need from a HuggingFace tokenizer."
     _merges = []
@@ -102,6 +105,11 @@ class LazyProb:
     def items(self):
         return zip(self._decode, self._p)
 
+    def __contains__(self, token):
+        if isinstance(token, int):
+            return 0 <= token < len(self._decode)
+        return token in self._encode
+
     def __getitem__(self, token):
         if isinstance(token, int):
             i = token
@@ -124,6 +132,18 @@ class LazyProb:
     def __repr__(self):
         return repr(self.materialize())
 
+    def argmax(self):
+        """Return the token with the highest log-probability."""
+        return self._decode[self._p.argmax()]
+
+    def sample(self):
+        """Sample a token from the distribution."""
+        logps = self._p.copy().astype(np.float64)
+        logps -= logps.max()
+        probs = np.exp(logps)
+        probs /= probs.sum()
+        return self._decode[np.random.choice(len(probs), p=probs)]
+
     def apply(self, f):
         return LazyProb(
             _p=f(self._p),
@@ -139,6 +159,8 @@ class LazyProb:
 # LM classes
 # ---------------------------------------------------------------------------
 
+# TODO: This class will encounter issues when its token vocabulary has multiple
+# token_ids that map to the same string of bytes.
 class TokenizedLLM:
 
     def __init__(self, tokenizer, model, byte_level=True):
@@ -212,15 +234,14 @@ class StateLM(LMState):
 
     def __init__(self, lm, logp, context, parent):
         self.lm = lm
+        self.eos = lm.eos
         self.logp = logp
         self.context = context
         self.parent = parent
 
-    @property
-    def eos(self):
-        return self.lm.eos
-
     def __lshift__(self, x):
+        if x not in self.logp_next or x == self.eos:
+            raise ValueError(f"Out of vocabulary: {x!r}")
         return StateLM(
             lm=self.lm,
             logp=self.logp + self.logp_next[x],
@@ -281,5 +302,3 @@ class StateLM(LMState):
             context=(),
             parent=None,
         )
-
-
