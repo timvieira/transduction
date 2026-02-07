@@ -22,7 +22,7 @@ Usage:
 import numpy as np
 from collections import Counter
 
-from transduction.lm.mixin import LMStateMixin
+from transduction.lm.base import LMState
 
 
 # ===========================================================================
@@ -69,7 +69,7 @@ class NgramLogpNext:
         return {bytes([i]): float(self._log_probs[i]) for i in reversed(idx)}
 
 
-class NgramState(LMStateMixin):
+class NgramState(LMState):
     """Immutable n-gram LM state, compatible with StateLM interface.
 
     Supports:
@@ -237,7 +237,7 @@ class CharNgramLogpNext:
         return dict(items)
 
 
-class CharNgramState(LMStateMixin):
+class CharNgramState(LMState):
     """Immutable char-level n-gram LM state, compatible with StateLM interface.
 
     Supports:

@@ -176,10 +176,10 @@ def load_model_by_name(model_name, device=None, **kwargs):
     )
 
 
-from transduction.lm.mixin import LMStateMixin
+from transduction.lm.base import LMState
 
 
-class StateLM(LMStateMixin):
+class StateLM(LMState):
     """Immutable LM state for incremental decoding with KV cache sharing.
 
     ``state << token`` returns a new state; the parent's cache is reused.

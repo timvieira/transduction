@@ -93,7 +93,3 @@ class LMState(ABC):
             tokens.append(toks[idx])
             state = state << toks[idx]
         return tokens
-
-
-# Backward-compatible alias
-LMStateMixin = LMState

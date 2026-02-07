@@ -5,7 +5,7 @@ from collections import defaultdict
 from genparse import EarleyLM, EOS
 
 from transduction import examples
-from transduction.lm.mixin import LMState
+from transduction.lm.base import LMState
 from transduction.enumeration import (
     prioritized_enumeration,
     importance_sampling,
