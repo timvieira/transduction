@@ -1,5 +1,5 @@
 from transduction import (
-    PrecoverDecomp, LazyNonrecursive, LazyRecursive, LazyPrecoverNFA,
+    PrecoverDecomp, LazyNonrecursive, LazyIncremental, LazyPrecoverNFA,
     EagerNonrecursive, examples, Precover, FSA
 )
 
@@ -30,7 +30,7 @@ def test_sdd1():
     assert tmp('a') == PrecoverDecomp({'a'}, set())
     assert tmp('aa') == PrecoverDecomp({'aa'}, set())
 
-    tmp = LazyRecursive(fst)
+    tmp = LazyIncremental(fst)
     assert tmp('') == PrecoverDecomp({'a'}, set())
     assert tmp('a') == PrecoverDecomp({'a'}, set())
     assert tmp('aa') == PrecoverDecomp({'aa'}, set())
@@ -60,7 +60,7 @@ def test_delete_b():
     algs = [
         EagerNonrecursive(fst, max_steps=30),
         LazyNonrecursive(fst, max_steps=30),
-        LazyRecursive(fst, max_steps=30),
+        LazyIncremental(fst, max_steps=30),
     ]
 
     for tmp in algs:
@@ -89,7 +89,7 @@ def test_simple():
     assert tmp('ab') == PrecoverDecomp({'12'}, set())
     assert tmp('abc') == PrecoverDecomp({'123'}, set())
 
-    tmp = LazyRecursive(fst)
+    tmp = LazyIncremental(fst)
     assert tmp('') == PrecoverDecomp({''}, set())
     assert tmp('a') == PrecoverDecomp({'1'}, set())
     assert tmp('ab') == PrecoverDecomp({'12'}, set())
@@ -133,7 +133,7 @@ def test_duplicate():
     assert tmp('1155') == PrecoverDecomp({'15'}, set())
     assert tmp('115') == PrecoverDecomp({'15'}, set())
 
-    tmp = LazyRecursive(fst)
+    tmp = LazyIncremental(fst)
     assert tmp('') == PrecoverDecomp({''}, set())
     assert tmp('1') == PrecoverDecomp({'1'}, set())
     assert tmp('11') == PrecoverDecomp({'1'}, set())
@@ -174,7 +174,7 @@ def test_newspeak2():
     assert tmp('ba') == ba
     assert tmp('ungood') == ungood, tmp('ungood')
 
-    tmp = LazyRecursive(n)
+    tmp = LazyIncremental(n)
     assert tmp('') == empty
     assert tmp('bad') == bad
     assert tmp('ba') == ba
@@ -198,7 +198,7 @@ def test_samuel_example():
     have = tmp(target)
     assert have == ({'a'}, set()), have
 
-    tmp = LazyRecursive(fst)
+    tmp = LazyIncremental(fst)
     have = tmp(target)
     assert have == ({'a'}, set()), have
 

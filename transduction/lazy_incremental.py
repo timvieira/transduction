@@ -5,7 +5,7 @@ from arsenal import colors
 from collections import deque
 
 
-class LazyRecursive:
+class LazyIncremental:
     """
     Lazy, recursive DFA-based algorithm.
     """

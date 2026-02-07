@@ -6,7 +6,7 @@ from collections import deque
 # XXX: Warning: this algorithm doesn't work in all cases.  It currently fails to
 # terminate on the `triplets_of_doom` test case.  The issue is that it does not
 # truncate the target buffer.
-class RecursiveDFADecomp:
+class IncrementalDFADecomp:
 
     def __init__(self, fst, target, parent=None):
 
@@ -107,4 +107,4 @@ class RecursiveDFADecomp:
         return True
 
     def __rshift__(self, y):
-        return RecursiveDFADecomp(self.fst, self.target + y, parent=self)
+        return IncrementalDFADecomp(self.fst, self.target + y, parent=self)

@@ -113,7 +113,7 @@ class RustDecomp:
 
 
 class RustPeekaboo:
-    """Drop-in replacement for peekaboo_recursive.Peekaboo using the Rust backend."""
+    """Drop-in replacement for peekaboo_incremental.Peekaboo using the Rust backend."""
 
     def __init__(self, fst):
         self.fst = fst

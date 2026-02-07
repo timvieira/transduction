@@ -15,11 +15,11 @@ Summary
 - PopPrecoverNFA: Pop/suffix-oriented variant — buffer shrinks from the target.
   Used by: Precover (impl='pop'). Experimental.
 - TargetSideBuffer: Simplest unbounded buffer accumulation; needs Relevance wrapper.
-  Used by: RecursiveDFADecomp.
+  Used by: IncrementalDFADecomp.
 - Relevance: Filter wrapper that prunes irrelevant buffer states.
-  Used by: RecursiveDFADecomp (wraps TargetSideBuffer).
+  Used by: IncrementalDFADecomp (wraps TargetSideBuffer).
 - PeekabooLookaheadNFA: K-lookahead truncation with truncation bit.
-  Used by: PeekabooState (peekaboo_recursive).
+  Used by: PeekabooState (peekaboo_incremental).
 - PeekabooFixedNFA: Fixed N+1 truncation, no truncation bit.
   Used by: Peekaboo, PeekabooStrings (peekaboo_nonrecursive).
 """
@@ -251,7 +251,7 @@ class TargetSideBuffer(Lazy):
 
     State format: ``(i, ys)`` where ``ys`` accumulates all FST output.
 
-    Used by: RecursiveDFADecomp (wrapped with Relevance).
+    Used by: IncrementalDFADecomp (wrapped with Relevance).
     """
 
     def __init__(self, f):
@@ -282,7 +282,7 @@ class Relevance(Lazy):
     Wraps another Lazy automaton and only keeps states where the buffer
     ``ys`` is a prefix of the target or vice versa.
 
-    Used by: RecursiveDFADecomp (wraps TargetSideBuffer).
+    Used by: IncrementalDFADecomp (wraps TargetSideBuffer).
     """
 
     def __init__(self, base, target):
@@ -317,7 +317,7 @@ class PeekabooLookaheadNFA(Lazy):
 
     State format: ``(i, ys, truncated)``
 
-    Used by: PeekabooState (peekaboo_recursive).
+    Used by: PeekabooState (peekaboo_incremental).
     """
 
     def __init__(self, fst, target, K=1):

@@ -28,8 +28,8 @@ from arsenal.datastructures import LocatorMaxHeap
 from transduction.lm.base import LMState, LogpNext
 
 # Default incremental decomposition; can be overridden via TransducedLM constructor.
-from transduction.peekaboo_recursive import PeekabooState as _DefaultDecompState
-from transduction.peekaboo_recursive import FstUniversality as _DefaultUniv
+from transduction.peekaboo_incremental import PeekabooState as _DefaultDecompState
+from transduction.peekaboo_incremental import FstUniversality as _DefaultUniv
 
 
 def logsumexp(arr):

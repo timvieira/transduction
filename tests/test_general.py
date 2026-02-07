@@ -1,11 +1,11 @@
 import pytest
 from transduction import examples, FSA, EPSILON, Precover
 from transduction.dfa_decomp_nonrecursive import NonrecursiveDFADecomp
-from transduction.dfa_decomp_recursive import RecursiveDFADecomp
+from transduction.dfa_decomp_incremental import IncrementalDFADecomp
 from transduction.token_decompose import TokenDecompose
 from transduction.fst import check_all_input_universal
 from transduction import peekaboo_nonrecursive
-from transduction import peekaboo_recursive
+from transduction import peekaboo_incremental
 
 try:
     from transduction.rust_bridge import RustDecomp, RustPeekaboo
@@ -25,7 +25,7 @@ class run_recursive_dfa_decomp:
         self.depth = depth
         self.reference = lambda target: Precover(fst, target)
         self.verbosity = verbosity
-        self.run(target, depth, RecursiveDFADecomp(fst, target))
+        self.run(target, depth, IncrementalDFADecomp(fst, target))
 
     def run(self, target, depth, state):
         if depth == 0: return
@@ -40,7 +40,7 @@ class run_recursive_dfa_decomp:
                 self.run(target + y, depth - 1, have[y])
 
 
-class run_peekaboo_recursive:
+class run_peekaboo_incremental:
     """
     Utility function for testing the `Peekaboo` method against a slower method.
     """
@@ -48,7 +48,7 @@ class run_peekaboo_recursive:
         self.fst = fst
         self.target_alphabet = self.fst.B - {EPSILON}
         self.depth = depth
-        self.peekaboo = peekaboo_recursive.Peekaboo(fst)
+        self.peekaboo = peekaboo_incremental.Peekaboo(fst)
         self.reference = lambda target: Precover(fst, target)
         self.verbosity = verbosity
         self.run(target, depth)
@@ -57,7 +57,7 @@ class run_peekaboo_recursive:
         if depth == 0: return
 
         # Check that the peekaboo machine matches the reference implementation
-        have = peekaboo_recursive.PeekabooPrecover(self.fst, target).materialize()
+        have = peekaboo_incremental.PeekabooPrecover(self.fst, target).materialize()
         want = (self.fst @ (FSA.from_string(target) * FSA.from_strings(self.target_alphabet).p())).project(0)
         assert have.equal(want)
 
@@ -242,7 +242,7 @@ class run_rust_peekaboo:
 IMPLEMENTATIONS = [
     pytest.param(run_recursive_dfa_decomp, id="recursive_dfa_decomp"),
     pytest.param(run_nonrecursive_dfa_decomp, id="nonrecursive_dfa_decomp"),
-    pytest.param(run_peekaboo_recursive, id="peekaboo_recursive"),
+    pytest.param(run_peekaboo_incremental, id="peekaboo_incremental"),
     pytest.param(run_peekaboo_nonrecursive, id="peekaboo_nonrecursive"),
     pytest.param(run_token_decompose, id="token_decompose"),
 ]
@@ -348,7 +348,7 @@ if __name__ == '__main__':
     algs = [
         run_recursive_dfa_decomp,
         run_nonrecursive_dfa_decomp,
-        run_peekaboo_recursive,
+        run_peekaboo_incremental,
         run_peekaboo_nonrecursive,
         run_token_decompose,
     ]
