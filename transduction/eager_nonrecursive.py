@@ -2,6 +2,7 @@ from transduction.base import AbstractAlgorithm, PrecoverDecomp
 from transduction.fsa import FSA, EPSILON
 from transduction.fst import UniversalityFilter
 from transduction.util import display_table
+from transduction.lazy import is_universal
 from transduction.precover_nfa import (
     PrecoverNFA as LazyPrecoverNFA,
     TruncationMarkerPrecoverNFA as LazyPrecoverNFAWithTruncationMarker,
@@ -157,49 +158,6 @@ class Precover:
     def _repr_mimebundle_(self, *args, **kwargs):
         "For visualization purposes in notebook."
         return self.graphviz()._repr_mimebundle_(*args, **kwargs)
-
-
-def is_universal(dfa, state, alphabet):
-    "[True/False] This `state` accepts the universal language (alphabet$^*$)."
-    #
-    # Rationale: a DFA accepts `alphabet`$^*$ iff all reachable states are
-    # accepting and complete (i.e., has a transition for each symbol in
-    # `alphabet`).
-    #
-    # Warning: If the reachable subset automaton is infinite, the search may
-    # not terminate (as expected, NFA universality is PSPACE-complete in
-    # general), but in many practical FSAs this halts quickly.
-    #
-
-    visited = set()
-    worklist = deque()
-
-    # DFA start state
-    visited.add(state)
-    worklist.append(state)
-
-    while worklist:
-        i = worklist.popleft()
-
-        # All-final check in the DFA view
-        if not dfa.is_final(i):
-            return False
-
-        # Build a symbol-to-destination mapping
-        dest = dict(dfa.arcs(i))
-
-        # Completeness on Σ
-        for a in alphabet:
-            # if we're missing an arc labeled `a` in state `i`, then state
-            # `i` is not universal!  Moreover, `state` is not universal.
-            if a not in dest:
-                return False
-            j = dest[a]
-            if j not in visited:
-                visited.add(j)
-                worklist.append(j)
-
-    return True
 
 
 class EagerNonrecursive(AbstractAlgorithm):
