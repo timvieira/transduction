@@ -5,9 +5,8 @@ This uses pynini's cdrewrite rules to create a compact FST that matches
 NLTK's TreebankWordTokenizer behavior. The pynini FST is then converted to the native
 FST format for use with the Rust decomposition backend.
 
-To match NLTK's behavior for period handling, input text must be terminated
-with an end-of-string marker (EOS = '\x03'). NLTK's TreebankWordTokenizer only separates periods when
-followed by EOS. Use string_to_byte_strs() which automatically appends EOS.
+Period handling uses pynini's built-in [EOS] boundary symbol in cdrewrite rules
+to match NLTK's TreebankWordTokenizer behavior (periods only separated at end of string).
 
 Based on the reference implementation in ptb.py.
 """
@@ -18,11 +17,9 @@ from transduction.fst import FST
 from transduction.fsa import EPSILON as NATIVE_EPSILON
 
 
-# TODO better handling of these symbols, need to change EOS
 EPS = "<eps>"
-MARKER = '0'  # Null byte used as internal word boundary marker
-SEP = '258'   # Output separator symbol (word boundary in final output)
-EOS = '3'     # End-of-string marker (ETX byte) - used to detect string end for period handling
+MARKER = '257'    # Out-of-band word boundary marker (not a real byte) Removed at the end
+SEP = '258'       # Output separator symbol (word boundary in final output)
 
 
 def char_to_byte_str(ch):
@@ -30,17 +27,9 @@ def char_to_byte_str(ch):
     return str(ord(ch))
 
 
-def string_to_byte_strs(s, add_eos=True):
-    """Convert a string to tuple of byte value strings.
-
-    Args:
-        s: Input string
-        add_eos: If True, append end-of-string marker (required for NLTK-compatible period handling)
-    """
-    byte_strs = tuple(str(b) for b in s.encode('utf-8'))
-    if add_eos:
-        byte_strs = byte_strs + (EOS,)
-    return byte_strs
+def string_to_byte_strs(s):
+    """Convert a string to tuple of byte value strings."""
+    return tuple(str(b) for b in s.encode('utf-8'))
 
 
 def decode_ptb_output(output_tuple):
@@ -54,7 +43,7 @@ def decode_ptb_output(output_tuple):
                 byte_vals = [int(b) for b in current_token]
                 tokens.append(bytes(byte_vals).decode('utf-8', errors='replace'))
                 current_token = []
-        elif sym != MARKER and sym != NATIVE_EPSILON and sym != EOS:
+        elif sym != MARKER and sym != NATIVE_EPSILON:
             current_token.append(sym)
 
     if current_token:
@@ -88,7 +77,7 @@ def _build_separator_inserter(symbols, ext_symbols):
     fst.set_final(start)
     fst.set_final(in_markers)
 
-    marker_id = ext_symbols.find("0")
+    marker_id = ext_symbols.find(MARKER)
     sep_id = ext_symbols.find(SEP)
 
     # From start: first marker -> output SEP, go to in_markers
@@ -115,18 +104,20 @@ def build_ptb_fst_pynini():
 
     Returns a native FST with ~130 states that implements Penn Treebank tokenization.
     """
-    # Build symbol table for bytes 0-255
+    # Build symbol table: bytes 0-255 + out-of-band MARKER
     symbols = pynini.SymbolTable()
     symbols.add_symbol(EPS, 0)
     for bt in range(256):
         symbols.add_symbol(str(bt), bt + 1)
+    symbols.add_symbol(MARKER, 257)
 
-    # Extended symbols including SEP for output
+    # Extended symbols: adds SEP for output
     ext_symbols = pynini.SymbolTable()
     ext_symbols.add_symbol(EPS, 0)
     for bt in range(256):
         ext_symbols.add_symbol(str(bt), bt + 1)
-    ext_symbols.add_symbol(SEP, 259)
+    ext_symbols.add_symbol(MARKER, 257)
+    ext_symbols.add_symbol(SEP, 258)
 
     # Helper function shortcuts
     def cb(ch):
@@ -136,8 +127,7 @@ def build_ptb_fst_pynini():
         return _chars_to_bytes(s, symbols)
 
     # Common acceptors
-    MARKER_ACC = pynini.accep("0", token_type=symbols)
-    EOS_ACC = pynini.accep(EOS, token_type=symbols)  # End-of-string marker
+    MARKER_ACC = pynini.accep(MARKER, token_type=symbols)
     SPACE = cb(" ")
     APOS = cb("'")
     QUOTE = cb('"')
@@ -146,11 +136,14 @@ def build_ptb_fst_pynini():
     BACKTICK = cb("`")
     DOUBLE_BACKTICK = BACKTICK + BACKTICK
 
-    # Build sigma (all bytes 0-255 including EOS)
-    sigma = pynini.union(*[pynini.accep(str(i), token_type=symbols) for i in range(256)])
+    # Build sigma (all bytes 0-255 + MARKER)
+    sigma = pynini.union(
+        *[pynini.accep(str(i), token_type=symbols) for i in range(256)],
+        pynini.accep(MARKER, token_type=symbols),
+    )
     sigma_star = pynini.closure(sigma)
 
-    # Identity FST as base (passes through all bytes including EOS)
+    # Identity FST as base (passes through all bytes)
     identity_fst = pynini.Fst()
     s = identity_fst.add_state()
     identity_fst.set_start(s)
@@ -161,12 +154,6 @@ def build_ptb_fst_pynini():
     identity_fst.set_input_symbols(symbols)
     identity_fst.set_output_symbols(symbols)
     identity_fst = identity_fst.closure()
-
-    # EOS stripper - removes the end-of-string marker from output
-    eos_strip = cdrewrite(
-        cross(EOS_ACC, pynini.accep("", token_type=symbols)),  # Delete EOS
-        "", "", sigma_star
-    ).optimize()
 
     # === Quote handling ===
     # We process quotes in a specific order:
@@ -237,7 +224,7 @@ def build_ptb_fst_pynini():
     punct_2 = cdrewrite(
         cross(cb(","), MARKER_ACC + cb(",") + MARKER_ACC) |
         cross(cb(":"), MARKER_ACC + cb(":") + MARKER_ACC),
-        "", EOS_ACC, sigma_star
+        "", "[EOS]", sigma_star
     )
 
     # Ellipsis
@@ -260,22 +247,18 @@ def build_ptb_fst_pynini():
     NON_DOT = pynini.difference(sigma, DOT).optimize()
 
     # Optional closing punctuation that can appear after period before EOS
-    # Note: quotes are already converted to '' by quotes_fst at this point
-    # The marker bytes around '' are from the quote conversion
+    # Includes MARKER_ACC since quotes are wrapped with markers at this point
     CLOSING_PUNCT = union(
         cb("]"), cb(")"), cb("}"), cb(">"),
-        APOS,  # Single apostrophe
-        MARKER_ACC,  # Marker bytes from quote conversion
+        APOS, MARKER_ACC,
     )
     CLOSING_PUNCT_STAR = pynini.closure(CLOSING_PUNCT)
-
-    # Optional whitespace (spaces) before EOS
     WHITESPACE_STAR = pynini.closure(SPACE)
 
     punct_5 = cdrewrite(
         cross(DOT, MARKER_ACC + DOT),
         NON_DOT,
-        CLOSING_PUNCT_STAR + WHITESPACE_STAR + EOS_ACC,  # Period followed by optional closing punct, optional spaces, then EOS
+        CLOSING_PUNCT_STAR + WHITESPACE_STAR + pynini.accep("[EOS]"),
         sigma_star
     )
 
@@ -304,7 +287,7 @@ def build_ptb_fst_pynini():
     # === Clitics and contractions ===
     NON_APOS_OR_SPACE_OR_MARKER = pynini.difference(sigma, union(APOS, SPACE, MARKER_ACC)).optimize()
     # Right context for clitics: space, marker, apostrophe (for 's' followed by quote), or EOS
-    SEP_CHARS = union(MARKER_ACC, SPACE, APOS, EOS_ACC)
+    SEP_CHARS = union(MARKER_ACC, SPACE, APOS, "[EOS]")
 
     # Clitics: 's 'm 'd
     clitics_1 = [cs(c) for c in ["'s", "'m", "'d", "'S", "'M", "'D"]]
@@ -327,7 +310,7 @@ def build_ptb_fst_pynini():
 
     # Standalone apostrophe at word end (before space or EOS)
     # NLTK rule: ([^' ])(' ) - separates trailing ' before space
-    SEP_CHARS_OR_EOS = union(MARKER_ACC, SPACE, EOS_ACC)
+    SEP_CHARS_OR_EOS = union(MARKER_ACC, SPACE, "[EOS]")
     apos_rule = cdrewrite(
         cross(APOS, MARKER_ACC + APOS),
         NON_APOS_OR_SPACE_OR_MARKER, SEP_CHARS_OR_EOS, sigma_star
@@ -383,7 +366,6 @@ def build_ptb_fst_pynini():
     core_fst = (core_fst @ clitics_fst).optimize()  # Handle clitics ('s, 'll, n't, etc.)
     core_fst = (core_fst @ contractions_fst).optimize()
     core_fst = (core_fst @ space_to_marker).optimize()
-    core_fst = (core_fst @ eos_strip).optimize()  # Strip EOS marker from output
 
     print(f"Core PTB FST: {core_fst.num_states()} states")
 
@@ -410,13 +392,32 @@ def build_ptb_fst_pynini():
         if final_weight != pynini.Weight.zero(final_fst.weight_type()):
             native_fst.add_F(state)
 
+    marker_id = ext_symbols.find(MARKER)
     for state in final_fst.states():
         for arc in final_fst.arcs(state):
+            # Skip arcs with MARKER as input (unreachable — input never contains MARKER)
+            if arc.ilabel == marker_id:
+                continue
             input_sym = NATIVE_EPSILON if arc.ilabel == 0 else ext_symbols.find(arc.ilabel)
-            output_sym = NATIVE_EPSILON if arc.olabel == 0 else ext_symbols.find(arc.olabel)
+            output_sym = NATIVE_EPSILON if arc.olabel in (0, marker_id) else ext_symbols.find(arc.olabel)
             native_fst.add_arc(state, input_sym, output_sym, arc.nextstate)
 
-    print(f"Native FST: {len(native_fst.states)} states")
+    # Summary statistics
+    total_arcs = 0
+    eps_in = eps_out = marker_in = marker_out = eos_in = eos_out = 0
+    for s in native_fst.states:
+        for (i, o, t) in native_fst.arcs(s):
+            total_arcs += 1
+            if i == NATIVE_EPSILON: eps_in += 1
+            if o == NATIVE_EPSILON: eps_out += 1
+            if i == MARKER: marker_in += 1
+            if o == MARKER: marker_out += 1
+            if i == "[EOS]": eos_in += 1
+            if o == "[EOS]": eos_out += 1
+    print(f"Native FST: {len(native_fst.states)} states, {total_arcs} arcs")
+    print(f"  eps: {eps_in} in, {eps_out} out")
+    print(f"  MARKER: {marker_in} in, {marker_out} out")
+    print(f"  [EOS]: {eos_in} in, {eos_out} out")
 
     return native_fst
 
