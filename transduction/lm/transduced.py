@@ -25,8 +25,11 @@ import numpy as np
 from dataclasses import dataclass
 from arsenal.datastructures import LocatorMaxHeap
 
-from transduction.peekaboo_recursive import PeekabooState, FstUniversality
 from transduction.lm.base import LMState, LogpNext
+
+# Default incremental decomposition; can be overridden via TransducedLM constructor.
+from transduction.peekaboo_recursive import PeekabooState as _DefaultDecompState
+from transduction.peekaboo_recursive import FstUniversality as _DefaultUniv
 
 
 def logsumexp(arr):
@@ -276,7 +279,8 @@ class TransducedLM:
     the target side.
     """
 
-    def __init__(self, inner_lm, fst, max_steps=1000, max_beam=100, eos='<EOS>'):
+    def __init__(self, inner_lm, fst, max_steps=1000, max_beam=100, eos='<EOS>',
+                 decomp_state_cls=None, univ_cls=None):
         """
         Args:
             inner_lm: LM with StateLM interface (has .initial(), state << x, state.logp_next)
@@ -284,18 +288,25 @@ class TransducedLM:
             max_steps: budget per logp_next computation
             max_beam: max items carried forward between steps
             eos: outer EOS token
+            decomp_state_cls: incremental decomposition class (default: PeekabooState).
+                Must support ``state >> y``, and expose ``.decomp``, ``.dfa``,
+                ``.resume_frontiers``, ``.preimage_stops``, ``.target``.
+            univ_cls: universality precomputation class (default: FstUniversality).
+                Must accept ``(fst)`` and be passable as ``univ=`` to decomp_state_cls.
         """
         self.inner_lm = inner_lm
         self.fst = fst
         self.max_steps = max_steps
         self.max_beam = max_beam
         self.eos = eos
-        self._univ = FstUniversality(fst)
+        self._decomp_state_cls = decomp_state_cls or _DefaultDecompState
+        self._univ_cls = univ_cls or _DefaultUniv
+        self._univ = self._univ_cls(fst)
 
     def initial(self):
         """Return the initial TransducedState (empty target prefix)."""
-        # Create initial PeekabooState
-        peekaboo = PeekabooState(self.fst, '', parent=None, univ=self._univ)
+        # Create initial decomposition state
+        peekaboo = self._decomp_state_cls(self.fst, '', parent=None, univ=self._univ)
 
         # Create initial DFA state (start states of the powerset DFA)
         dfa = peekaboo.dfa

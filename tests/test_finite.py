@@ -1,5 +1,5 @@
 from transduction import (
-    PrecoverDecomp, LazyNonrecursive, BuggyLazyRecursive, LazyRecursive, LazyPrecoverNFA,
+    PrecoverDecomp, LazyNonrecursive, LazyRecursive, LazyPrecoverNFA,
     EagerNonrecursive, examples, Precover, FSA
 )
 
@@ -19,11 +19,6 @@ def assert_equal(have, want):
 
 def test_sdd1():
     fst = examples.sdd1_fst()
-
-    tmp = BuggyLazyRecursive(fst)
-    assert tmp('') == PrecoverDecomp({'a'}, set())
-    assert tmp('a') == PrecoverDecomp({'a'}, set())
-    assert tmp('aa') == PrecoverDecomp({'aa'}, set())
 
     tmp = EagerNonrecursive(fst)
     assert tmp('') == PrecoverDecomp({'a'}, set())
@@ -63,7 +58,6 @@ def test_delete_b():
     assert_equal(have, PrecoverDecomp(want, set()))
 
     algs = [
-        BuggyLazyRecursive(fst, max_steps=30),
         EagerNonrecursive(fst, max_steps=30),
         LazyNonrecursive(fst, max_steps=30),
         LazyRecursive(fst, max_steps=30),
@@ -84,12 +78,6 @@ def test_simple():
     fst = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c'), ('4', 'd'), ('5', 'e')])
 
     tmp = LazyNonrecursive(fst)
-    assert tmp('') == PrecoverDecomp({''}, set())
-    assert tmp('a') == PrecoverDecomp({'1'}, set())
-    assert tmp('ab') == PrecoverDecomp({'12'}, set())
-    assert tmp('abc') == PrecoverDecomp({'123'}, set())
-
-    tmp = BuggyLazyRecursive(fst)
     assert tmp('') == PrecoverDecomp({''}, set())
     assert tmp('a') == PrecoverDecomp({'1'}, set())
     assert tmp('ab') == PrecoverDecomp({'12'}, set())
@@ -130,13 +118,6 @@ def test_lazy_precover_nfa():
 
 def test_duplicate():
     fst = examples.duplicate(set('12345'))
-
-    tmp = BuggyLazyRecursive(fst)
-    assert tmp('') == PrecoverDecomp({''}, set())
-    assert tmp('1') == PrecoverDecomp({'1'}, set())
-    assert tmp('11') == PrecoverDecomp({'1'}, set())
-    assert tmp('1155') == PrecoverDecomp({'15'}, set())
-    assert tmp('115') == PrecoverDecomp({'15'}, set())
 
     tmp = EagerNonrecursive(fst)
     assert tmp('') == PrecoverDecomp({''}, set())
@@ -181,12 +162,6 @@ def test_newspeak2():
     bad = PrecoverDecomp(set(), set())
     ungood = PrecoverDecomp({'bad', 'ungood'}, set())
 
-    tmp = BuggyLazyRecursive(n)
-    assert tmp('') == empty
-    assert tmp('bad') == bad
-    assert tmp('ba') == ba
-    assert tmp('ungood') == ungood, tmp('ungood')
-
     tmp = EagerNonrecursive(n)
     assert tmp('') == empty
     assert tmp('bad') ==  bad
@@ -223,13 +198,6 @@ def test_samuel_example():
     have = tmp(target)
     assert have == ({'a'}, set()), have
 
-    # this algorithm has an expected failure
-    tmp = BuggyLazyRecursive(fst)
-    have = tmp(target)
-    assert have == ({'ab', 'aa'}, {'a'}), have
-    Precover(fst, target).check_decomposition(*have, throw=False)
-
-    # this algorithm fixes BuggyLazyRecursive's expected failure
     tmp = LazyRecursive(fst)
     have = tmp(target)
     assert have == ({'a'}, set()), have
@@ -244,23 +212,6 @@ def test_number_comma_separator():
     fst = examples.number_comma_separator(set(string.printable) - set('\t\n\r\x0b\x0c'))
 
     tmp = LazyNonrecursive(fst)
-    assert tmp('1,| 2,| and 3') == ({'1, 2, and 3'}, set())
-    have = tmp('1,| 2,|')
-    want = ({'1, 2,' + x for x in tmp.source_alphabet if x not in '1234567890'}, set())
-    assert have == want
-
-    #target = '1,| 2,'
-    #for y in tmp.target_alphabet:
-    #    Q,R = tmp(target+y)
-    #    assert len(R) == 0
-    #    if y == '|' and target.endswith(','):
-    #        assert len(Q) == len(tmp.source_alphabet) - len(digits), [target, y, Q]
-    #    else:
-    #        assert len(Q) <= 1, [target, y, Q]
-    #    if len(Q) > 0:
-    #        print(repr(y), Q)
-
-    tmp = BuggyLazyRecursive(fst, max_steps=100)
     assert tmp('1,| 2,| and 3') == ({'1, 2, and 3'}, set())
     have = tmp('1,| 2,|')
     want = ({'1, 2,' + x for x in tmp.source_alphabet if x not in '1234567890'}, set())

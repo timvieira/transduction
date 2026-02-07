@@ -5,17 +5,10 @@ from arsenal import colors
 from collections import deque
 
 
-class BuggyLazyRecursive:
-    """This algorithm returns a valid, but sometimes suboptimal, `PrecoverDecomp`.
-
-    UPDATE: See `transduction3.Fixed` for a version that correctly identifies
-    the optimal `PrecoverDecomp`.
-
-    However, it has some useful structure to it, as it is essentially a
-    recursive implementation of the abstract algorithm.
-
+class LazyRecursive:
     """
-
+    Lazy, recursive DFA-based algorithm.
+    """
 
     def __init__(self, fst, empty_target = '', empty_source = '', extend = lambda x,y: x + y, max_steps=float('inf')):
         self.fst = fst
@@ -26,9 +19,6 @@ class BuggyLazyRecursive:
         self.extend = extend
         self.max_steps = max_steps
         self.cache = {}
-
-    # Note: this version overrides the base because it is recursive;
-    # TODO: make a base class for abstract *recursive* algorithms!
 
     def __call__(self, y):
         val = self.cache.get(y)
@@ -138,43 +128,6 @@ class BuggyLazyRecursive:
                 if tmp == EPSILON:
                     worklist.add((next_state, self.extend(ys, b)))
         return next_frontier
-
-    def continuity(self, xs, target):
-        """
-        Is `xs` a member of y's quotient? (not necessarily minimal)
-
-        Warning: this test is not exact, and it leads to a suboptimal quotient.
-        """
-        return self.is_universal(frozenset(s for (s, ys) in self.frontier(xs)
-                                           if ys.startswith(target)))
-
-    # TODO: using lazy determinization with the search for acceptance and
-    # completeness of all downstream states is likely faster here, as we may find a
-    # counterexample more quickly than the full determinization + minimization
-    # pipeline.  That said, this method doesn't lead to a correct algorithm, so
-    # there is no use in speeding it up.
-    @memoize
-    def is_universal(self, S):
-        """
-        Is this powerstate universal?  (Note: this is not a frontier.)
-        """
-        S_fst = self.fst.spawn(keep_arcs=True, keep_stop=True)
-        for q in S: S_fst.add_I(q)
-        q_fsa = S_fst.project(0)
-        q_dfa = q_fsa.min()
-        if len(q_dfa.states) != 1:
-            return False
-        [i] = q_dfa.states
-        return all(
-            set(q_dfa.arcs(i, a)) == {i}
-            for a in self.source_alphabet
-        )
-
-
-class LazyRecursive(BuggyLazyRecursive):
-    """
-    Lazy, recursive DFA-based algorithm.
-    """
 
     def continuity(self, xs, target):
         "Is `xs` a cylinder of y's precover?"

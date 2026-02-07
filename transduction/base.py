@@ -1,10 +1,68 @@
+from abc import ABC, abstractmethod
 from transduction.fst import EPSILON
 from arsenal import colors
 from collections import deque
 
 
-class PrecoverDecomp:
+class DecompositionFunction(ABC):
+    """Interface for reusable decomposition algorithms.
+
+    Constructed once with an FST, then called with different target strings.
+    Returns a PrecoverDecomp with set-valued quotient and remainder.
+
+    Usage::
+
+        alg = SomeAlgorithm(fst)
+        result = alg(target)     # -> PrecoverDecomp
+        result.quotient          # set of source strings
+        result.remainder         # set of source strings
+
+    Implementations: AbstractAlgorithm, LazyRecursive
     """
+    @abstractmethod
+    def __call__(self, target) -> 'PrecoverDecomp': ...
+
+
+class DecompositionResult(ABC):
+    """Interface for one-shot decomposition computations.
+
+    Constructed with an FST and a target string.  The result exposes
+    quotient and remainder as FSAs.
+
+    Usage::
+
+        result = SomeDecomp(fst, target)
+        result.quotient    # FSA
+        result.remainder   # FSA
+
+    Implementations: NonrecursiveDFADecomp, TokenDecompose, RustDecomp, RustPeekaboo
+    """
+    quotient: 'FSA'
+    remainder: 'FSA'
+
+
+class IncrementalDecomposition(DecompositionResult):
+    """Interface for incremental (symbol-by-symbol) decomposition.
+
+    Extends DecompositionResult with the ``>>`` operator to advance the
+    target by one symbol, reusing computation from the previous step.
+
+    Usage::
+
+        state = SomeDecomp(fst, '')
+        state = state >> 'a'     # extend target to 'a'
+        state = state >> 'b'     # extend target to 'ab'
+        state.quotient           # FSA for target 'ab'
+        state.remainder          # FSA for target 'ab'
+
+    Implementations: PeekabooState, RecursiveDFADecomp
+    """
+    @abstractmethod
+    def __rshift__(self, y) -> 'IncrementalDecomposition': ...
+
+
+class PrecoverDecomp:
+    r"""
     This class represents the precover of some target string $\boldsymbol{y} \in \mathcal{Y}^*$ as
     a quotient and remainder set:
 
