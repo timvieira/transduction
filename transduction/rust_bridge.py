@@ -104,7 +104,6 @@ class RustDecomp:
 
         rust_fst, sym_map, state_map = to_rust_fst(fst)
 
-        RUST_EPSILON = 2**32 - 1
         target_u32 = [sym_map(y) for y in target]
 
         result = transduction_core.rust_decompose(rust_fst, target_u32)
@@ -127,7 +126,6 @@ class RustPeekaboo:
         target_u32 = [self.sym_map(y) for y in target]
         result = transduction_core.rust_peekaboo(self.rust_fst, target_u32)
 
-        inv_sym = {v: k for k, v in self.sym_map.items()}
         output = {}
         for y in self.target_alphabet:
             y_u32 = self.sym_map(y)

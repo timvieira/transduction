@@ -222,6 +222,7 @@ class TestBPEScale:
         r = decomp.remainder.trim()
         # quotient should be non-trivial (there exist tokenizations of "the")
         assert q.states
+        assert not r.states
         assert q.start
 
     @pytest.mark.timeout(60)
