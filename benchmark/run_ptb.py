@@ -25,7 +25,6 @@ import json
 import resource
 import signal
 import time
-from collections import deque
 from pathlib import Path
 
 import tqdm
@@ -77,24 +76,6 @@ _peekaboo_cache = {}
 # Utility functions
 # -----------------------------------------------------------------------------
 
-def language_tuples(fsa):
-    """
-    Enumerate paths through an FSA as tuples of symbols.
-
-    Unlike FSA.language() which concatenates symbols into strings,
-    this yields tuples preserving individual symbols (needed when
-    symbols are multi-character like '72', '101', etc.).
-    """
-    worklist = deque([(state, ()) for state in fsa.start])
-    while worklist:
-        state, path = worklist.popleft()
-        if state in fsa.stop:
-            yield path
-        for symbol, next_state in fsa.arcs(state):
-            if symbol == EPSILON:
-                worklist.append((next_state, path))
-            else:
-                worklist.append((next_state, path + (symbol,)))
 
 
 def decode_with_boundaries(output_tuple, boundary_char='|'):
@@ -182,7 +163,7 @@ def load_wikitext_paragraphs_ptb(fst, split, n=4, max_chars=None):
         try:
             input_fst = FST.from_string(byte_strs)
             output_fsa = (input_fst @ fst).project(1)
-            transduced = next(language_tuples(output_fsa))
+            transduced = next(output_fsa.language(tuple=True))
             paragraphs.append(transduced)
             original.append(detokenized)
         except StopIteration:
@@ -372,7 +353,7 @@ def main(n_pgs=1, max_chars=None, max_prefix_len=None,
         test_bytes = string_to_byte_strs(test_str)
         input_fst = FST.from_string(test_bytes)
         output_fsa = (input_fst @ fst).project(1)
-        test_output = next(language_tuples(output_fsa))
+        test_output = next(output_fsa.language(tuple=True))
         print(f"\n  Sanity test: '{test_str}' -> '{decode_ptb_output(test_output)}'")
     except Exception as e:
         print(f"\n  Sanity test FAILED: {e}")

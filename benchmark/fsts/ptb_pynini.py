@@ -156,11 +156,13 @@ def build_ptb_fst_pynini():
     identity_fst = identity_fst.closure()
 
     # === Quote handling ===
-    # We process quotes in a specific order:
-    # 1. Convert closing quotes (after word chars) to ''
-    # 2. Convert opening quotes (after space/brackets) to ``
-    # 3. Convert remaining quotes (e.g., at start of string) to ``
-    # 4. Wrap existing `` with markers
+    # Matches NLTK's STARTING_QUOTES then ENDING_QUOTES order:
+    # 1. '' after space/brackets -> `` (STARTING_QUOTES rule 3 for '{2})
+    # 2. Remaining '' -> separated '' (ENDING_QUOTES rule 1)
+    # 3. " after word chars -> '' (closing double-quote)
+    # 4. " after space/brackets -> `` (opening double-quote)
+    # 5. Remaining " -> `` (e.g., at start of string)
+    # 6. Wrap existing `` with markers
 
     # Characters that can precede a CLOSING quote
     # Include UTF-8 continuation bytes (128-191 / 0x80-0xBF) for accented characters
@@ -177,35 +179,53 @@ def build_ptb_fst_pynini():
 
     # Characters that can precede an OPENING quote
     opening_context = union(cb("("), cb("["), cb("{"), cb("<"), SPACE)
+    DOUBLE_APOS = APOS + APOS
 
-    # Rule 1: " after word chars -> '' (closing quote) - must run FIRST
+    # Rule 1: '' after space/brackets -> `` (opening double-single-quotes)
+    # NLTK STARTING_QUOTES rule 3: ([ \(\[{<])(\"{2}|\'{2}) -> \1 ``
+    opening_double_apos_rule = cdrewrite(
+        cross(DOUBLE_APOS, MARKER_ACC + DOUBLE_BACKTICK + MARKER_ACC),
+        opening_context.plus,
+        "", sigma_star
+    )
+
+    # Rule 2: Remaining '' -> MARKER '' MARKER (closing/separating)
+    # NLTK ENDING_QUOTES rule 1: '' -> ' '' '
+    closing_double_apos_rule = cdrewrite(
+        cross(DOUBLE_APOS, MARKER_ACC + APOS + APOS + MARKER_ACC),
+        "", "", sigma_star
+    )
+
+    # Rule 3: " after word chars -> '' (closing quote) - must run FIRST among "-rules
     closing_quote_rule = cdrewrite(
         cross(QUOTE, MARKER_ACC + APOS + APOS + MARKER_ACC),
         WORD_CHARS,
         "", sigma_star
     )
 
-    # Rule 2: " after space/brackets -> `` (opening quote)
+    # Rule 4: " after space/brackets -> `` (opening quote)
     opening_quote_rule = cdrewrite(
         cross(QUOTE, MARKER_ACC + DOUBLE_BACKTICK + MARKER_ACC),
         opening_context.plus,
         "", sigma_star
     )
 
-    # Rule 3: Remaining " -> `` (for quotes at beginning of string)
+    # Rule 5: Remaining " -> `` (for quotes at beginning of string)
     remaining_quote_rule = cdrewrite(
         cross(QUOTE, MARKER_ACC + DOUBLE_BACKTICK + MARKER_ACC),
         "", "", sigma_star
     )
 
-    # Rule 4: `` -> MARKER `` MARKER (for manually entered backticks)
+    # Rule 6: `` -> MARKER `` MARKER (for manually entered backticks)
     backtick_rule = cdrewrite(
         cross(DOUBLE_BACKTICK, MARKER_ACC + DOUBLE_BACKTICK + MARKER_ACC),
         "", "", sigma_star
     )
 
-    # Compose: closing first, then opening, then remaining, then backticks
-    quotes_fst = (closing_quote_rule @ opening_quote_rule @ remaining_quote_rule @ backtick_rule).optimize()
+    # Compose: '' rules first, then " rules, then backtick wrapping
+    quotes_fst = (opening_double_apos_rule @ closing_double_apos_rule
+                  @ closing_quote_rule @ opening_quote_rule
+                  @ remaining_quote_rule @ backtick_rule).optimize()
 
     # === Punctuation ===
     DIGIT = union(*[cb(str(i)) for i in range(10)])
@@ -233,8 +253,8 @@ def build_ptb_fst_pynini():
         "", "", sigma_star
     )
 
-    # Special punct: ; @ % & $
-    special_punct = [cb(c) for c in ";@%&$"]
+    # Special punct: ; @ # % & $
+    special_punct = [cb(c) for c in ";@#%&$"]
     punct_4 = cdrewrite(
         union(*[cross(sym, MARKER_ACC + sym + MARKER_ACC) for sym in special_punct]),
         "", "", sigma_star
@@ -319,23 +339,25 @@ def build_ptb_fst_pynini():
     clitics_fst = (endq_3 @ endq_4 @ apos_rule).optimize()
 
     # === Contractions ===
-    SEP_OR_BOS = union(MARKER_ACC, SPACE)
+    SEP_OR_BOS = union(MARKER_ACC, SPACE, "[BOS]")
 
-    contractions_raw = [
+    # NLTK uses (?i) so all contractions are case-insensitive.
+    # We enumerate lowercase, Title, and UPPER; mixed-case is rare enough to skip.
+    contractions_base = [
         ("cannot", "can", "not"),
         ("gonna", "gon", "na"),
         ("gotta", "got", "ta"),
         ("lemme", "lem", "me"),
         ("wanna", "wan", "na"),
         ("gimme", "gim", "me"),
-        # Capitalized
-        ("Cannot", "Can", "not"),
-        ("Gonna", "Gon", "na"),
-        ("Gotta", "Got", "ta"),
-        ("Lemme", "Lem", "me"),
-        ("Wanna", "Wan", "na"),
-        ("Gimme", "Gim", "me"),
+        ("d'ye", "d", "'ye"),
+        ("more'n", "more", "'n"),
     ]
+    contractions_raw = []
+    for orig, p1, p2 in contractions_base:
+        contractions_raw.append((orig, p1, p2))                          # lowercase
+        contractions_raw.append((orig.capitalize(), p1.capitalize(), p2)) # Title
+        contractions_raw.append((orig.upper(), p1.upper(), p2.upper()))   # UPPER
 
     contractions_fsts = []
     for orig, part1, part2 in contractions_raw:
@@ -349,6 +371,23 @@ def build_ptb_fst_pynini():
     for c in contractions_fsts[1:]:
         contractions_fst = contractions_fst @ c
     contractions_fst = contractions_fst.optimize()
+
+    # === CONTRACTIONS3: 'tis, 'twas ===
+    # NLTK regex: ('t)(is)\b and ('t)(was)\b — preceded by space (text is padded)
+    contractions3_raw = [("'tis", "'t", "is"), ("'twas", "'t", "was"),
+                         ("'Tis", "'T", "is"), ("'Twas", "'T", "was"),
+                         ("'TIS", "'T", "IS"), ("'TWAS", "'T", "WAS")]
+    contractions3_fsts = []
+    for orig, p1, p2 in contractions3_raw:
+        rule = cdrewrite(
+            cross(cs(orig), MARKER_ACC + cs(p1) + MARKER_ACC + MARKER_ACC + cs(p2) + MARKER_ACC),
+            SEP_OR_BOS, SEP_CHARS, sigma_star
+        )
+        contractions3_fsts.append(rule)
+    contractions3_fst = contractions3_fsts[0]
+    for c in contractions3_fsts[1:]:
+        contractions3_fst = contractions3_fst @ c
+    contractions3_fst = contractions3_fst.optimize()
 
     # === Space to marker ===
     space_to_marker = cdrewrite(
@@ -365,6 +404,7 @@ def build_ptb_fst_pynini():
     core_fst = (core_fst @ double_dashes_fst).optimize()
     core_fst = (core_fst @ clitics_fst).optimize()  # Handle clitics ('s, 'll, n't, etc.)
     core_fst = (core_fst @ contractions_fst).optimize()
+    core_fst = (core_fst @ contractions3_fst).optimize()
     core_fst = (core_fst @ space_to_marker).optimize()
 
     print(f"Core PTB FST: {core_fst.num_states()} states")

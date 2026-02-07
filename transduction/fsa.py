@@ -708,19 +708,32 @@ class FSA:
         u.add_stop(0)
         return u
 
-    def language(self):
-        "Enumerate strings in the language of this FSA up to length `max_length`."
-        worklist = deque()
-        worklist.extend([(i, '') for i in self.start])
-        while worklist:
-            (i, x) = worklist.popleft()
-            if i in self.stop:
-                yield x
-            for a, j in self.arcs(i):
-                if a == EPSILON:
-                    worklist.append((j, x))
-                else:
-                    worklist.append((j, x + a))
+    def language(self, tuple=False):
+        "Enumerate strings in the language of this FSA."
+        if tuple:
+            worklist = deque()
+            worklist.extend([(i, ()) for i in self.start])
+            while worklist:
+                (i, x) = worklist.popleft()
+                if i in self.stop:
+                    yield x
+                for a, j in self.arcs(i):
+                    if a == EPSILON:
+                        worklist.append((j, x))
+                    else:
+                        worklist.append((j, x + (a,)))
+        else:
+            worklist = deque()
+            worklist.extend([(i, '') for i in self.start])
+            while worklist:
+                (i, x) = worklist.popleft()
+                if i in self.stop:
+                    yield x
+                for a, j in self.arcs(i):
+                    if a == EPSILON:
+                        worklist.append((j, x))
+                    else:
+                        worklist.append((j, x + a))
 
 
 EPSILON = eps = ''
