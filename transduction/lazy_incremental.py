@@ -84,7 +84,7 @@ class LazyIncremental:
         )
 
     def discontinuity(self, xs, target):   # pylint: disable=W0613
-        return any((s in self.fst.F) for (s, ys) in self.frontier(xs)
+        return any((s in self.fst.stop) for (s, ys) in self.frontier(xs)
                    if ys.startswith(target))
 
     # XXX: technically, this state depends on the `target` as it was used for filtering.
@@ -101,7 +101,7 @@ class LazyIncremental:
         """
 
         if len(xs) == 0:
-            return self._epsilon_closure_frontier({(s, self.empty_target) for s in self.fst.I})
+            return self._epsilon_closure_frontier({(s, self.empty_target) for s in self.fst.start})
         else:
             return self.next_frontier(self.frontier(xs[:-1]), xs[-1])
 

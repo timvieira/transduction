@@ -30,10 +30,10 @@ def extract_token_bytes(fst):
 
     Returns a list of (token_id, (byte, ...)) tuples.
     """
-    start_set = set(fst.I)
+    start_set = set(fst.start)
     tokens = []
 
-    for start in fst.I:
+    for start in fst.start:
         for a, b, j in fst.arcs(start):
             if a == EPSILON:
                 continue

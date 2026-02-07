@@ -18,8 +18,8 @@ from transduction.lm.transduced import TransducedLM, TransducedState, logsumexp
 def copy_fst(alphabet):
     """Identity/copy transducer: maps each symbol to itself."""
     fst = FST()
-    fst.add_I(0)
-    fst.add_F(0)
+    fst.add_start(0)
+    fst.add_stop(0)
     for x in alphabet:
         fst.add_arc(0, x, x, 0)
     return fst

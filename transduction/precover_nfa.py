@@ -89,7 +89,7 @@ class PrecoverNFA(Lazy):
                 yield (j, self.target[:n+1])
 
     def start(self):
-        for i in self.fst.I:
+        for i in self.fst.start:
             yield (i, self.target[:0])
 
     def is_final(self, state):
@@ -172,7 +172,7 @@ class TruncationMarkerPrecoverNFA(Lazy):
                 yield (j, self.target[:n+1], False)
 
     def start(self):
-        for i in self.fst.I:
+        for i in self.fst.start:
             yield (i, self.target[:0], False)
 
     def is_final(self, state):
@@ -234,7 +234,7 @@ class PopPrecoverNFA(Lazy):
                     yield (j, ys[1:])
 
     def start(self):
-        for i in self.fst.I:
+        for i in self.fst.start:
             yield (i, self.target)
 
     def is_final(self, state):
@@ -268,7 +268,7 @@ class TargetSideBuffer(Lazy):
             yield (j, ys + y)
 
     def start(self):
-        for i in self.f.I:
+        for i in self.f.start:
             yield (i, '')
 
     def is_final(self, state):
@@ -388,7 +388,7 @@ class PeekabooLookaheadNFA(Lazy):
                 yield (j, self.target[:n+1], False)
 
     def start(self):
-        for i in self.fst.I:
+        for i in self.fst.start:
             yield (i, self.target[:0], False)
 
     def is_final(self, state):
@@ -470,7 +470,7 @@ class PeekabooFixedNFA(Lazy):
                 yield (j, ys)
 
     def start(self):
-        for i in self.fst.I:
+        for i in self.fst.start:
             yield (i, '')
 
     def is_final(self, state):

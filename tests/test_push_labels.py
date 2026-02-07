@@ -73,11 +73,11 @@ def test_simple_chain():
     After push: all output should appear as early as possible.
     """
     fst = FST()
-    fst.add_I(0)
+    fst.add_start(0)
     fst.add_arc(0, 'a', EPSILON, 1)
     fst.add_arc(1, 'b', 'X', 2)
     fst.add_arc(2, 'c', 'Y', 3)
-    fst.add_F(3)
+    fst.add_stop(3)
 
     pushed = fst.push_labels()
     assert_relation_equal(fst, pushed)
@@ -88,7 +88,7 @@ def test_simple_chain():
     # We just verify the relation is the same and the output appears earlier
     # by checking that non-eps outputs appear on arcs reachable from start.
     has_early_output = False
-    for s in pushed.I:
+    for s in pushed.start:
         for x, y, j in pushed.arcs(s):
             if y != EPSILON:
                 has_early_output = True
@@ -102,19 +102,19 @@ def test_branching_delay():
     d(0) = (c,) -> gap eliminated.
     """
     fst = FST()
-    fst.add_I(0)
+    fst.add_start(0)
     fst.add_arc(0, 'a', 'c', 1)
     fst.add_arc(0, 'b', EPSILON, 2)
     fst.add_arc(2, 'a', 'c', 3)
-    fst.add_F(1)
-    fst.add_F(3)
+    fst.add_stop(1)
+    fst.add_stop(3)
 
     pushed = fst.push_labels()
     assert_relation_equal(fst, pushed)
 
     # After push, 'c' should appear from the start via an eps-input chain
     has_early_c = False
-    for s in pushed.I:
+    for s in pushed.start:
         for x, y, j in pushed.arcs(s):
             if y == 'c':
                 has_early_c = True
@@ -134,11 +134,11 @@ def test_no_push_needed():
 def test_mixed_output_no_push():
     """Different first outputs on different paths -> d(0) = ()."""
     fst = FST()
-    fst.add_I(0)
+    fst.add_start(0)
     fst.add_arc(0, 'a', 'X', 1)
     fst.add_arc(0, 'b', 'Y', 2)
-    fst.add_F(1)
-    fst.add_F(2)
+    fst.add_stop(1)
+    fst.add_stop(2)
 
     pushed = fst.push_labels()
     assert_relation_equal(fst, pushed)
@@ -168,8 +168,8 @@ def test_empty_fst():
 def test_single_final_no_arcs():
     """Single start=final state, no arcs."""
     fst = FST()
-    fst.add_I(0)
-    fst.add_F(0)
+    fst.add_start(0)
+    fst.add_stop(0)
     pushed = fst.push_labels()
     assert_relation_equal(fst, pushed)
     assert list(pushed.relation(5)) == [('', '')]
@@ -182,10 +182,10 @@ def test_cycle_uniform_output():
     After push: arc 1->0 becomes b/eps, arc 0->1 produces x,x via intermediate.
     """
     fst = FST()
-    fst.add_I(0)
+    fst.add_start(0)
     fst.add_arc(0, 'a', 'x', 1)
     fst.add_arc(1, 'b', 'x', 0)
-    fst.add_F(0)
+    fst.add_stop(0)
     pushed = fst.push_labels()
     assert_relation_equal(fst, pushed)
 
@@ -195,10 +195,10 @@ def test_self_loop_with_eps_delay():
     Each 'a' produces 'x' but with a one-step delay.
     """
     fst = FST()
-    fst.add_I(0)
+    fst.add_start(0)
     fst.add_arc(0, 'a', EPSILON, 1)
     fst.add_arc(1, EPSILON, 'x', 0)
-    fst.add_F(0)
+    fst.add_stop(0)
     pushed = fst.push_labels()
     assert_relation_equal(fst, pushed)
 
@@ -206,11 +206,11 @@ def test_self_loop_with_eps_delay():
 def test_multiple_start_states():
     """Two start states, same delay."""
     fst = FST()
-    fst.add_I(0)
-    fst.add_I(1)
+    fst.add_start(0)
+    fst.add_start(1)
     fst.add_arc(0, 'a', 'x', 2)
     fst.add_arc(1, 'b', 'x', 2)
-    fst.add_F(2)
+    fst.add_stop(2)
     pushed = fst.push_labels()
     assert_relation_equal(fst, pushed)
 
@@ -222,16 +222,16 @@ def test_multiple_start_states_different_delays():
     d(0) = (x,), d(1) = (x,) -> both get eps-chains prepended.
     """
     fst = FST()
-    fst.add_I(0)
-    fst.add_I(1)
+    fst.add_start(0)
+    fst.add_start(1)
     fst.add_arc(0, 'a', EPSILON, 2)
     fst.add_arc(2, 'b', 'x', 3)
     fst.add_arc(1, 'c', 'x', 3)
-    fst.add_F(3)
+    fst.add_stop(3)
     pushed = fst.push_labels()
     assert_relation_equal(fst, pushed)
     # Both starts should have eps-chain producing 'x'
-    for s in pushed.I:
+    for s in pushed.start:
         outputs = [y for _, y, _ in pushed.arcs(s)]
         assert 'x' in outputs, f'Expected x output from start {s}'
 
@@ -244,18 +244,18 @@ def test_long_common_prefix():
     After push, start chain emits P,Q,R via eps arcs.
     """
     fst = FST()
-    fst.add_I(0)
+    fst.add_start(0)
     fst.add_arc(0, 'a', 'P', 1)
     fst.add_arc(1, 'b', 'Q', 2)
     fst.add_arc(2, 'c', 'R', 3)
     fst.add_arc(0, 'd', 'P', 4)
     fst.add_arc(4, 'e', 'Q', 5)
     fst.add_arc(5, 'f', 'R', 3)
-    fst.add_F(3)
+    fst.add_stop(3)
     pushed = fst.push_labels()
     assert_relation_equal(fst, pushed)
     # Start should NOT be 0 (it should be an eps-chain state)
-    assert 0 not in pushed.I, 'Expected start to be a new eps-chain state'
+    assert 0 not in pushed.start, 'Expected start to be a new eps-chain state'
 
 
 def test_partial_common_prefix():
@@ -265,16 +265,16 @@ def test_partial_common_prefix():
     d(0) = (x,) — only the first symbol is common.
     """
     fst = FST()
-    fst.add_I(0)
+    fst.add_start(0)
     fst.add_arc(0, 'a', 'x', 1)
     fst.add_arc(1, 'b', 'y', 2)
     fst.add_arc(0, 'c', 'x', 3)
     fst.add_arc(3, 'd', 'z', 2)
-    fst.add_F(2)
+    fst.add_stop(2)
     pushed = fst.push_labels()
     assert_relation_equal(fst, pushed)
     # Verify 'x' appears on an eps arc from start
-    for s in pushed.I:
+    for s in pushed.start:
         outputs = [y for _, y, _ in pushed.arcs(s)]
         assert 'x' in outputs
 
@@ -286,8 +286,8 @@ def test_multi_symbol_output_arc():
     Arc 0->1: full = () + (P,Q) = (P,Q), strip d(0)=() -> (P,Q) — 2 symbols, needs intermediate.
     """
     fst = FST()
-    fst.add_I(0)
-    fst.add_F(0)
+    fst.add_start(0)
+    fst.add_stop(0)
     fst.add_arc(0, 'a', EPSILON, 1)
     fst.add_arc(1, EPSILON, 'P', 2)
     fst.add_arc(2, EPSILON, 'Q', 0)
@@ -295,7 +295,7 @@ def test_multi_symbol_output_arc():
     assert_relation_equal(fst, pushed)
     # After pushing, the 'a' arc from state 0 should output 'P' directly
     found_P = False
-    for s in pushed.I:
+    for s in pushed.start:
         for x, y, j in pushed.arcs(s):
             if x == 'a' and y == 'P':
                 found_P = True
@@ -326,9 +326,9 @@ def test_sdd1_delay():
     fst = examples.sdd1_fst()
     pushed = fst.push_labels()
     # Start should be an eps-chain state, not the original 0
-    assert 0 not in pushed.I
+    assert 0 not in pushed.start
     # The eps-chain from start should produce 'a'
-    for s in pushed.I:
+    for s in pushed.start:
         outputs = [y for _, y, _ in pushed.arcs(s)]
         assert 'a' in outputs, f'Expected a output from eps-chain start {s}'
 
@@ -340,16 +340,16 @@ def test_diamond_same_output():
     d(0) = (x,y), fully pushed.
     """
     fst = FST()
-    fst.add_I(0)
+    fst.add_start(0)
     fst.add_arc(0, 'a', 'x', 1)
     fst.add_arc(1, 'b', 'y', 3)
     fst.add_arc(0, 'c', 'x', 2)
     fst.add_arc(2, 'd', 'y', 3)
-    fst.add_F(3)
+    fst.add_stop(3)
     pushed = fst.push_labels()
     assert_relation_equal(fst, pushed)
     # All output should be on eps-chain from start
-    assert 0 not in pushed.I
+    assert 0 not in pushed.start
 
 
 def test_final_with_outgoing_arcs():
@@ -359,14 +359,14 @@ def test_final_with_outgoing_arcs():
     Push shouldn't change the start since d(0) = ().
     """
     fst = FST()
-    fst.add_I(0)
-    fst.add_F(0)
+    fst.add_start(0)
+    fst.add_stop(0)
     fst.add_arc(0, 'a', 'x', 1)
     fst.add_arc(1, 'b', 'x', 0)
     pushed = fst.push_labels()
     assert_relation_equal(fst, pushed)
     # Start should remain 0 since d(0) = ()
-    assert 0 in pushed.I
+    assert 0 in pushed.start
 
 
 def test_epsilon_only_output():
@@ -375,14 +375,14 @@ def test_epsilon_only_output():
     d(0) = () — nothing to push.
     """
     fst = FST()
-    fst.add_I(0)
-    fst.add_F(0)
+    fst.add_start(0)
+    fst.add_stop(0)
     fst.add_arc(0, 'a', EPSILON, 0)
     fst.add_arc(0, 'b', EPSILON, 0)
     pushed = fst.push_labels()
     assert_relation_equal(fst, pushed)
     # Structure should be essentially unchanged
-    assert 0 in pushed.I
+    assert 0 in pushed.start
 
 
 # ---------------------------------------------------------------------------
@@ -397,8 +397,8 @@ def gap_creator(depth):
     """
     fst = FST()
     hub = 'hub'
-    fst.add_I(0)
-    fst.add_F(hub)
+    fst.add_start(0)
+    fst.add_stop(hub)
 
     # Direct path
     fst.add_arc(0, 'a', 'y', hub)

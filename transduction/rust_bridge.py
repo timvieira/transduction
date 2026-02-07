@@ -32,8 +32,8 @@ def to_rust_fst(fst):
         state_map(s)
 
     num_states = len(state_map)
-    start_states = [state_map(s) for s in fst.I]
-    final_states = [state_map(s) for s in fst.F]
+    start_states = [state_map(s) for s in fst.start]
+    final_states = [state_map(s) for s in fst.stop]
 
     arc_src = []
     arc_in = []

@@ -432,12 +432,12 @@ def build_ptb_fst_pynini():
     for state in final_fst.states():
         native_fst.states.add(state)
 
-    native_fst.add_I(final_fst.start())
+    native_fst.add_start(final_fst.start())
 
     for state in final_fst.states():
         final_weight = final_fst.final(state)
         if final_weight != pynini.Weight.zero(final_fst.weight_type()):
-            native_fst.add_F(state)
+            native_fst.add_stop(state)
 
     marker_id = ext_symbols.find(MARKER)
     for state in final_fst.states():

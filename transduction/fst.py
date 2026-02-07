@@ -25,19 +25,20 @@ class FST:
         self.B = set()
         self.states = set()
         self.delta = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
-        self.I = set()
-        self.F = set()
-        for i in start: self.add_I(i)
-        for i in stop: self.add_F(i)
+        self.start = set()
+        self.stop = set()
+        for i in start: self.add_start(i)
+        for i in stop: self.add_stop(i)
         for i,a,b,j in arcs: self.add_arc(i,a,b,j)
 
+    # Deprecated aliases
     @property
-    def start(self):
-        return self.I
+    def I(self):
+        return self.start
 
     @property
-    def stop(self):
-        return self.F
+    def F(self):
+        return self.stop
 
     def __repr__(self):
         return f'{__class__.__name__}({len(self.states)} states)'
@@ -46,7 +47,7 @@ class FST:
         output = []
         output.append('{')
         for p in self.states:
-            output.append(f'  {p} \t\t({p in self.I}, {p in self.F})')
+            output.append(f'  {p} \t\t({p in self.start}, {p in self.stop})')
             for a, q in self.arcs(p):
                 output.append(f'    {a}: {q}')
         output.append('}')
@@ -64,7 +65,7 @@ class FST:
                 print(f'm.add_arc({i!r}, {x!r}, {y!r}, {j!r})')
 
     def is_final(self, i):
-        return i in self.F
+        return i in self.stop
 
     def add_arc(self, i, a, b, j):  # pylint: disable=arguments-renamed
         self.states.add(i)
@@ -73,17 +74,17 @@ class FST:
         self.A.add(a)
         self.B.add(b)
 
-    def add_I(self, q):
+    def add_start(self, q):
         self.states.add(q)
-        self.I.add(q)
+        self.start.add(q)
 
-    def add_F(self, q):
+    def add_stop(self, q):
         self.states.add(q)
-        self.F.add(q)
+        self.stop.add(q)
 
-    # aliases
-    add_start = add_I
-    add_stop = add_F
+    # Deprecated aliases
+    add_I = add_start
+    add_F = add_stop
 
     def ensure_arc_indexes(self):
         if hasattr(self, 'index_iy_xj'):
@@ -118,10 +119,10 @@ class FST:
     def rename(self, f):
         "Note: If `f` is not bijective, states may merge."
         m = self.spawn()
-        for i in self.I:
-            m.add_I(f(i))
-        for i in self.F:
-            m.add_F(f(i))
+        for i in self.start:
+            m.add_start(f(i))
+        for i in self.stop:
+            m.add_stop(f(i))
         for i in self.states:
             for a, b, j in self.arcs(i):
                 m.add_arc(f(i), a, b, f(j))
@@ -133,15 +134,15 @@ class FST:
     def spawn(self, *, keep_init=False, keep_arcs=False, keep_stop=False):
         m = self.__class__()
         if keep_init:
-            for q in self.I:
-                m.add_I(q)
+            for q in self.start:
+                m.add_start(q)
         if keep_arcs:
             for i in self.states:
                 for a, b, j in self.arcs(i):
                     m.add_arc(i, a, b, j)
         if keep_stop:
-            for q in self.F:
-                m.add_F(q)
+            for q in self.stop:
+                m.add_stop(q)
         return m
 
     def _repr_mimebundle_(self, *args, **kwargs):
@@ -176,14 +177,14 @@ class FST:
         f = Integerizer()
 
         # Start pointers
-        for i in self.I:
+        for i in self.start:
             start = f'<start_{i}>'
             g.node(start, label='', shape='point', height='0', width='0')
             g.edge(start, str(f(i)), label='')
 
         # Nodes
         for i in self.states:
-            sty = dict(peripheries='2' if i in self.F else '1')
+            sty = dict(peripheries='2' if i in self.stop else '1')
             sty.update(sty_node(i))
             g.node(str(f(i)), label=html.escape(str(fmt_node(i))), **sty)
 
@@ -231,17 +232,17 @@ class FST:
     @classmethod
     def from_string(cls, xs):
         m = cls()
-        m.add_I(xs[:0])
+        m.add_start(xs[:0])
         for i in range(len(xs)):
             m.add_arc(xs[:i], xs[i], xs[i], xs[:i+1])
-        m.add_F(xs)
+        m.add_stop(xs)
         return m
 
     @staticmethod
     def from_pairs(pairs):
         p = FST()
-        p.add_I(0)
-        p.add_F(1)
+        p.add_start(0)
+        p.add_stop(1)
         for i, (xs, ys) in enumerate(pairs):
             p.add_arc(0, EPSILON, EPSILON, (i, 0))
             for j, (x, y) in enumerate(zip_longest(xs, ys, fillvalue=EPSILON)):
@@ -262,9 +263,9 @@ class FST:
                     A.add_arc(i, a, j)
                 else:
                     A.add_arc(i, b, j)
-        for i in self.I:
+        for i in self.start:
             A.add_start(i)
-        for i in self.F:
+        for i in self.stop:
             A.add_stop(i)
         return A
 
@@ -284,12 +285,12 @@ class FST:
         # emit the empty string.  However, at the end of we generate a `marker`
         # symbol and terminate.
         for i in other.start:
-            m.add_I(gensym(i))
+            m.add_start(gensym(i))
         for i,a,j in other.arcs():
             m.add_arc(gensym(i), a, EPSILON, gensym(j))
         for j in other.stop:
             m.add_arc(gensym(j), EPSILON, marker, gensym(None))
-        m.add_F(gensym(None))
+        m.add_stop(gensym(None))
 
         return m
 
@@ -300,10 +301,10 @@ class FST:
         for i in self.states:
             for a, b, j in self.arcs(i):
                 T.add_arc(i, b, a, j)  # pylint: disable=W1114
-        for q in self.I:
-            T.add_I(q)
-        for q in self.F:
-            T.add_F(q)
+        for q in self.start:
+            T.add_start(q)
+        for q in self.stop:
+            T.add_stop(q)
         return T
 
     def __matmul__(self, other):
@@ -353,10 +354,10 @@ class FST:
         stack = []
 
         # add initial states
-        for P in self.I:
-            for Q in other.I:
+        for P in self.start:
+            for Q in other.start:
                 PQ = (P, Q)
-                C.add_I(PQ)
+                C.add_start(PQ)
                 visited.add(PQ)
                 stack.append(PQ)
 
@@ -365,8 +366,8 @@ class FST:
             P, Q = PQ = stack.pop()
 
             # (q,p) is simultaneously a final state in the respective machines
-            if P in self.F and Q in other.F:
-                C.add_F(PQ)
+            if P in self.stop and Q in other.stop:
+                C.add_stop(PQ)
                 # Note: final states are not necessarily absorbing -> fall thru
 
             # Arcs of the composition machine are given by a cross-product-like
@@ -423,15 +424,15 @@ class FST:
         for i, a, j in fsa.arcs():
             fst.add_arc(i, a, a, j)
         for i in fsa.start:
-            fst.add_I(i)
+            fst.add_start(i)
         for i in fsa.stop:
-            fst.add_F(i)
+            fst.add_stop(i)
         return fst
 
     def paths(self):
         "Enumerate paths in the FST using breadth-first order."
         worklist = deque()
-        for i in self.I:
+        for i in self.start:
             worklist.append((i,))
         while worklist:
             path = worklist.popleft()
@@ -444,7 +445,7 @@ class FST:
     def relation(self, max_length):
         "Enumerate string pairs in the relation of this FST up to length `max_length`."
         worklist = deque()
-        worklist.extend([(i, '', '') for i in self.I])
+        worklist.extend([(i, '', '') for i in self.start])
         while worklist:
             (i, xs, ys) = worklist.popleft()
             if self.is_final(i):
@@ -492,7 +493,7 @@ class FST:
 
         delay = {}
         for q in t.states:
-            if q in t.F:
+            if q in t.stop:
                 delay[q] = ()        # final state: empty path contributes ε
             else:
                 delay[q] = None      # unconstrained until resolved
@@ -522,7 +523,7 @@ class FST:
                     else:
                         new_val = _lcp_pair(new_val, candidate)
                 # Also, if q is final, the empty path contributes ε
-                if q in t.F:
+                if q in t.stop:
                     if new_val is None:
                         new_val = ()
                     else:
@@ -572,14 +573,14 @@ class FST:
                             result.add_arc(prev, EPSILON, sym, qp)
 
         # --- 3. Handle start states ---
-        for s in t.I:
+        for s in t.start:
             d_s = delay[s]
             if len(d_s) == 0:
-                result.add_I(s)
+                result.add_start(s)
             else:
                 # Prepend ε-input chain producing d(s)
                 prev = fresh()
-                result.add_I(prev)
+                result.add_start(prev)
                 for k, sym in enumerate(d_s):
                     if k < len(d_s) - 1:
                         nxt = fresh()
@@ -589,8 +590,8 @@ class FST:
                         result.add_arc(prev, EPSILON, sym, s)
 
         # --- 4. Final states ---
-        for q in t.F:
-            result.add_F(q)
+        for q in t.stop:
+            result.add_stop(q)
 
         return result.trim()
 
@@ -711,7 +712,7 @@ def check_all_input_universal(fst):
     source_alphabet = fst.A - {eps}
     if not source_alphabet:
         # Empty alphabet: universal iff some start state is final
-        return any(fst.is_final(s) for s in fst.I)
+        return any(fst.is_final(s) for s in fst.start)
 
     # Eps-close start states over input-side ε arcs
     def ip_eps_close(states):
@@ -725,7 +726,7 @@ def check_all_input_universal(fst):
                     worklist.append(j)
         return visited
 
-    start_set = ip_eps_close(fst.I)
+    start_set = ip_eps_close(fst.start)
 
     # Must contain a final state
     if not any(fst.is_final(s) for s in start_set):
@@ -970,7 +971,7 @@ def epsilon_filter_fst(Sigma):
 
     F = FST()
 
-    F.add_I(0)
+    F.add_start(0)
 
     for a in Sigma:
         F.add_arc(0, a, a, 0)
@@ -984,8 +985,8 @@ def epsilon_filter_fst(Sigma):
     F.add_arc(1, ε_1, ε_1, 1)
     F.add_arc(2, ε_2, ε_2, 2)
 
-    F.add_F(0)
-    F.add_F(1)
-    F.add_F(2)
+    F.add_stop(0)
+    F.add_stop(1)
+    F.add_stop(2)
 
     return F

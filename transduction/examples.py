@@ -4,8 +4,8 @@ from transduction.fst import FST, EPSILON
 def infinite_quotient(alphabet=('a',), separators=('#',)):
     fst = FST()
 
-    fst.add_I(0)
-    fst.add_F(0)
+    fst.add_start(0)
+    fst.add_stop(0)
 
     # From start (state 0)
     for x in alphabet:
@@ -23,7 +23,7 @@ def infinite_quotient(alphabet=('a',), separators=('#',)):
 
     fst.add_arc(1, EPSILON, '1', 3)
 
-    fst.add_F(3)
+    fst.add_stop(3)
 
     return fst
 
@@ -41,8 +41,8 @@ def weird_copy():
 
 def small():
     fst = FST()
-    fst.add_I(0)
-    fst.add_F(0)
+    fst.add_start(0)
+    fst.add_stop(0)
 
     fst.add_arc(0, 'a', 'x', 1)
     fst.add_arc(0, 'b', 'x', 2)
@@ -53,15 +53,15 @@ def small():
     fst.add_arc(3, 'a', 'a', 3)
     fst.add_arc(3, 'b', 'b', 3)
 
-    fst.add_F(1)
-    fst.add_F(3)
+    fst.add_stop(1)
+    fst.add_stop(3)
     return fst
 
 
 def lookahead():
     fst = FST()
-    fst.add_I(0)
-    fst.add_F(0)
+    fst.add_start(0)
+    fst.add_stop(0)
 
     fst.add_arc(0, 'a', '', 1)
     fst.add_arc(1, 'a', 'x', 11)
@@ -78,8 +78,8 @@ def lookahead():
     fst.add_arc(4, 'a', 'a', 4)
     fst.add_arc(4, 'b', 'b', 4)
 
-    fst.add_F(111)
-    fst.add_F(4)
+    fst.add_stop(111)
+    fst.add_stop(4)
     return fst
 
 
@@ -100,8 +100,8 @@ def samuel_example():
     sam = FST()
 
     # state 0
-    sam.add_I(0)
-    sam.add_F(0)
+    sam.add_start(0)
+    sam.add_stop(0)
     sam.add_arc(0, 'a', EPSILON, 1)
     sam.add_arc(0, 'a', 'c', 2)
     sam.add_arc(0, 'b', 'y', 4)
@@ -110,15 +110,15 @@ def samuel_example():
     sam.add_arc(1, 'b', 'c', 3)
 
     # state 2
-    sam.add_F(2)
+    sam.add_stop(2)
     sam.add_arc(2, 'a', 'x', 4)
 
     # state 3
-    sam.add_F(3)
+    sam.add_stop(3)
     sam.add_arc(3, EPSILON, 'x', 4)
 
     # state 4
-    sam.add_F(4)
+    sam.add_stop(4)
     sam.add_arc(4, 'a', 'x', 4)
     sam.add_arc(4, 'b', 'x', 4)
     return sam
@@ -149,8 +149,8 @@ def number_comma_separator(
     assert (Digit | COMMA) <= Domain
 
     # state 0 out arcs
-    m.add_I(0)
-    m.add_F(0)
+    m.add_start(0)
+    m.add_stop(0)
     for x in Domain - COMMA:
         m.add_arc(0, x, x, 0)
 
@@ -158,7 +158,7 @@ def number_comma_separator(
         m.add_arc(0, x, x, 1)
 
     # state 1, out arcs
-    m.add_F(1)
+    m.add_stop(1)
     for x in Digit:   # if we see another digit, then go back as this is still a numeric expression like 12,3
         m.add_arc(1, x, x, 0)
     m.add_arc(1, EPSILON, SEP, 2)
@@ -178,16 +178,16 @@ def delete_b():
     This example has infinite quotients.
     """
     fst = FST()
-    fst.add_I(0)
+    fst.add_start(0)
     fst.add_arc(0, 'a', 'A', 0)
     fst.add_arc(0, 'b', EPSILON, 0)
-    fst.add_F(0)
+    fst.add_stop(0)
     return fst
 
 
 def sdd1_fst():
     fst = FST()
-    fst.add_I(0)
+    fst.add_start(0)
 
     fst.add_arc(0, EPSILON, 'a', 1)
     fst.add_arc(1, 'a', EPSILON, 2)
@@ -198,7 +198,7 @@ def sdd1_fst():
 
     fst.add_arc(0, 'a', 'a', 2)
 
-    fst.add_F(2)
+    fst.add_stop(2)
 
     return fst
 
@@ -208,7 +208,7 @@ def parity(alphabet):
     m = FST()
 
     E, O, F = 0, 1, 2   # Even, Odd, Final
-    m.add_I(E)
+    m.add_start(E)
 
     # Toggle parity on every consumed input symbol; output is epsilon while reading
     for x in alphabet:
@@ -218,17 +218,17 @@ def parity(alphabet):
     # Emit a single bit at the end via an epsilon-input arc, then accept
     m.add_arc(E, EPSILON, '1', F)   # even length → output 1
     m.add_arc(O, EPSILON, '0', F)   # odd length  → output 0
-    m.add_F(F)
+    m.add_stop(F)
     return m
 
 
 #def duplicate(V):
 #    dup = FST()
-#    dup.add_I(0)
+#    dup.add_start(0)
 #    for b in V:
 #        dup.add_arc(0, b, b, (1, b))
 #        dup.add_arc((1, b), EPSILON, b, 0)
-#    dup.add_F(0)
+#    dup.add_stop(0)
 #    return dup
 
 
@@ -236,22 +236,22 @@ def duplicate(V, K=2):
     "Duplicate (by K > 1) each symbol in the input string, e.g., `abc -> a^K b^K c^K`."
     assert K > 1
     dup = FST()
-    dup.add_I(0)
+    dup.add_start(0)
     for b in V:
         dup.add_arc(0, b, b, (0, b))
         for k in range(K-2):
             dup.add_arc((k, b), EPSILON, b, (k+1, b))
         dup.add_arc((K-2, b), EPSILON, b, 0)
-    dup.add_F(0)
+    dup.add_stop(0)
     return dup.renumber()
 
 
 def replace(mapping):
     fst = FST()
-    fst.add_I(0)
+    fst.add_start(0)
     for x,y in mapping:
         fst.add_arc(0, x, y, 0)
-    fst.add_F(0)
+    fst.add_stop(0)
     return fst
 
 
@@ -269,25 +269,25 @@ def doom(V, K):   # k-tuples of doom
     """
     assert K > 1
     dup = FST()
-    dup.add_I(0)
+    dup.add_start(0)
     for b in V:
         dup.add_arc(0, b, b, (0, b))
         for k in range(K-2):
             dup.add_arc((k, b), b, b, (k+1, b))
         dup.add_arc((K-2, b), EPSILON, EPSILON, 0)
-    dup.add_F(0)
+    dup.add_stop(0)
     return dup.renumber()
 
 
 #def togglecase():
 #    T = FST()
-#    T.add_I(0)
+#    T.add_start(0)
 #    for b in range(256):
 #        if bytes([b]).isupper():
 #            T.add_arc(0, b, bytes([b]).lower()[0], 0)
 #        else:
 #            T.add_arc(0, b, bytes([b]).upper()[0], 0)
-#    T.add_F(0)
+#    T.add_stop(0)
 #    return T
 
 
@@ -326,10 +326,10 @@ def doom(V, K):   # k-tuples of doom
 #     replace_bad.set_output_symbols(symtab)
 #
 #     m = FST()
-#     m.add_I(replace_bad.start())
+#     m.add_start(replace_bad.start())
 #     for s in replace_bad.states():
 #         if 'Infinity' not in str(replace_bad.final(s)):   # TODO: absolutely hideous hack
-#             m.add_F(s)
+#             m.add_stop(s)
 #         for a in replace_bad.arcs(s):
 #             x, y = symtab.find(a.ilabel), symtab.find(a.olabel)
 #             x = EPSILON if x == 'eps' else x
@@ -437,21 +437,21 @@ def newspeak2():
 
 def togglecase():
     T = FST()
-    T.add_I(0)
+    T.add_start(0)
     for x in 'abcdefghijklmnopqrstuvwxyz ':
         T.add_arc(0, x.lower(), x.upper(), 0)
         T.add_arc(0, x.upper(), x.lower(), 0)
-    T.add_F(0)
+    T.add_stop(0)
     return T
 
 
 def lowercase():
     T = FST()
-    T.add_I(0)
+    T.add_start(0)
     for x in 'abcdefghijklmnopqrstuvwxyz ':
         T.add_arc(0, x.lower(), x.lower(), 0)
         T.add_arc(0, x.upper(), x.lower(), 0)
-    T.add_F(0)
+    T.add_stop(0)
     return T
 
 
@@ -463,7 +463,7 @@ def lowercase():
 def mystery1():
     fst = FST()
 
-    fst.add_I(0)
+    fst.add_start(0)
 
     # Path A: 'a' -> 'c'
     fst.add_arc(0, 'a', 'c', 1)
@@ -474,7 +474,7 @@ def mystery1():
 
     # After 'c', just loop with 'x'
     for q in (1, 3):
-        fst.add_F(q)
+        fst.add_stop(q)
         fst.add_arc(q, 'a', 'x', q)
         fst.add_arc(q, 'b', 'x', q)
 
@@ -485,7 +485,7 @@ def mystery2():
 
     fst = FST()
 
-    fst.add_I(0)
+    fst.add_start(0)
 
     # Path 1: 'a' -> 'c'
     fst.add_arc(0, 'a', 'c', 1)
@@ -500,7 +500,7 @@ def mystery2():
 
     # After 'c', loop 'x' on both symbols
     for q in (1, 2, 3):
-        fst.add_F(q)
+        fst.add_stop(q)
         fst.add_arc(q, 'a', 'x', q)
         fst.add_arc(q, 'b', 'x', q)
 
@@ -510,7 +510,7 @@ def mystery2():
 def mystery3():
     fst = FST()
 
-    fst.add_I(0)
+    fst.add_start(0)
 
     # Transition: track last symbol, no output yet.
     fst.add_arc(0, 'a', EPSILON, 1)
@@ -526,8 +526,8 @@ def mystery3():
     fst.add_arc(1, EPSILON, 'A', 3)   # last was a
     fst.add_arc(2, EPSILON, 'B', 4)   # last was b
 
-    fst.add_F(3)
-    fst.add_F(4)
+    fst.add_stop(3)
+    fst.add_stop(4)
 
     return fst
 
@@ -535,7 +535,7 @@ def mystery3():
 def mystery4():
     fst = FST()
 
-    fst.add_I(0)
+    fst.add_start(0)
 
     # From state 0
     fst.add_arc(0, 'a', EPSILON, 1)  # first a
@@ -554,8 +554,8 @@ def mystery4():
     fst.add_arc(1, EPSILON, '1', 4)  # exactly one a
     fst.add_arc(2, EPSILON, '0', 3)  # at least two a's
 
-    fst.add_F(3)
-    fst.add_F(4)
+    fst.add_stop(3)
+    fst.add_stop(4)
 
     return fst
 
@@ -564,7 +564,7 @@ def mystery5():
 
     fst = FST()
 
-    fst.add_I(0)
+    fst.add_start(0)
 
     # Cycle mod 3 on any input symbol, no output
     for s_from, s_to in [(0, 1), (1, 2), (2, 0)]:
@@ -576,9 +576,9 @@ def mystery5():
     fst.add_arc(1, EPSILON, '1', 4)
     fst.add_arc(2, EPSILON, '2', 5)
 
-    fst.add_F(3)
-    fst.add_F(4)
-    fst.add_F(5)
+    fst.add_stop(3)
+    fst.add_stop(4)
+    fst.add_stop(5)
 
     return fst
 
@@ -586,7 +586,7 @@ def mystery5():
 def mystery6():
     fst = FST()
 
-    fst.add_I(0)
+    fst.add_start(0)
 
     fst.add_arc(0, 'a', '', 1)
     fst.add_arc(1, 'a', '', 2)
@@ -601,9 +601,9 @@ def mystery6():
     fst.add_arc(4, '', 'a', 4)
     fst.add_arc(4, '', 'b', 4)
     fst.add_arc(4, '', 'c', 5)
-    fst.add_F(5)
+    fst.add_stop(5)
 
-    fst.add_F(3)
+    fst.add_stop(3)
 
     return fst
 
@@ -611,7 +611,7 @@ def mystery6():
 def infinite_quotient2():
     fst = FST()
 
-    fst.add_I(0)
+    fst.add_start(0)
 
     # From start (state 0)
     fst.add_arc(0, 'a', EPSILON, 1)   # odd a-count
@@ -637,12 +637,12 @@ def infinite_quotient2():
 
     # even → '0', odd → '1', absorbing → '0'
     #fst.add_arc(0, '', '0', 'done')
-    fst.add_F('done')
+    fst.add_stop('done')
     fst.add_arc(3, '', '1', 'done')
     fst.add_arc(2, '', '0', 'done')
 
-    fst.add_F(0)
-    fst.add_F(1)
+    fst.add_stop(0)
+    fst.add_stop(1)
 
     return fst
 
@@ -650,7 +650,7 @@ def infinite_quotient2():
 def mystery7():
     fst = FST()
 
-    fst.add_I(0)
+    fst.add_start(0)
 
     # Path 1: 0 -b|c-> 3
     fst.add_arc(0, 'b', 'c', 3)
@@ -661,7 +661,7 @@ def mystery7():
 
     # After we have emitted 'c', we only emit 'x' forever.
     for q in (2, 3):
-        fst.add_F(q)
+        fst.add_stop(q)
         fst.add_arc(q, 'a', 'x', q)
         fst.add_arc(q, 'b', 'x', q)
 
@@ -671,19 +671,19 @@ def mystery7():
 def mystery8():
     fst = FST()
 
-    fst.add_I(0)
-    fst.add_F(0)
+    fst.add_start(0)
+    fst.add_stop(0)
 
     # Direct C, like your original
     fst.add_arc(0, 'a', 'c', 1)
-    fst.add_F(1)
+    fst.add_stop(1)
     fst.add_arc(1, 'a', 'x', 3)
 
     # Indirect C via epsilon-output
     fst.add_arc(0, 'b', EPSILON, 2)
     fst.add_arc(2, 'b', 'c', 3)
 
-    fst.add_F(3)
+    fst.add_stop(3)
     fst.add_arc(3, 'a', 'x', 3)
     fst.add_arc(3, 'b', 'x', 3)
 
