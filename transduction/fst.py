@@ -2,13 +2,9 @@ from collections import defaultdict, deque
 from functools import cached_property
 from itertools import zip_longest
 
-from transduction.fsa import FSA, EPSILON
-
-
-import html
+from transduction.fsa import FSA, EPSILON, _render_graphviz
 
 from arsenal import Integerizer
-from graphviz import Digraph
 
 
 # TODO: technically, we need to ensure that these are unique objects.
@@ -156,51 +152,11 @@ class FST:
         fmt_edge=lambda i, a, j: f'{str(a[0] or "ε")}:{str(a[1] or "ε")}' if a[0] != a[1] else str(a[0]),
         sty_node=lambda i: {},
     ):
-
-        g = Digraph(
-            graph_attr=dict(rankdir='LR'),
-            node_attr=dict(
-                fontname='Monospace',
-                fontsize='8',
-                height='.05', width='.05',
-                margin="0.055,0.042",
-                shape='box',
-                style='rounded',
-            ),
-            edge_attr=dict(
-                arrowsize='0.3',
-                fontname='Monospace',
-                fontsize='8'
-            ),
+        return _render_graphviz(
+            self.states, self.start, self.stop,
+            arc_iter=lambda i: (((a, b), j) for a, b, j in self.arcs(i)),
+            fmt_node=fmt_node, fmt_edge=fmt_edge, sty_node=sty_node,
         )
-
-        f = Integerizer()
-
-        # Start pointers
-        for i in self.start:
-            start = f'<start_{i}>'
-            g.node(start, label='', shape='point', height='0', width='0')
-            g.edge(start, str(f(i)), label='')
-
-        # Nodes
-        for i in self.states:
-            sty = dict(peripheries='2' if i in self.stop else '1')
-            sty.update(sty_node(i))
-            g.node(str(f(i)), label=html.escape(str(fmt_node(i))), **sty)
-
-        # Collect parallel-edge labels by (i, j)
-        by_pair = defaultdict(list)
-        for i in self.states:
-            for a, b, j in self.arcs(i):
-                lbl = html.escape(str(fmt_edge(i, (a, b), j)))
-                by_pair[(str(f(i)), str(f(j)))].append(lbl)
-
-        # Emit one edge per (i, j) with stacked labels
-        for (u, v), labels in by_pair.items():
-            # Stack with literal newlines. Graphviz renders '\n' as a line break.
-            g.edge(u, v, label='\n'.join(sorted(labels)))
-
-        return g
 
     def __call__(self, x, y):
         """
