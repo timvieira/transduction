@@ -68,30 +68,28 @@ def _chars_to_bytes(s, symbols):
 
 def _build_separator_inserter(symbols, ext_symbols):
     """
-    Build an FST that converts MARKER bytes to SEP and collapses consecutive markers.
+    Build an FST that converts every MARKER byte to SEP.
+
+    Uses a simple 1-state transducer (MARKER→SEP, everything else passes through).
+    Consecutive MARKERs produce consecutive SEPs, which is fine because
+    decode_ptb_output skips empty tokens between consecutive separators.
     """
     fst = pynini.Fst()
-    start = fst.add_state()
-    in_markers = fst.add_state()
-    fst.set_start(start)
-    fst.set_final(start)
-    fst.set_final(in_markers)
+    s = fst.add_state()
+    fst.set_start(s)
+    fst.set_final(s)
 
     marker_id = ext_symbols.find(MARKER)
     sep_id = ext_symbols.find(SEP)
 
-    # From start: first marker -> output SEP, go to in_markers
-    fst.add_arc(start, pynini.Arc(marker_id, sep_id, 0, in_markers))
+    # MARKER -> SEP
+    fst.add_arc(s, pynini.Arc(marker_id, sep_id, 0, s))
 
-    # From in_markers: more markers -> consume without output
-    fst.add_arc(in_markers, pynini.Arc(marker_id, 0, 0, in_markers))
-
-    # From both states: non-marker -> pass through
+    # All other symbols pass through
     for idx in range(1, symbols.num_symbols()):
         sym = symbols.find(idx)
         if sym is not None and idx != marker_id:
-            fst.add_arc(start, pynini.Arc(idx, idx, 0, start))
-            fst.add_arc(in_markers, pynini.Arc(idx, idx, 0, start))
+            fst.add_arc(s, pynini.Arc(idx, idx, 0, s))
 
     fst.set_input_symbols(ext_symbols)
     fst.set_output_symbols(ext_symbols)
@@ -102,7 +100,7 @@ def build_ptb_fst_pynini():
     """
     Build PTB tokenizer FST using pynini, then convert to native format.
 
-    Returns a native FST with ~130 states that implements Penn Treebank tokenization.
+    Returns a native FST with ~228 states that implements Penn Treebank tokenization.
     """
     # Build symbol table: bytes 0-255 + out-of-band MARKER
     symbols = pynini.SymbolTable()
@@ -143,18 +141,6 @@ def build_ptb_fst_pynini():
     )
     sigma_star = pynini.closure(sigma)
 
-    # Identity FST as base (passes through all bytes)
-    identity_fst = pynini.Fst()
-    s = identity_fst.add_state()
-    identity_fst.set_start(s)
-    identity_fst.set_final(s)
-    for idx in range(symbols.num_symbols()):
-        if idx != 0:
-            identity_fst.add_arc(s, pynini.Arc(idx, idx, 0, s))
-    identity_fst.set_input_symbols(symbols)
-    identity_fst.set_output_symbols(symbols)
-    identity_fst = identity_fst.closure()
-
     # === Quote handling ===
     # We process quotes in a specific order:
     # 1. Convert closing quotes (after word chars) to ''
@@ -178,53 +164,56 @@ def build_ptb_fst_pynini():
     # Characters that can precede an OPENING quote
     opening_context = union(cb("("), cb("["), cb("{"), cb("<"), SPACE)
 
-    # Rule 1: " after word chars -> '' (closing quote) - must run FIRST
+    DOUBLE_APOS = APOS + APOS  # '' (two apostrophes)
+
+    # Rule 1: " or '' after word chars -> '' (closing quote) - must run FIRST
     closing_quote_rule = cdrewrite(
-        cross(QUOTE, MARKER_ACC + APOS + APOS + MARKER_ACC),
+        cross(QUOTE, MARKER_ACC + APOS + APOS + MARKER_ACC) |
+        cross(DOUBLE_APOS, MARKER_ACC + APOS + APOS + MARKER_ACC),
         WORD_CHARS,
         "", sigma_star
     )
 
-    # Rule 2: " after space/brackets -> `` (opening quote)
+    # Rule 2: " or '' after space/brackets -> `` (opening quote)
     opening_quote_rule = cdrewrite(
-        cross(QUOTE, MARKER_ACC + DOUBLE_BACKTICK + MARKER_ACC),
+        cross(QUOTE, MARKER_ACC + DOUBLE_BACKTICK + MARKER_ACC) |
+        cross(DOUBLE_APOS, MARKER_ACC + DOUBLE_BACKTICK + MARKER_ACC),
         opening_context.plus,
         "", sigma_star
     )
 
-    # Rule 3: Remaining " -> `` (for quotes at beginning of string)
+    # Rule 3: Remaining " -> `` (for double quotes at beginning of string)
     remaining_quote_rule = cdrewrite(
         cross(QUOTE, MARKER_ACC + DOUBLE_BACKTICK + MARKER_ACC),
         "", "", sigma_star
     )
 
-    # Rule 4: `` -> MARKER `` MARKER (for manually entered backticks)
+    # Rule 4: Remaining '' -> separated '' (for double apostrophes at beginning of string)
+    # Unlike ", remaining '' stays as '' (not converted to ``)
+    remaining_double_apos_rule = cdrewrite(
+        cross(DOUBLE_APOS, MARKER_ACC + APOS + APOS + MARKER_ACC),
+        "", "", sigma_star
+    )
+
+    # Rule 5: `` -> MARKER `` MARKER (for manually entered backticks)
     backtick_rule = cdrewrite(
         cross(DOUBLE_BACKTICK, MARKER_ACC + DOUBLE_BACKTICK + MARKER_ACC),
         "", "", sigma_star
     )
 
-    # Compose: closing first, then opening, then remaining, then backticks
-    quotes_fst = (closing_quote_rule @ opening_quote_rule @ remaining_quote_rule @ backtick_rule).optimize()
+    # Compose: closing first, then opening, then remaining quotes, then remaining double apos, then backticks
+    quotes_fst = (closing_quote_rule @ opening_quote_rule @ remaining_quote_rule @ remaining_double_apos_rule @ backtick_rule).optimize()
 
     # === Punctuation ===
     DIGIT = union(*[cb(str(i)) for i in range(10)])
     NON_DIGIT = pynini.difference(sigma, DIGIT).optimize()
 
-    # , and : before non-digit
-    # NLTK regex: ([:,])([^\d]) - only separate when followed by non-digit
-    punct_1 = cdrewrite(
+    # , and : before non-digit or at end of string
+    # NLTK regex: ([:,])([^\d]) and ([:,])$
+    punct_comma_colon = cdrewrite(
         cross(cb(","), MARKER_ACC + cb(",") + MARKER_ACC) |
         cross(cb(":"), MARKER_ACC + cb(":") + MARKER_ACC),
-        "", NON_DIGIT, sigma_star
-    )
-
-    # , and : at end of string only (before EOS)
-    # NLTK regex: ([:,])$ - only at end of string
-    punct_2 = cdrewrite(
-        cross(cb(","), MARKER_ACC + cb(",") + MARKER_ACC) |
-        cross(cb(":"), MARKER_ACC + cb(":") + MARKER_ACC),
-        "", "[EOS]", sigma_star
+        "", union(NON_DIGIT, pynini.accep("[EOS]")), sigma_star
     )
 
     # Ellipsis
@@ -233,8 +222,8 @@ def build_ptb_fst_pynini():
         "", "", sigma_star
     )
 
-    # Special punct: ; @ % & $
-    special_punct = [cb(c) for c in ";@%&$"]
+    # Special punct: ; @ # % & $
+    special_punct = [cb(c) for c in ";@#%&$"]
     punct_4 = cdrewrite(
         union(*[cross(sym, MARKER_ACC + sym + MARKER_ACC) for sym in special_punct]),
         "", "", sigma_star
@@ -269,7 +258,7 @@ def build_ptb_fst_pynini():
         "", "", sigma_star
     )
 
-    punct_fst = (punct_1 @ punct_2 @ ellipsis_rule @ punct_4 @ punct_5 @ punct_6).optimize()
+    punct_fst = (punct_comma_colon @ ellipsis_rule @ punct_4 @ punct_5 @ punct_6).optimize()
 
     # === Brackets and parens ===
     parens_chars = [cb(c) for c in "[](){}><"]
@@ -319,36 +308,48 @@ def build_ptb_fst_pynini():
     clitics_fst = (endq_3 @ endq_4 @ apos_rule).optimize()
 
     # === Contractions ===
-    SEP_OR_BOS = union(MARKER_ACC, SPACE)
+    # NLTK uses (?i) case-insensitive matching for all contractions.
+    # We build case-preserving transducers that match any case and output
+    # the same case as input, using a single entry per contraction.
+    eps = pynini.accep("", token_type=symbols)
+    eps_to_marker = cross(eps, MARKER_ACC)
 
-    contractions_raw = [
-        ("cannot", "can", "not"),
-        ("gonna", "gon", "na"),
-        ("gotta", "got", "ta"),
-        ("lemme", "lem", "me"),
-        ("wanna", "wan", "na"),
-        ("gimme", "gim", "me"),
-        # Capitalized
-        ("Cannot", "Can", "not"),
-        ("Gonna", "Gon", "na"),
-        ("Gotta", "Got", "ta"),
-        ("Lemme", "Lem", "me"),
-        ("Wanna", "Wan", "na"),
-        ("Gimme", "Gim", "me"),
+    def _ci_char(ch):
+        """Case-preserving character transducer: matches upper or lower, outputs same."""
+        if ch.isalpha():
+            lo = pynini.accep(str(ord(ch.lower())), token_type=symbols)
+            hi = pynini.accep(str(ord(ch.upper())), token_type=symbols)
+            return union(cross(lo, lo), cross(hi, hi))
+        else:
+            a = pynini.accep(str(ord(ch)), token_type=symbols)
+            return cross(a, a)
+
+    def _ci_contraction(word, split_pos):
+        """Case-insensitive, case-preserving contraction transducer."""
+        result = eps_to_marker
+        for ch in word[:split_pos]:
+            result = result + _ci_char(ch)
+        result = result + eps_to_marker + eps_to_marker
+        for ch in word[split_pos:]:
+            result = result + _ci_char(ch)
+        return result + eps_to_marker
+
+    # (word, split_position) — split_pos divides word into left/right parts
+    contractions_bases = [
+        ("cannot", 3), ("gonna", 3), ("gotta", 3),
+        ("lemme", 3), ("wanna", 3), ("gimme", 3),
+        # NLTK CONTRACTIONS2
+        ("d'ye", 1), ("more'n", 4),
+        # NLTK CONTRACTIONS3
+        ("'tis", 2), ("'twas", 2),
     ]
 
-    contractions_fsts = []
-    for orig, part1, part2 in contractions_raw:
-        rule = cdrewrite(
-            cross(cs(orig), MARKER_ACC + cs(part1) + MARKER_ACC + MARKER_ACC + cs(part2) + MARKER_ACC),
-            SEP_OR_BOS, SEP_CHARS, sigma_star
-        )
-        contractions_fsts.append(rule)
-
-    contractions_fst = contractions_fsts[0]
-    for c in contractions_fsts[1:]:
-        contractions_fst = contractions_fst @ c
-    contractions_fst = contractions_fst.optimize()
+    all_contraction_tau = union(*[_ci_contraction(w, s) for w, s in contractions_bases])
+    # Single cdrewrite with empty left context handles all positions including string start.
+    # Right context SEP_CHARS ensures word boundary (prevents matching inside "wannabe" etc.)
+    contractions_fst = cdrewrite(
+        all_contraction_tau, "", SEP_CHARS, sigma_star
+    ).optimize()
 
     # === Space to marker ===
     space_to_marker = cdrewrite(
@@ -358,8 +359,7 @@ def build_ptb_fst_pynini():
 
     # === Compose all rules ===
     print("Composing PTB rules...")
-    core_fst = identity_fst
-    core_fst = (core_fst @ quotes_fst).optimize()  # Handle all quote types
+    core_fst = quotes_fst
     core_fst = (core_fst @ punct_fst).optimize()
     core_fst = (core_fst @ parens_brackets_fst).optimize()
     core_fst = (core_fst @ double_dashes_fst).optimize()
