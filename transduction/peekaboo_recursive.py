@@ -5,6 +5,7 @@ from transduction.fst import (
     EPSILON, check_all_input_universal, compute_ip_universal_states,
     UniversalityFilter,
 )
+from transduction.precover_nfa import PeekabooLookaheadNFA as PeekabooPrecover
 
 from collections import deque
 
@@ -404,96 +405,6 @@ class PeekabooState:
     def __rshift__(self, y):
         assert y in self.target_alphabet, repr(y)
         return PeekabooState(self.fst, self.target + y, parent=self)
-
-
-# TODO: Should we unify this class with `peekaboo.PeekabooPrecover`?
-#
-#    No, the non-recursive algorithm doesnt need to worry about the truncation
-#    bits, so we probably do not need to unify them.  That said, we might want
-#    to have a collection of all the different Precover encodings so that we can
-#    test them / compare them independently of the algorithms that use them.
-#
-# NOTE: We use this construction to mark truncated state because they need to be
-# removed/recomputed in the next iteration.  And, we need to truncate the output
-# buffer so that the state space is finite.
-#
-class PeekabooPrecover(Lazy):
-    """Precover NFA with truncated output buffers for bounded-lookahead decomposition."""
-
-    def __init__(self, fst, target, K=1):
-        self.fst = fst
-        self.target = target
-        self.N = len(target)
-        self.K = K
-        assert K >= 1
-        fst.ensure_arc_indexes()
-        # Arc labels are FST input symbols; epsilon arcs exist only if the
-        # FST has input-epsilon arcs.  When absent, skip EpsilonRemove in
-        # det() — the wrapper is a no-op but costs ~12-15% of runtime on
-        # trivial {state} closures.
-        self._has_eps = EPSILON in fst.A
-
-    def epsremove(self):
-        if self._has_eps:
-            return super().epsremove()
-        return self
-
-    def arcs(self, state):
-        (i, ys, truncated) = state
-        n = len(ys)
-        m = min(self.N, n)
-        if self.target[:m] != ys[:m]:      # target and ys are not prefixes of one another.
-            return
-        if m >= self.N:                    # i.e, target <= ys
-            if truncated:
-                for x, j in self.fst.index_i_xj.get(i, ()):
-                    yield (x, (j, ys, True))
-            else:
-                for x, y, j in self.fst.arcs(i):
-                    if y == EPSILON:
-                        yield (x, (j, ys, False))
-                    else:
-                        was = (ys + y)
-                        now = was[:self.N+self.K]
-                        yield (x, (j, now, (was != now)))
-        else:                              # i.e, ys < target)
-            assert not truncated
-            for x, j in self.fst.index_iy_xj.get((i, EPSILON), ()):
-                yield (x, (j, ys, False))
-            for x, j in self.fst.index_iy_xj.get((i, self.target[n]), ()):
-                yield (x, (j, self.target[:n+1], False))
-
-    def arcs_x(self, state, x):
-        (i, ys, truncated) = state
-        n = len(ys)
-        m = min(self.N, n)
-        if self.target[:m] != ys[:m]:
-            return
-        if m >= self.N:
-            if truncated:
-                for j in self.fst.index_ix_j.get((i, x), ()):
-                    yield (j, ys, True)
-            else:
-                for y, j in self.fst.arcs(i, x):
-                    if y == EPSILON:
-                        yield (j, ys, False)
-                    else:
-                        was = (ys + y)
-                        now = was[:self.N+self.K]
-                        yield (j, now, (was != now))
-        else:
-            for j in self.fst.index_ixy_j.get((i, x, EPSILON), ()):
-                yield (j, ys, False)
-            for j in self.fst.index_ixy_j.get((i, x, self.target[n]), ()):
-                yield (j, self.target[:n+1], False)
-
-    def start(self):
-        for i in self.fst.I:
-            yield (i, self.target[:0], False)
-
-    def is_final(self, state):
-        (i, ys, _) = state
-        return self.fst.is_final(i) and ys.startswith(self.target) and len(ys) > self.N
 
 
 class TruncatedDFA(Lazy):

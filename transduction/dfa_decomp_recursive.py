@@ -1,52 +1,6 @@
 from transduction import FSA, EPSILON
-from transduction.lazy import Lazy
+from transduction.precover_nfa import TargetSideBuffer, Relevance
 from collections import deque
-
-
-class TargetSideBuffer(Lazy):
-
-    def __init__(self, f):
-        self.f = f
-
-    def arcs(self, state):
-        (i, ys) = state
-        for x,y,j in self.f.arcs(i):
-            yield x, (j, ys + y)
-
-    def arcs_x(self, state, x):
-        (i, ys) = state
-        for y, j in self.f.arcs(i, x):
-            yield (j, ys + y)
-
-    def start(self):
-        for i in self.f.I:
-            yield (i, '')
-
-    def is_final(self, state):
-        raise NotImplementedError()
-
-
-class Relevance(Lazy):
-
-    def __init__(self, base, target):
-        self.base = base
-        self.target = target
-
-    def arcs(self, state):
-        for x, (i, ys) in self.base.arcs(state):
-            if self.target.startswith(ys) or ys.startswith(self.target):
-                yield x, (i, ys)
-
-    def arcs_x(self, state, x):
-        for (i, ys) in self.base.arcs_x(state, x):
-            if self.target.startswith(ys) or ys.startswith(self.target):
-                yield (i, ys)
-
-    def start(self):
-        yield from self.base.start()
-
-    def is_final(self, state):
-        raise NotImplementedError()
 
 
 # XXX: Warning: this algorithm doesn't work in all cases.  It currently fails to

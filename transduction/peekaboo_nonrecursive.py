@@ -2,6 +2,7 @@ from transduction.base import PrecoverDecomp
 from transduction.lazy import Lazy
 from transduction.fsa import FSA
 from transduction.fst import EPSILON
+from transduction.precover_nfa import PeekabooFixedNFA as PeekabooPrecover
 
 from collections import deque
 
@@ -121,89 +122,6 @@ class Peekaboo:
             foo[y] = PrecoverDecomp(q.trim(), r.trim())
 
         return foo
-
-
-# TODO: in order to predict EOS, we need to extract the preimage from Q and R
-class PeekabooPrecover(Lazy):
-    """
-    Implements the union of the precovers of single-symbol extension of `target`:
-
-    PeekabooPrecover(target) = f^{-1}(y Y Y^*)
-
-    Operationally, it is an automaton that tracks the states of an FST `fst` along
-    with the target string it generates.  It prunes the state space to just the
-    states that are relevant to `target` followed by at least additional target
-    symbol.
-
-    """
-
-    def __init__(self, fst, target):
-        self.fst = fst
-        self.target = target
-        self.N = len(target)
-        fst.ensure_arc_indexes()
-        self._has_eps = EPSILON in fst.A
-
-    def epsremove(self):
-        if self._has_eps:
-            return super().epsremove()
-        return self
-
-    def arcs(self, state):
-        (i, ys) = state
-        n = len(ys)
-        m = min(n, self.N)
-        if self.target[:m] != ys[:m]: return
-
-        # case: grow the buffer until we have covered all of the target string
-        if n < self.N:
-            for x, j in self.fst.index_iy_xj.get((i, EPSILON), ()):
-                yield (x, (j, ys))
-            for x, j in self.fst.index_iy_xj.get((i, self.target[n]), ()):
-                yield (x, (j, self.target[:n+1]))
-
-        # extend the buffer beyond the target string by one symbol
-        elif n == self.N:
-            # Need y for ys + y, keep fst.arcs(i)
-            for x, y, j in self.fst.arcs(i):
-                if y == EPSILON:
-                    yield (x, (j, ys))
-                else:
-                    yield (x, (j, ys + y))
-
-        # truncate the buffer after the (N+1)th symbol
-        elif n == self.N + 1:
-            for x, j in self.fst.index_i_xj.get(i, ()):
-                yield (x, (j, ys))
-
-    def arcs_x(self, state, x):
-        (i, ys) = state
-        n = len(ys)
-        m = min(n, self.N)
-        if self.target[:m] != ys[:m]: return
-        if n < self.N:
-            for j in self.fst.index_ixy_j.get((i, x, EPSILON), ()):
-                yield (j, ys)
-            for j in self.fst.index_ixy_j.get((i, x, self.target[n]), ()):
-                yield (j, self.target[:n+1])
-        elif n == self.N:
-            # Need y for ys + y, keep fst.arcs(i, x)
-            for y, j in self.fst.arcs(i, x):
-                if y == EPSILON:
-                    yield (j, ys)
-                else:
-                    yield (j, ys + y)
-        elif n == self.N + 1:
-            for j in self.fst.index_ix_j.get((i, x), ()):
-                yield (j, ys)
-
-    def start(self):
-        for i in self.fst.I:
-            yield (i, '')
-
-    def is_final(self, state):
-        (i, ys) = state
-        return self.fst.is_final(i) and ys.startswith(self.target) and len(ys) == self.N+1
 
 
 class FilteredDFA(Lazy):

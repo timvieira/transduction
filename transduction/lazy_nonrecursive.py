@@ -1,5 +1,5 @@
 from transduction.base import AbstractAlgorithm
-from transduction.eager_nonrecursive import LazyPrecoverNFA
+from transduction.precover_nfa import PrecoverNFA as LazyPrecoverNFA
 
 from arsenal.cache import memoize
 

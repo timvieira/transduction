@@ -1,5 +1,5 @@
 from transduction import FSA, EPSILON
-from transduction.eager_nonrecursive import LazyPrecoverNFA
+from transduction.precover_nfa import PrecoverNFA as LazyPrecoverNFA
 from transduction.fst import UniversalityFilter
 from collections import deque
 
