@@ -1,18 +1,33 @@
 """
-Byte-level n-gram language model compatible with the StateLM interface.
+N-gram language models compatible with the StateLM interface.
+
+Provides two variants:
+- ByteNgramLM: byte-level (alphabet = 0..255), uses numpy arrays
+- CharNgramLM: character/symbol-level (arbitrary alphabet), uses dicts
 
 Usage:
-    lm = ByteNgramLM.train(b"Hello world. This is training data.", n=3)
+    # Byte-level
+    lm = ByteNgramLM.train(b"Hello world.", n=3)
     state = lm.initial()
     state = state << b'H'
-    state = state << b'e'
-    print(state.logp_next[b'l'])   # log P(l | He)
-    print(state.logp)              # cumulative log prob
+    print(state.logp_next[b'e'])   # log P(e | H)
+
+    # Character-level
+    lm = CharNgramLM.train("abcabc", n=2)
+    state = lm.initial()
+    state = state << 'a'
+    print(state.logp_next['b'])    # log P(b | a)
 """
 
 import numpy as np
 from collections import Counter
 
+from transduction.lm.mixin import LMStateMixin
+
+
+# ===========================================================================
+# Byte-level n-gram LM
+# ===========================================================================
 
 class NgramLogpNext:
     """Lazy log-probability lookup for next byte, matching LazyProb interface."""
@@ -54,7 +69,7 @@ class NgramLogpNext:
         return {bytes([i]): float(self._log_probs[i]) for i in reversed(idx)}
 
 
-class NgramState:
+class NgramState(LMStateMixin):
     """Immutable n-gram LM state, compatible with StateLM interface.
 
     Supports:
@@ -92,12 +107,6 @@ class NgramState:
     def p_next(self):
         lp = self.logp_next
         return NgramLogpNext(np.exp(lp._log_probs))
-
-    def advance(self, xs):
-        s = self
-        for x in xs:
-            s = s << x
-        return s
 
     def path(self):
         """Recover the full sequence of tokens from the history."""
@@ -196,3 +205,154 @@ class ByteNgramLM:
 
     def __repr__(self):
         return f'ByteNgramLM(n={self.n}, contexts={len(self._tables)})'
+
+
+# ===========================================================================
+# Character-level n-gram LM
+# ===========================================================================
+
+class CharNgramLogpNext:
+    """Dict-like log-probability lookup for character n-gram."""
+
+    def __init__(self, log_probs):
+        # log_probs: dict mapping symbol → log prob
+        self._log_probs = log_probs
+
+    def __getitem__(self, token):
+        return self._log_probs.get(token, -np.inf)
+
+    def __contains__(self, token):
+        return token in self._log_probs
+
+    def keys(self):
+        return list(self._log_probs.keys())
+
+    def items(self):
+        return list(self._log_probs.items())
+
+    def materialize(self, top=None):
+        items = sorted(self._log_probs.items(), key=lambda kv: kv[1], reverse=True)
+        if top is not None:
+            items = items[:int(top)]
+        return dict(items)
+
+
+class CharNgramState(LMStateMixin):
+    """Immutable char-level n-gram LM state, compatible with StateLM interface.
+
+    Supports:
+        state << token     -> new state
+        state.logp_next[x] -> log P(x | context)
+        state.logp         -> cumulative log probability
+        state.eos          -> EOS token
+    """
+
+    def __init__(self, lm, context, logp, history=()):
+        self.lm = lm
+        self._context = context      # last (n-1) symbols as tuple
+        self.logp = logp
+        self.history = history
+
+    @property
+    def eos(self):
+        return self.lm.eos
+
+    def __lshift__(self, token):
+        lp = self.logp_next[token]
+        n = self.lm.n
+        new_ctx = (self._context + (token,))[-(n - 1):] if n > 1 else ()
+        return CharNgramState(self.lm, new_ctx, self.logp + lp,
+                              history=(self.history, token))
+
+    @property
+    def logp_next(self):
+        return self.lm._logp_next(self._context)
+
+    def path(self):
+        """Recover the full sequence of tokens from the history."""
+        tokens = []
+        h = self.history
+        while h:
+            h, token = h
+            tokens.append(token)
+        tokens.reverse()
+        return tokens
+
+    def __repr__(self):
+        return f'CharNgramState({self._context!r})'
+
+
+class CharNgramLM:
+    """Character-level n-gram language model with Laplace smoothing.
+
+    Works with arbitrary symbol alphabets (strings, characters, etc.).
+    Compatible with the StateLM interface used by transduction.enumeration
+    and transduction.lm.transduced.
+
+    Usage:
+        lm = CharNgramLM.train("abcabc", n=2)
+        state = lm.initial()
+        state = state << 'a'
+        print(state.logp_next['b'])
+    """
+
+    def __init__(self, counts, n, alpha, alphabet):
+        """
+        Args:
+            counts: dict mapping context_tuple -> Counter({symbol: count})
+            n: n-gram order (e.g., 2 for bigram)
+            alpha: Laplace smoothing parameter
+            alphabet: set of symbols (including EOS)
+        """
+        self.n = n
+        self.alpha = alpha
+        self.eos = '<EOS>'
+        self.alphabet = sorted(alphabet)
+        V = len(self.alphabet)
+
+        self._tables = {}
+        for ctx, counter in counts.items():
+            total = sum(counter.values()) + V * alpha
+            self._tables[ctx] = {
+                s: np.log((counter.get(s, 0) + alpha) / total)
+                for s in self.alphabet
+            }
+        self._uniform = {s: np.log(1.0 / V) for s in self.alphabet}
+
+    def _logp_next(self, context):
+        """Return CharNgramLogpNext for a given context tuple."""
+        # Try full context, then back off to shorter contexts
+        for start in range(len(context) + 1):
+            ctx = context[start:]
+            if ctx in self._tables:
+                return CharNgramLogpNext(self._tables[ctx])
+        return CharNgramLogpNext(self._uniform)
+
+    def initial(self):
+        return CharNgramState(self, (), 0.0)
+
+    @classmethod
+    def train(cls, data, n=2, alpha=0.5):
+        """Train from a string or iterable of symbols.
+
+        Args:
+            data: string or iterable of symbols
+            n: n-gram order (1=unigram, 2=bigram, ...)
+            alpha: Laplace smoothing parameter
+
+        Returns:
+            CharNgramLM instance
+        """
+        alphabet = set(data)
+        counts = {}
+        for order in range(1, n + 1):
+            for i in range(len(data) - order + 1):
+                ctx = tuple(data[i:i + order - 1])
+                sym = data[i + order - 1]
+                if ctx not in counts:
+                    counts[ctx] = Counter()
+                counts[ctx][sym] += 1
+        return cls(counts, n, alpha, alphabet | {'<EOS>'})
+
+    def __repr__(self):
+        return f'CharNgramLM(n={self.n}, alphabet_size={len(self.alphabet)})'

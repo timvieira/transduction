@@ -4,7 +4,7 @@ Tests for the lazy automaton framework.
 import pytest
 from transduction.fsa import FSA, EPSILON
 from transduction.lazy import (
-    Lazy, EpsilonRemove, LazyDeterminize, StartAt, Renumber, LazyWrapper,
+    EpsilonRemove, LazyWrapper,
 )
 
 

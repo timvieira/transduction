@@ -1,5 +1,5 @@
 import pytest
-from transduction import examples, FSA, EPSILON
+from transduction import examples, EPSILON
 from transduction.fst import FST
 
 try:

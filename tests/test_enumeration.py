@@ -4,7 +4,8 @@ from collections import defaultdict
 
 from genparse import EarleyLM, EOS
 
-from transduction import examples, Precover
+from transduction import examples
+from transduction.lm.mixin import LMState
 from transduction.enumeration import (
     prioritized_enumeration,
     importance_sampling,
@@ -20,7 +21,7 @@ GRAMMAR = """
 """
 
 
-class StatefulLM:
+class StatefulLM(LMState):
     """Wraps a stateless EarleyLM into the stateful interface expected by
     the enumeration classes (`.eos`, `.logp_next`, `<< token`)."""
 
