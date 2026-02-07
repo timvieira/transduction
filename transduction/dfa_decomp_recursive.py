@@ -1,4 +1,4 @@
-from transduction import FSA, EPSILON, Precover, format_table
+from transduction import FSA, EPSILON
 from transduction.lazy import Lazy
 from collections import deque
 

@@ -181,7 +181,6 @@ class TokenDecompose:
         self.fst = fst
         self.target = target
         target_len = len(target)
-        source_alphabet = fst.A - {EPSILON}
 
         # Extract tokens and build trie
         token_list = extract_token_bytes(fst)

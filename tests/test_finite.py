@@ -241,7 +241,6 @@ def test_samuel_example():
 
 def test_number_comma_separator():
     import string
-    digits = {str(i) for i in range(10)}
     fst = examples.number_comma_separator(set(string.printable) - set('\t\n\r\x0b\x0c'))
 
     tmp = LazyNonrecursive(fst)

@@ -306,6 +306,11 @@ class PeekabooState:
 
         N = len(target)
         _fst_is_final = self.fst.is_final
+
+        # DFA states where the source has fully produced `target` and the
+        # FST is in a final state — needed for P(EOS | target_so_far).
+        preimage_stops = set()
+
         while worklist:
             state = worklist.popleft()
 
@@ -314,13 +319,19 @@ class PeekabooState:
             relevant_symbols = set()
             final_symbols = set()
             state_has_truncated = False
+            state_is_preimage = False
             for i, ys, truncated in state:
+                if len(ys) == N and _fst_is_final(i):
+                    state_is_preimage = True
                 if len(ys) > N:
                     y = ys[N]
                     relevant_symbols.add(y)
                     if ys.startswith(target) and _fst_is_final(i):
                         final_symbols.add(y)
                 state_has_truncated = state_has_truncated or truncated
+
+            if state_is_preimage:
+                preimage_stops.add(state)
 
             # A state is "continuous" (universal) for symbol y if it accepts
             # all source strings — meaning Q covers everything and no further
@@ -388,14 +399,13 @@ class PeekabooState:
         self.resume_frontiers = resume_frontiers
         self.dfa = dfa
         self.incoming = incoming
+        self.preimage_stops = preimage_stops
 
     def __rshift__(self, y):
         assert y in self.target_alphabet, repr(y)
         return PeekabooState(self.fst, self.target + y, parent=self)
 
 
-# TODO: in order to predict EOS, we need to extract the preimage from Q and R
-#
 # TODO: Should we unify this class with `peekaboo.PeekabooPrecover`?
 #
 #    No, the non-recursive algorithm doesnt need to worry about the truncation

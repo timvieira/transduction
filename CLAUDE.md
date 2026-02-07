@@ -75,4 +75,4 @@ python -m pytest tests/test_enumeration.py -v
 
 ## Reports
 
-Generated reports go in `reports/` at the project root.
+Generated reports go in `output/` at the project root (gitignored).

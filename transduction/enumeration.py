@@ -66,7 +66,7 @@ class prioritized_enumeration:
 
         self.run(max_steps)
 
-    def run(self, max_steps):
+    def run(self, max_steps, verbosity=0):
         lm = self.lm
         EOS = lm.eos
 
@@ -77,7 +77,7 @@ class prioritized_enumeration:
                 print(colors.light.red % 'stopped early')
                 break
             (item, _) = self.queue.pop()
-            print('pop:', item)
+            if verbosity > 0: print('pop:', item)
             lm_logp_next = item.source.logp_next
             if item.state in self.Q:
                 self.quotient_terms.append(item)

@@ -3,7 +3,6 @@ import torch
 import transformers
 from transformers.cache_utils import DynamicCache
 
-from arsenal.maths import sample_dict
 from functools import cached_property
 
 
@@ -177,7 +176,10 @@ def load_model_by_name(model_name, device=None, **kwargs):
     )
 
 
-class StateLM:
+from transduction.lm.base import LMState
+
+
+class StateLM(LMState):
     """Immutable LM state for incremental decoding with KV cache sharing.
 
     ``state << token`` returns a new state; the parent's cache is reused.
@@ -280,15 +282,4 @@ class StateLM:
             parent=None,
         )
 
-    def sample_next_token(self):
-        return sample_dict(self.p_next)
 
-    def sample(self):
-        return self << self.sample_next_token()
-
-    def advance(self, xs):
-        assert isinstance(xs, tuple) and all(isinstance(x, (bytes, str)) for x in xs), xs
-        s = self
-        for x in xs:
-            s <<= x
-        return s
