@@ -454,8 +454,8 @@ def test_ptb_pynini():
 
         byte_strs = string_to_byte_strs(text)
         try:
-            output_fsa = fst(byte_strs, None)
-            output = next(output_fsa.language(tuple=True))
+            from transduction.benchmarking.fst_utils import fst_output_language
+            output = next(fst_output_language(fst, byte_strs))
             fst_result = decode_ptb_output(output)
         except StopIteration:
             fst_result = "<REJECTED>"

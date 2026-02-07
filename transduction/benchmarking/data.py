@@ -118,8 +118,8 @@ def load_wikitext_paragraphs_bytes(
             if text_length:
                 detokenized = detokenized[:text_length]
             detokenized = tuple(tokenizer.encode(detokenized))
-            fsa = T(detokenized, None)
-            transduced = next(fsa.language(tuple=True))
+            from transduction.benchmarking.fst_utils import fst_output_language
+            transduced = next(fst_output_language(T, detokenized))
 
             if join_paragraphs:
                 paragraphs.extend(transduced)

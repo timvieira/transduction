@@ -711,9 +711,9 @@ if __name__ == '__main__':
     print(f"Input bytes: {test_bytes}")
 
     # Run through FST
-    output_fsa = fst(test_bytes, None)
+    from transduction.benchmarking.fst_utils import fst_output_language
     try:
-        output = next(output_fsa.language(tuple=True))
+        output = next(fst_output_language(fst, test_bytes))
         print(f"Output: {output}")
         print(f"Decoded: {decode_ptb_output(output)}")
     except StopIteration:

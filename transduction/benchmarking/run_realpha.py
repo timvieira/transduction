@@ -1,7 +1,7 @@
 from transduction.benchmarking.fsts.realpha import build_realpha
 from transduction.benchmarking.data import load_wikitext_paragraphs_bytes
-from transduction.benchmarking.lm import HFModel
-from transduction.benchmarking.algorithm import prioritized_enumeration
+from transduction.benchmarking.legacy.hf_model import HFModel
+from transduction.benchmarking.legacy.algorithm import prioritized_enumeration
 
 import tqdm
 

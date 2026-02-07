@@ -4,8 +4,9 @@ Test PTB FST against NLTK TreebankWordTokenizer.
 This script compares the FST tokenization against NLTK on wikitext paragraphs and checks for differences.
 
 Usage:
-    python -m transduction.benchmarking.fsts.test_ptb_nltk
+    python tests/test_ptb_nltk_compare.py
 """
+
 from collections import defaultdict
 from nltk.tokenize import TreebankWordTokenizer
 
@@ -15,6 +16,7 @@ from transduction.benchmarking.fsts.ptb_pynini import (
     SEP,
 )
 from transduction.benchmarking.data import load_wikitext, wikitext_detokenize
+from transduction.benchmarking.fst_utils import fst_output_language
 
 
 def fst_tokenize(fst, text):
@@ -22,7 +24,7 @@ def fst_tokenize(fst, text):
     # add_eos=True appends end-of-string marker for NLTK-compatible period handling
     byte_strs = string_to_byte_strs(text, add_eos=True)
     try:
-        output = next(fst(byte_strs, None).language(tuple=True))
+        output = next(fst_output_language(fst, byte_strs))
     except StopIteration:
         return None  # FST rejected input
 
@@ -31,12 +33,14 @@ def fst_tokenize(fst, text):
     for sym in output:
         if sym == SEP:
             if current:
-                tokens.append(bytes(int(b) for b in current).decode('utf-8', errors='replace'))
+                tokens.append(
+                    bytes(int(b) for b in current).decode("utf-8", errors="replace")
+                )
                 current = []
-        elif int(sym) < 256 and sym != '3':  # Skip EOS marker (byte 3)
+        elif int(sym) < 256 and sym != "3":  # Skip EOS marker (byte 3)
             current.append(sym)
     if current:
-        tokens.append(bytes(int(b) for b in current).decode('utf-8', errors='replace'))
+        tokens.append(bytes(int(b) for b in current).decode("utf-8", errors="replace"))
     return tokens
 
 
@@ -50,39 +54,39 @@ def categorize_difference(text, fst_tokens, nltk_tokens):
     # Find first differing token
     diff_idx = None
     for i in range(max(len(fst_tokens), len(nltk_tokens))):
-        f = fst_tokens[i] if i < len(fst_tokens) else '<END>'
-        n = nltk_tokens[i] if i < len(nltk_tokens) else '<END>'
+        f = fst_tokens[i] if i < len(fst_tokens) else "<END>"
+        n = nltk_tokens[i] if i < len(nltk_tokens) else "<END>"
         if f != n:
             diff_idx = i
             break
 
     if diff_idx is None:
-        return 'unknown', None, None
+        return "unknown", None, None
 
-    fst_tok = fst_tokens[diff_idx] if diff_idx < len(fst_tokens) else '<END>'
-    nltk_tok = nltk_tokens[diff_idx] if diff_idx < len(nltk_tokens) else '<END>'
+    fst_tok = fst_tokens[diff_idx] if diff_idx < len(fst_tokens) else "<END>"
+    nltk_tok = nltk_tokens[diff_idx] if diff_idx < len(nltk_tokens) else "<END>"
 
     # Categorize based on the difference
-    if fst_tok == '.' or nltk_tok.endswith('.'):
+    if fst_tok == "." or nltk_tok.endswith("."):
         # Period handling difference
-        if nltk_tok.endswith('.') and fst_tok == nltk_tok[:-1]:
-            return 'period_not_separated', fst_tok, nltk_tok
-        elif fst_tok == '.':
-            return 'period_separated', fst_tok, nltk_tok
+        if nltk_tok.endswith(".") and fst_tok == nltk_tok[:-1]:
+            return "period_not_separated", fst_tok, nltk_tok
+        elif fst_tok == ".":
+            return "period_separated", fst_tok, nltk_tok
 
-    if fst_tok in ['``', "''"] or nltk_tok in ['``', "''"]:
-        return 'quote', fst_tok, nltk_tok
+    if fst_tok in ["``", "''"] or nltk_tok in ["``", "''"]:
+        return "quote", fst_tok, nltk_tok
 
     if "'" in fst_tok or "'" in nltk_tok:
-        return 'apostrophe', fst_tok, nltk_tok
+        return "apostrophe", fst_tok, nltk_tok
 
-    if fst_tok in list(',:;!?') or nltk_tok in list(',:;!?'):
-        return 'punctuation', fst_tok, nltk_tok
+    if fst_tok in list(",:;!?") or nltk_tok in list(",:;!?"):
+        return "punctuation", fst_tok, nltk_tok
 
-    if fst_tok in list('[](){}') or nltk_tok in list('[](){}'):
-        return 'bracket', fst_tok, nltk_tok
+    if fst_tok in list("[](){}") or nltk_tok in list("[](){}"):
+        return "bracket", fst_tok, nltk_tok
 
-    return 'other', fst_tok, nltk_tok
+    return "other", fst_tok, nltk_tok
 
 
 def run_comparison(n_paragraphs=100, max_chars=500, verbose=True):
@@ -116,7 +120,7 @@ def run_comparison(n_paragraphs=100, max_chars=500, verbose=True):
         fst_tokens = fst_tokenize(fst, text)
 
         if fst_tokens is None:
-            errors.append({'idx': i, 'text': text, 'error': 'FST rejected input'})
+            errors.append({"idx": i, "text": text, "error": "FST rejected input"})
             continue
 
         nltk_tokens = nltk_tokenize(nltk_tok, text)
@@ -124,15 +128,17 @@ def run_comparison(n_paragraphs=100, max_chars=500, verbose=True):
         if fst_tokens == nltk_tokens:
             matches += 1
         else:
-            cat, fst_tok, nltk_tok_diff = categorize_difference(text, fst_tokens, nltk_tokens)
+            cat, fst_tok, nltk_tok_diff = categorize_difference(
+                text, fst_tokens, nltk_tokens
+            )
             mismatch = {
-                'idx': i,
-                'text': text,
-                'fst': fst_tokens,
-                'nltk': nltk_tokens,
-                'category': cat,
-                'fst_tok': fst_tok,
-                'nltk_tok': nltk_tok_diff,
+                "idx": i,
+                "text": text,
+                "fst": fst_tokens,
+                "nltk": nltk_tokens,
+                "category": cat,
+                "fst_tok": fst_tok,
+                "nltk_tok": nltk_tok_diff,
             }
             mismatches.append(mismatch)
             categories[cat].append(mismatch)
@@ -163,16 +169,20 @@ def run_comparison(n_paragraphs=100, max_chars=500, verbose=True):
 
             for m in samples:
                 print(f"\nText: {m['text'][:80]}...")
-                print(f"FST:  {' '.join(m['fst'][:15])}{'...' if len(m['fst']) > 15 else ''}")
-                print(f"NLTK: {' '.join(m['nltk'][:15])}{'...' if len(m['nltk']) > 15 else ''}")
+                print(
+                    f"FST:  {' '.join(m['fst'][:15])}{'...' if len(m['fst']) > 15 else ''}"
+                )
+                print(
+                    f"NLTK: {' '.join(m['nltk'][:15])}{'...' if len(m['nltk']) > 15 else ''}"
+                )
                 print(f"Diff: FST='{m['fst_tok']}' vs NLTK='{m['nltk_tok']}'")
 
     return {
-        'matches': matches,
-        'total': total,
-        'mismatches': mismatches,
-        'categories': dict(categories),
-        'errors': errors,
+        "matches": matches,
+        "total": total,
+        "mismatches": mismatches,
+        "categories": dict(categories),
+        "errors": errors,
     }
 
 
@@ -185,14 +195,18 @@ def main():
     print("\n" + "=" * 70)
     print("SUMMARY")
     print("=" * 70)
-    print(f"Match rate: {results['matches']}/{results['total']} ({100*results['matches']/results['total']:.1f}%)")
+    print(
+        f"Match rate: {results['matches']}/{results['total']} ({100*results['matches']/results['total']:.1f}%)"
+    )
 
-    if results['matches'] == results['total']:
+    if results["matches"] == results["total"]:
         print("\n*** ALL TESTS PASS! FST matches NLTK. ***")
     else:
         print(f"\nTo fix: Address {len(results['mismatches'])} mismatches")
         print("Categories to fix:")
-        for cat, items in sorted(results['categories'].items(), key=lambda x: -len(x[1])):
+        for cat, items in sorted(
+            results["categories"].items(), key=lambda x: -len(x[1])
+        ):
             print(f"  - {cat}: {len(items)} cases")
 
 
