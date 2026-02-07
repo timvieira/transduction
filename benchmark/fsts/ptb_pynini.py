@@ -210,9 +210,15 @@ def build_ptb_fst_pynini():
         "", sigma_star
     )
 
-    # Rule 5: Remaining " -> `` (for quotes at beginning of string)
-    remaining_quote_rule = cdrewrite(
+    # Rule 5a: " at beginning of string -> `` (NLTK STARTING_QUOTES rule 1: ^")
+    bos_quote_rule = cdrewrite(
         cross(QUOTE, MARKER_ACC + DOUBLE_BACKTICK + MARKER_ACC),
+        "[BOS]", "", sigma_star
+    )
+
+    # Rule 5b: Remaining " -> '' (NLTK ENDING_QUOTES rule 2: all other " become '')
+    remaining_quote_rule = cdrewrite(
+        cross(QUOTE, MARKER_ACC + APOS + APOS + MARKER_ACC),
         "", "", sigma_star
     )
 
@@ -225,7 +231,8 @@ def build_ptb_fst_pynini():
     # Compose: '' rules first, then " rules, then backtick wrapping
     quotes_fst = (opening_double_apos_rule @ closing_double_apos_rule
                   @ closing_quote_rule @ opening_quote_rule
-                  @ remaining_quote_rule @ backtick_rule).optimize()
+                  @ bos_quote_rule @ remaining_quote_rule
+                  @ backtick_rule).optimize()
 
     # === Punctuation ===
     DIGIT = union(*[cb(str(i)) for i in range(10)])
