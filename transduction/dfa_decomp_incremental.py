@@ -1,4 +1,5 @@
 from transduction import FSA, EPSILON
+from transduction.base import IncrementalDecomposition
 from transduction.precover_nfa import TargetSideBuffer, Relevance
 from collections import deque
 
@@ -6,7 +7,7 @@ from collections import deque
 # XXX: Warning: this algorithm doesn't work in all cases.  It currently fails to
 # terminate on the `triplets_of_doom` test case.  The issue is that it does not
 # truncate the target buffer.
-class IncrementalDFADecomp:
+class IncrementalDFADecomp(IncrementalDecomposition):
 
     def __init__(self, fst, target, parent=None):
 

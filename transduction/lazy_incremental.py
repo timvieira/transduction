@@ -1,11 +1,11 @@
-from transduction.base import PrecoverDecomp
+from transduction.base import PrecoverDecomp, DecompositionFunction
 from transduction.fst import EPSILON
 from arsenal.cache import memoize
 from arsenal import colors
 from collections import deque
 
 
-class LazyIncremental:
+class LazyIncremental(DecompositionFunction):
     """
     Lazy, recursive DFA-based algorithm.
     """

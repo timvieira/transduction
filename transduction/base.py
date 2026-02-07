@@ -35,7 +35,7 @@ class DecompositionResult(ABC):
         result.quotient    # FSA
         result.remainder   # FSA
 
-    Implementations: NonrecursiveDFADecomp, TokenDecompose, RustDecomp, RustPeekaboo
+    Implementations: NonrecursiveDFADecomp, TokenDecompose, RustDecomp
     """
     quotient: 'FSA'
     remainder: 'FSA'
@@ -84,7 +84,7 @@ class PrecoverDecomp:
         return tuple(other) == tuple(self)
 
 
-class AbstractAlgorithm:
+class AbstractAlgorithm(DecompositionFunction):
 
     def __init__(self, fst, empty_source = '', extend = lambda x,y: x + y, max_steps=float('inf')):
         self.fst = fst

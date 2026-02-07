@@ -17,6 +17,7 @@ the O(|fst_states| * N) states produced by the generic approach.
 """
 
 from collections import defaultdict, deque
+from transduction.base import DecompositionResult
 from transduction.fsa import FSA, EPSILON
 from transduction.fst import check_all_input_universal
 
@@ -166,7 +167,7 @@ def build_trie(fst):
     return trie
 
 
-class TokenDecompose:
+class TokenDecompose(DecompositionResult):
     """
     Token-level decomposition for BPE-like FSTs where all_input_universal is True.
 

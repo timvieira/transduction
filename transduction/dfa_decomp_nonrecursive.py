@@ -1,10 +1,11 @@
 from transduction import FSA, EPSILON
+from transduction.base import DecompositionResult
 from transduction.precover_nfa import PrecoverNFA as LazyPrecoverNFA
 from transduction.fst import UniversalityFilter
 from collections import deque
 
 
-class NonrecursiveDFADecomp:
+class NonrecursiveDFADecomp(DecompositionResult):
 
     def __init__(self, fst, target):
         self.source_alphabet = fst.A - {EPSILON}

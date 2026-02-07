@@ -1,4 +1,4 @@
-from transduction.base import PrecoverDecomp
+from transduction.base import PrecoverDecomp, IncrementalDecomposition
 from transduction.lazy import Lazy
 from transduction.fsa import FSA, frozenset
 from transduction.fst import (
@@ -240,7 +240,7 @@ class Peekaboo:
                 ], headings=['', 'have', 'want'])
 
 
-class PeekabooState:
+class PeekabooState(IncrementalDecomposition):
 
     def __init__(self, fst, target, parent, *, univ=None):
         self.fst = fst

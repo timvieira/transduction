@@ -9,7 +9,7 @@ Usage:
 """
 
 from transduction.fsa import FSA, EPSILON
-from transduction.base import PrecoverDecomp
+from transduction.base import PrecoverDecomp, DecompositionResult
 from arsenal import Integerizer
 
 
@@ -89,7 +89,7 @@ def to_python_fsa(rust_fsa, sym_map):
     return fsa
 
 
-class RustDecomp:
+class RustDecomp(DecompositionResult):
     """Drop-in replacement for NonrecursiveDFADecomp using the Rust backend."""
 
     def __init__(self, fst, target):
