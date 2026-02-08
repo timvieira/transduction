@@ -75,7 +75,7 @@
   `importance_sampling` lack algorithmic explanations. `Item.weight` units
   (log probability?) undocumented.
 
-- [ ] **Document `bpe_wfst()` (`bpe.py`).** Acronyms undefined (BPE WFST).
+- [ ] **Document `bpe_wfst()` (`fsts/bpe.py`).** Acronyms undefined (BPE WFST).
   Parameters `tokenizer`, `readable` lack documentation.
 
 ## Inline TODOs/XXXs from source

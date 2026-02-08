@@ -18,7 +18,8 @@
 - `transduction/token_decompose.py` — BPE-optimized fast path
 - `transduction/enumeration.py` — LM-weighted path enumeration (prioritized_enumeration, importance_sampling)
 - `transduction/lazy.py` — Lazy automaton framework (LazyDeterminize, EpsilonRemove)
-- `transduction/bpe.py` — BPE WFST builder (`bpe_wfst`)
+- `transduction/fsts/bpe.py` — BPE WFST builder (`bpe_wfst`)
+- `transduction/fsts/ptb.py` — PTB tokenizer FST built with pynini
 - `transduction/rust_bridge.py` — Python ↔ Rust conversion layer
 - `transduction/examples.py` — Example FSTs for testing
 

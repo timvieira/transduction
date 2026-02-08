@@ -34,7 +34,7 @@ import datasets
 datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True
 
 # Local imports
-from benchmark.fsts.ptb_pynini import (
+from transduction.fsts.ptb import (
     build_ptb_fst_pynini,
     string_to_byte_strs,
     decode_ptb_output,

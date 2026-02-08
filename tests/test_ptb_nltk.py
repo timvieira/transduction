@@ -4,12 +4,12 @@ Test PTB FST against NLTK TreebankWordTokenizer.
 This script compares the FST tokenization against NLTK on wikitext paragraphs and checks for differences.
 
 Usage:
-    python -m benchmark.fsts.test_ptb_nltk
+    python -m pytest tests/test_ptb_nltk.py
 """
 from collections import defaultdict
 from nltk.tokenize import TreebankWordTokenizer
 
-from benchmark.fsts.ptb_pynini import (
+from transduction.fsts.ptb import (
     build_ptb_fst_pynini,
     string_to_byte_strs,
     SEP,
