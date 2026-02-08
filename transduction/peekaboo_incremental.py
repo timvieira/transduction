@@ -1,4 +1,4 @@
-from transduction.base import PrecoverDecomp, IncrementalDecomposition
+from transduction.base import DecompositionResult, IncrementalDecomposition
 from transduction.lazy import Lazy
 from transduction.fsa import FSA, frozenset
 from transduction.fst import EPSILON
@@ -9,6 +9,7 @@ from transduction.universality import (
 from transduction.precover_nfa import PeekabooLookaheadNFA as PeekabooPrecover
 
 from collections import deque
+from functools import cached_property
 
 #_______________________________________________________________________________
 #
@@ -93,67 +94,16 @@ class Peekaboo:
         self.target_alphabet = fst.B - {EPSILON}
         self._univ = FstUniversality(fst)
 
+    def initial(self):
+        """Return the initial PeekabooState (empty target)."""
+        return PeekabooState(self.fst, '', parent=None, univ=self._univ)
+
     def __call__(self, target):
-        # Merge reverse-arc (incoming) dicts from every depth into one
-        # shared graph, then extract per-symbol trimmed FSAs via backward
-        # reachability from Q/R stop states.
-        #
-        # Cross-depth merging correctness argument
-        # ------------------------------------------
-        # Each depth d uses a different DFA (PeekabooPrecover with
-        # target[:d]).  At resume-frontier boundaries a single DFA state
-        # may have incoming arcs from *two* depths (d and d+1) with
-        # potentially different predecessors for the same input symbol,
-        # making the merged graph nondeterministic.  We argue the extra
-        # arcs from earlier depths are harmless:
-        #
-        #   Structural invariant: at depth d the PeekabooPrecover NFA
-        #   states have output buffers of length ≤ d+1 (= N+K with
-        #   K=1).  DFA states are frozensets of such NFA states, so
-        #   every DFA state reachable via depth-d arcs contains only
-        #   NFA states with len(ys) ≤ d+1.
-        #
-        #   The Q/R stop states live at the final depth N=len(target)
-        #   and contain NFA states with len(ys) = N+1 (specifically
-        #   ys = target+y for the quotient of symbol y).  For any
-        #   earlier depth d < N we have d+1 < N+1, so depth-d DFA
-        #   states are distinct frozensets from depth-N Q/R stops.
-        #
-        #   Therefore backward reachability from Q/R stops can never
-        #   reach a state that only exists at depth d < N via a
-        #   depth-d-only arc.  The backward BFS follows the merged
-        #   incoming arcs, but the only paths that reach Q/R stops
-        #   traverse the correct depth sequence 0 → 1 → … → N through
-        #   the resume-frontier boundaries.  Depth-d arcs that lead
-        #   into depth-d-only states are never visited because those
-        #   states are not backward-reachable from the stops.
-        #
-        # Combined with forward reachability (every state in `incoming`
-        # was discovered by BFS from start), the backward BFS from
-        # stops produces exactly the trim machine.
+        """Decompose for every next target symbol after `target`.
 
-        s = PeekabooState(self.fst, '', parent=None, univ=self._univ)
-        # TODO: Revisit whether merging incoming dicts across depths is the
-        # right approach vs. walking the PeekabooState chain on demand.
-        merged_incoming = dict(s.incoming)
-        for x in target:
-            s >>= x
-            for state, arcs in s.incoming.items():
-                if state in merged_incoming:
-                    merged_incoming[state] |= arcs
-                else:
-                    merged_incoming[state] = set(arcs)
-
-        start_states = set(s.dfa.start())
-        result = {}
-        _empty = PrecoverDecomp(set(), set())
-        for y in self.target_alphabet:
-            d = s.decomp.get(y, _empty)
-            q = _trimmed_fsa(start_states, d.quotient, merged_incoming)
-            r = _trimmed_fsa(start_states, d.remainder, merged_incoming)
-            result[y] = PrecoverDecomp(q, r)
-
-        return result
+        Returns {y: child} where child.quotient and child.remainder are FSAs.
+        """
+        return self.initial()(target).decompose_next()
 
     def graphviz(self, target):
         #
@@ -242,8 +192,22 @@ class Peekaboo:
 
 
 class PeekabooState(IncrementalDecomposition):
+    """Incremental peekaboo decomposition state.
 
-    def __init__(self, fst, target, parent, *, univ=None):
+    Construction is O(1) — the expensive BFS runs lazily on first access
+    to ``.decomp``, ``.dfa``, ``.incoming``, ``.resume_frontiers``, or
+    ``.preimage_stops``.  This mirrors the transformer LM pattern where
+    ``>> y`` is a cheap state advance and the heavy compute happens when
+    the results are actually needed (e.g., by ``decompose_next()`` or by
+    ``TransducedLM._compute_logp_next()``).
+    """
+
+    # Attributes computed by _ensure_bfs(); accessed lazily via __getattr__.
+    _LAZY_BFS_ATTRS = frozenset({
+        'decomp', 'dfa', 'resume_frontiers', 'preimage_stops', 'incoming',
+    })
+
+    def __init__(self, fst, target='', parent=None, *, univ=None):
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
@@ -253,26 +217,33 @@ class PeekabooState(IncrementalDecomposition):
         assert parent is None or parent.target == target[:-1]
 
         self._univ = parent._univ if parent is not None else (univ or FstUniversality(fst))
+        self._bfs_done = False
+
+    def __getattr__(self, name):
+        if name in PeekabooState._LAZY_BFS_ATTRS:
+            self._ensure_bfs()
+            return self.__dict__[name]
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute {name!r}")
+
+    def _ensure_bfs(self):
+        """Run the peekaboo BFS on demand.  No-op if already completed."""
+        if self._bfs_done:
+            return
+
+        target = self.target
+        parent = self.parent
 
         dfa = PeekabooPrecover(self.fst, target).det()
 
-        if len(target) == 0:
-            assert parent is None
-            worklist = deque()
-            incoming = {}
-            for state in dfa.start():
+        worklist = deque()
+        incoming = {}
+        if parent is not None:
+            for state in parent.resume_frontiers.get(target[-1], set()):
+                assert not any(truncated for _, _, truncated in state)
                 worklist.append(state)
                 incoming[state] = set()
-
         else:
-
-            resume_states = parent.resume_frontiers.get(target[-1], set())
-
-            # put previous and Q and R states on the worklist
-            worklist = deque()
-            incoming = {}
-            for state in resume_states:
-                assert not any(truncated for _, _, truncated in state)
+            for state in dfa.start():
                 worklist.append(state)
                 incoming[state] = set()
 
@@ -290,12 +261,12 @@ class PeekabooState(IncrementalDecomposition):
         if _all_input_universal:
             def ensure_symbol(y):
                 if y not in decomp:
-                    decomp[y] = PrecoverDecomp(set(), set())
+                    decomp[y] = DecompositionResult(set(), set())
                     resume_frontiers[y] = set()
         else:
             def ensure_symbol(y):
                 if y not in decomp:
-                    decomp[y] = PrecoverDecomp(set(), set())
+                    decomp[y] = DecompositionResult(set(), set())
                     resume_frontiers[y] = set()
                     trunc_dfa = TruncatedDFA(dfa=dfa, fst=self.fst, target=target + y)
                     truncated_dfas[y] = trunc_dfa
@@ -402,10 +373,102 @@ class PeekabooState(IncrementalDecomposition):
         self.dfa = dfa
         self.incoming = incoming
         self.preimage_stops = preimage_stops
+        self._bfs_done = True
 
     def __rshift__(self, y):
+        """Advance by one target symbol.  O(1) if decompose_next() was
+        already called (cheap lookup); otherwise creates a deferred child
+        whose BFS runs lazily on first attribute access."""
         assert y in self.target_alphabet, repr(y)
+        if hasattr(self, '_children') and y in self._children:
+            return self._children[y]
         return PeekabooState(self.fst, self.target + y, parent=self)
+
+    def _merged_incoming(self):
+        """Walk the parent chain and merge all incoming dicts into one.
+
+        Cross-depth merging correctness argument
+        ------------------------------------------
+        Each depth d uses a different DFA (PeekabooPrecover with
+        target[:d]).  At resume-frontier boundaries a single DFA state
+        may have incoming arcs from *two* depths (d and d+1) with
+        potentially different predecessors for the same input symbol,
+        making the merged graph nondeterministic.  We argue the extra
+        arcs from earlier depths are harmless:
+
+          Structural invariant: at depth d the PeekabooPrecover NFA
+          states have output buffers of length ≤ d+1 (= N+K with
+          K=1).  DFA states are frozensets of such NFA states, so
+          every DFA state reachable via depth-d arcs contains only
+          NFA states with len(ys) ≤ d+1.
+
+          The Q/R stop states live at the final depth N=len(target)
+          and contain NFA states with len(ys) = N+1 (specifically
+          ys = target+y for the quotient of symbol y).  For any
+          earlier depth d < N we have d+1 < N+1, so depth-d DFA
+          states are distinct frozensets from depth-N Q/R stops.
+
+          Therefore backward reachability from Q/R stops can never
+          reach a state that only exists at depth d < N via a
+          depth-d-only arc.  The backward BFS follows the merged
+          incoming arcs, but the only paths that reach Q/R stops
+          traverse the correct depth sequence 0 → 1 → … → N through
+          the resume-frontier boundaries.  Depth-d arcs that lead
+          into depth-d-only states are never visited because those
+          states are not backward-reachable from the stops.
+
+        Combined with forward reachability (every state in `incoming`
+        was discovered by BFS from start), the backward BFS from
+        stops produces exactly the trim machine.
+        """
+        merged = dict(self.incoming)
+        node = self.parent
+        while node is not None:
+            for state, arcs in node.incoming.items():
+                if state in merged:
+                    merged[state] |= arcs
+                else:
+                    merged[state] = set(arcs)
+            node = node.parent
+        return merged
+
+    def decompose_next(self):
+        """Returns {y: PeekabooState} for all next target symbols.
+
+        Each child's ``.quotient`` and ``.remainder`` are computed on demand
+        (cached after first access).  The child's own BFS is likewise
+        deferred until its ``decompose_next()`` or attribute access triggers it.
+        """
+        if not hasattr(self, '_children'):
+            self._children = {y: self >> y for y in self.target_alphabet}
+        return self._children
+
+    @cached_property
+    def _qr(self):
+        """Compute quotient and remainder FSAs from the parent's decomposition."""
+        parent = self.parent
+        assert parent is not None, "Root PeekabooState has no quotient/remainder"
+        y = self.target[-1]
+        _empty = DecompositionResult(set(), set())
+        d = parent.decomp.get(y, _empty)
+        merged_incoming = parent._merged_incoming()
+        # Walk to root for start states
+        node = parent
+        while node.parent is not None:
+            node = node.parent
+        start_states = set(node.dfa.start())
+        return (
+            _trimmed_fsa(start_states, d.quotient, merged_incoming),
+            _trimmed_fsa(start_states, d.remainder, merged_incoming),
+        )
+
+    @property
+    def quotient(self):
+        return self._qr[0]
+
+    @property
+    def remainder(self):
+        return self._qr[1]
 
 
 class TruncatedDFA(Lazy):

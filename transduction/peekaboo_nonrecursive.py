@@ -1,10 +1,11 @@
-from transduction.base import PrecoverDecomp
+from transduction.base import DecompositionResult
 from transduction.lazy import Lazy
 from transduction.fsa import FSA
 from transduction.fst import EPSILON
 from transduction.precover_nfa import PeekabooFixedNFA as PeekabooPrecover
 
 from collections import deque
+from functools import cached_property
 
 
 # [2025-11-21 Fri] This version of the next-symbol prediction algorithm
@@ -21,7 +22,7 @@ class PeekabooStrings:
         self.target_alphabet = fst.B - {EPSILON}
 
     def __call__(self, target):
-        precover = {y: PrecoverDecomp(set(), set()) for y in self.target_alphabet}
+        precover = {y: DecompositionResult(set(), set()) for y in self.target_alphabet}
         worklist = deque()
 
         dfa = PeekabooPrecover(self.fst, target).det()
@@ -65,39 +66,39 @@ class PeekabooStrings:
         return precover
 
 
-class Peekaboo:
+class Peekaboo(DecompositionResult):
 
-    def __init__(self, fst):
+    def __init__(self, fst, target='', *, _parent=None, _symbol=None):
         self.fst = fst
+        self.target = target
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
+        self._parent = _parent
+        self._symbol = _symbol
 
-    def __call__(self, target):
-        precover = {y: PrecoverDecomp(set(), set()) for y in self.target_alphabet}
+    @cached_property
+    def _results(self):
+        """Run the BFS for self.target, returning {y: (quotient_FSA, remainder_FSA)}."""
+        precover = {y: DecompositionResult(set(), set()) for y in self.target_alphabet}
         worklist = deque()
         states = set()
 
-        dfa = PeekabooPrecover(self.fst, target).det()
+        dfa = PeekabooPrecover(self.fst, self.target).det()
         for state in dfa.start():
             worklist.append(state)
             states.add(state)
 
         arcs = []
 
-        N = len(target)
+        N = len(self.target)
         while worklist:
             state = worklist.popleft()
 
             relevant_symbols = {ys[N] for _, ys in state if len(ys) > N}
 
-            # Shortcut: At most one of the `relevant_symbols` can be
-            # continuous. If we find one, we can stop expanding.
-            # (See PeekabooStrings above for the proof sketch.)
             continuous = set()
             for y in relevant_symbols:
-                dfa_filtered = FilteredDFA(dfa=dfa, fst=self.fst, target=target + y)
-                #assert dfa_filtered.materialize().equal(Precover(self.fst, target + y).min)
-                #print('ok:', repr(target + y))
+                dfa_filtered = FilteredDFA(dfa=dfa, fst=self.fst, target=self.target + y)
                 if dfa_filtered.accepts_universal(state, self.source_alphabet):
                     precover[y].quotient.add(state)
                     continuous.add(y)
@@ -105,7 +106,7 @@ class Peekaboo:
                     precover[y].remainder.add(state)
             assert len(continuous) <= 1
             if continuous:
-                continue    # we have found a quotient and can skip
+                continue
 
             for x, next_state in dfa.arcs(state):
                 if next_state not in states:
@@ -114,14 +115,37 @@ class Peekaboo:
 
                 arcs.append((state, x, next_state))
 
-        foo = {y: PrecoverDecomp(set(), set()) for y in self.target_alphabet}
-        for y in precover:
-            Q, R = precover[y]
-            q = FSA(start=set(dfa.start()), arcs=arcs, stop=Q)
-            r = FSA(start=set(dfa.start()), arcs=arcs, stop=R)
-            foo[y] = PrecoverDecomp(q.trim(), r.trim())
+        result = {}
+        for y in self.target_alphabet:
+            d = precover[y]
+            q = FSA(start=set(dfa.start()), arcs=arcs, stop=d.quotient)
+            r = FSA(start=set(dfa.start()), arcs=arcs, stop=d.remainder)
+            result[y] = (q.trim(), r.trim())
 
-        return foo
+        return result
+
+    def __call__(self, target):
+        """Backward-compat: Peekaboo(fst)(target) -> {y: DecompositionResult}."""
+        p = Peekaboo(self.fst, target)
+        return {y: DecompositionResult(*qr) for y, qr in p._results.items()}
+
+    def decompose_next(self):
+        return {y: Peekaboo(self.fst, self.target + y, _parent=self, _symbol=y)
+                for y in self.target_alphabet}
+
+    @cached_property
+    def _qr(self):
+        parent = self._parent
+        assert parent is not None, "Root Peekaboo has no quotient/remainder"
+        return parent._results[self._symbol]
+
+    @property
+    def quotient(self):
+        return self._qr[0]
+
+    @property
+    def remainder(self):
+        return self._qr[1]
 
 
 class FilteredDFA(Lazy):

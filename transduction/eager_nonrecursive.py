@@ -1,4 +1,4 @@
-from transduction.base import AbstractAlgorithm, DecompositionResult, PrecoverDecomp
+from transduction.base import AbstractAlgorithm, DecompositionResult
 from transduction.fsa import FSA, EPSILON
 from transduction.universality import UniversalityFilter
 from transduction.util import display_table
@@ -85,17 +85,17 @@ class Precover(DecompositionResult):
         # Double-check the remainder through set subtraction
         #assert R.equal(P - Q * self.U)
 
-        return PrecoverDecomp(Q, R)
+        return (Q, R)
 
-    @cached_property
+    @property
     def quotient(self):
         "Optimal quotient automaton"
-        return self.decomposition.quotient
+        return self.decomposition[0]
 
-    @cached_property
+    @property
     def remainder(self):
         "Optimal remainder automaton"
-        return self.decomposition.remainder
+        return self.decomposition[1]
 
     def is_cylinder(self, xs):
         "Is the source string `xs` a cylinder of the precover?"

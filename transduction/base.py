@@ -4,41 +4,50 @@ from arsenal import colors
 from collections import deque
 
 
+class DecompositionResult:
+    r"""Base class for quotient--remainder decomposition results.
+
+    $$\mathcal{P}(\boldsymbol{y}) = \mathcal{Q}(\boldsymbol{y}) \mathcal{X}^* \sqcup \mathcal{R}(\boldsymbol{y})$$
+
+    Can be used directly as a simple pair::
+
+        result = DecompositionResult(quotient, remainder)
+        result.quotient
+        result.remainder
+
+    Or subclassed with lazy properties (e.g., ``Precover``, ``NonrecursiveDFADecomp``).
+
+    The quotient and remainder may be sets of strings or FSAs depending on the
+    producer.
+    """
+
+    def __init__(self, quotient, remainder):
+        self.quotient = quotient
+        self.remainder = remainder
+
+    def decompose_next(self):
+        """Decompose for every next target symbol, returning a dict {y: DecompositionResult}."""
+        target_alphabet = self.fst.B - {EPSILON}
+        return {y: type(self)(self.fst, self.target + y) for y in target_alphabet}
+
+
 class DecompositionFunction(ABC):
     """Interface for reusable decomposition algorithms.
 
     Constructed once with an FST, then called with different target strings.
-    Returns a PrecoverDecomp with set-valued quotient and remainder.
+    Returns a DecompositionResult with set-valued quotient and remainder.
 
     Usage::
 
         alg = SomeAlgorithm(fst)
-        result = alg(target)     # -> PrecoverDecomp
+        result = alg(target)     # -> DecompositionResult
         result.quotient          # set of source strings
         result.remainder         # set of source strings
 
     Implementations: AbstractAlgorithm
     """
     @abstractmethod
-    def __call__(self, target) -> 'PrecoverDecomp': ...
-
-
-class DecompositionResult(ABC):
-    """Interface for one-shot decomposition computations.
-
-    Constructed with an FST and a target string.  The result exposes
-    quotient and remainder as FSAs.
-
-    Usage::
-
-        result = SomeDecomp(fst, target)
-        result.quotient    # FSA
-        result.remainder   # FSA
-
-    Implementations: Precover, NonrecursiveDFADecomp, TokenDecompose, RustDecomp
-    """
-    quotient: 'FSA'
-    remainder: 'FSA'
+    def __call__(self, target) -> 'DecompositionResult': ...
 
 
 class IncrementalDecomposition(DecompositionResult):
@@ -60,35 +69,17 @@ class IncrementalDecomposition(DecompositionResult):
     @abstractmethod
     def __rshift__(self, y) -> 'IncrementalDecomposition': ...
 
+    def decompose_next(self):
+        """Decompose for every next target symbol, returning a dict {y: IncrementalDecomposition}."""
+        target_alphabet = self.fst.B - {EPSILON}
+        return {y: self >> y for y in target_alphabet}
+
     def __call__(self, ys):
         """Advance state by a sequence of target symbols. Returns the final state."""
         s = self
         for y in ys:
             s = s >> y
         return s
-
-
-class PrecoverDecomp:
-    r"""
-    This class represents the precover of some target string $\boldsymbol{y} \in \mathcal{Y}^*$ as
-    a quotient and remainder set:
-
-    $$\mathcal{P}(\boldsymbol{y}) = \mathcal{Q}(\boldsymbol{y}) \mathcal{X}^* \sqcup \mathcal{R}(\boldsymbol{y})$$
-
-    """
-
-    def __init__(self, quotient, remainder):
-        self.quotient = quotient
-        self.remainder = remainder
-
-    def __repr__(self):
-        return repr((self.quotient, self.remainder))
-
-    def __iter__(self):
-        return iter((self.quotient, self.remainder))
-
-    def __eq__(self, other):
-        return tuple(other) == tuple(self)
 
 
 class AbstractAlgorithm(DecompositionFunction):
@@ -102,7 +93,7 @@ class AbstractAlgorithm(DecompositionFunction):
         self.max_steps = max_steps
 
     def __call__(self, target):
-        precover = PrecoverDecomp(set(), set())
+        precover = DecompositionResult(set(), set())
         worklist = deque()
         for xs in self.initialize(target):
             worklist.append(xs)

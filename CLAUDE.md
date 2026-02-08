@@ -7,14 +7,14 @@
 - `transduction/fst.py` — FST class
 - `transduction/universality.py` — UniversalityFilter, check_all_input_universal, compute_ip_universal_states
 - `transduction/fsa.py` — FSA class
-- `transduction/base.py` — ABCs (DecompositionFunction, DecompositionResult, IncrementalDecomposition), PrecoverDecomp, AbstractAlgorithm
+- `transduction/base.py` — DecompositionResult (concrete base), DecompositionFunction (ABC), IncrementalDecomposition (ABC), AbstractAlgorithm
 - `transduction/precover_nfa.py` — All PrecoverNFA variants (PrecoverNFA, TruncationMarkerPrecoverNFA, PopPrecoverNFA, TargetSideBuffer, Relevance, PeekabooLookaheadNFA, PeekabooFixedNFA)
 - `transduction/peekaboo_incremental.py` — Peekaboo algorithm (recommended for autoregressive decoding)
 - `transduction/peekaboo_nonrecursive.py` — Non-incremental peekaboo
 - `transduction/eager_nonrecursive.py` — Reference Precover implementation
 - `transduction/dfa_decomp_nonrecursive.py` — NonrecursiveDFADecomp
 - `transduction/dfa_decomp_incremental.py` — IncrementalDFADecomp (diverges on some inputs)
-- `transduction/lazy_incremental.py` — LazyIncremental decomposition
+- `transduction/lazy_incremental.py` — LazyIncremental decomposition (finite-language FSTs only; diverges on infinite quotients)
 - `transduction/token_decompose.py` — BPE-optimized fast path
 - `transduction/enumeration.py` — LM-weighted path enumeration (prioritized_enumeration, importance_sampling)
 - `transduction/lazy.py` — Lazy automaton framework (LazyDeterminize, EpsilonRemove)
@@ -67,7 +67,18 @@ Eliminated deps (previously external, now inlined):
 - `test_enumeration.py`: 12/12 pass (9 small grammar tests + 3 BPE-scale GPT-2 integration tests)
 - `test_push_labels.py`: 30 pass
 - `test_transduced.py`: 23 pass
-- 7 decomposition implementations tested: incremental_dfa_decomp, nonrecursive_dfa_decomp, peekaboo_incremental, peekaboo_nonrecursive, token_decompose, rust_decomp, rust_peekaboo
+- `test_general.py` tests the **general-case** algorithms (handle infinite quotients/remainders):
+  NonrecursiveDFADecomp, PeekabooState, PeekabooNonrecursive, TokenDecompose, RustDecomp, RustPeekaboo.
+  IncrementalDFADecomp is also included but xfailed on triplets_of_doom (diverges without target-buffer truncation).
+- **Finite-only algorithms are excluded from test_general.py.** These diverge on
+  FSTs with infinite quotients because they don't truncate the target buffer:
+  - `LazyIncremental` — enumerates source *strings* (not states); universality check is PSPACE-complete and diverges in practice on infinite quotients.
+  - `IncrementalDFADecomp` — partially general but diverges on some inputs (triplets_of_doom) for the same reason (no truncation).
+  - The distinguishing mechanism is **target-buffer truncation**: algorithms that
+    truncate (NonrecursiveDFADecomp, Peekaboo variants, Rust backends) terminate
+    on all inputs; those that don't (IncrementalDFADecomp, LazyIncremental) may diverge.
+  - When adding new algorithms or test cases, classify them as general vs finite-only
+    and put them in the appropriate test file.
 
 ## Build Pipeline
 

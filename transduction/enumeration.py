@@ -34,7 +34,7 @@ class prioritized_enumeration:
     def __init__(self, lm, fst, target, max_steps, decompose=None):
         """
         Args:
-            decompose: A callable ``(fst, target) -> PrecoverDecomp`` returning
+            decompose: A callable ``(fst, target) -> DecompositionResult`` returning
                 an object with ``.quotient`` and ``.remainder`` FSAs.  Defaults
                 to ``Precover``.  Examples: ``NonrecursiveDFADecomp``,
                 ``RustDecomp``, ``TokenDecompose``.
@@ -107,7 +107,7 @@ class importance_sampling:
     def __init__(self, lm, fst, target, decompose=None):
         """
         Args:
-            decompose: A callable ``(fst, target) -> PrecoverDecomp`` returning
+            decompose: A callable ``(fst, target) -> DecompositionResult`` returning
                 an object with ``.quotient`` and ``.remainder`` FSAs.  Defaults
                 to ``Precover``.  Examples: ``NonrecursiveDFADecomp``,
                 ``RustDecomp``, ``TokenDecompose``.

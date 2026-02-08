@@ -1,5 +1,6 @@
 from transduction.util import *
-from transduction.base import AbstractAlgorithm, PrecoverDecomp
+from transduction.base import AbstractAlgorithm, DecompositionResult
+PrecoverDecomp = DecompositionResult   # backward compat alias for notebooks
 from transduction.lazy_incremental import LazyIncremental
 from transduction.lazy_nonrecursive import LazyNonrecursive
 from transduction.precover_nfa import PrecoverNFA as LazyPrecoverNFA

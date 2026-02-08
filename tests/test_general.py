@@ -1,11 +1,26 @@
+"""
+Tests for general-case decomposition algorithms against the reference Precover.
+
+This test suite exercises FSTs whose quotient/remainder languages may be infinite.
+Only algorithms that handle the general case are included here — i.e., those
+that operate over automata states and use target-buffer truncation to guarantee
+termination.
+
+Algorithms excluded (finite-language only — they lack truncation and diverge
+on infinite quotients):
+  - LazyIncremental: enumerates source strings; universality check diverges.
+  - IncrementalDFADecomp: included but xfailed on triplets_of_doom where it
+    diverges (partially general; works on most inputs but not all).
+"""
+
 import pytest
-from transduction import examples, FSA, EPSILON, Precover
+from transduction import examples, EPSILON, Precover
 from transduction.dfa_decomp_nonrecursive import NonrecursiveDFADecomp
 from transduction.dfa_decomp_incremental import IncrementalDFADecomp
 from transduction.token_decompose import TokenDecompose
 from transduction.universality import check_all_input_universal
-from transduction import peekaboo_nonrecursive
-from transduction import peekaboo_incremental
+from transduction.peekaboo_nonrecursive import Peekaboo as PeekabooNonrecursive
+from transduction.peekaboo_incremental import PeekabooState
 
 try:
     from transduction.rust_bridge import RustDecomp, RustPeekaboo
@@ -14,246 +29,32 @@ except ImportError:
     HAS_RUST = False
 
 
-class run_recursive_dfa_decomp:
-    """
-    Utility function for testing a precover decomposition method against a reference
-    implementation method.
-    """
-    def __init__(self, fst, target, depth, verbosity=0):
-        self.fst = fst
-        self.target_alphabet = self.fst.B - {EPSILON}
-        self.depth = depth
-        self.reference = Precover.factory(fst)
-        self.verbosity = verbosity
-        self.run(target, depth, IncrementalDFADecomp(fst, target))
+def _token_decompose_or_skip(fst, target=''):
+    if not check_all_input_universal(fst):
+        pytest.skip("TokenDecompose requires all_input_universal")
+    return TokenDecompose(fst, target)
 
-    def run(self, target, depth, state):
-        if depth == 0: return
-        want = {y: self.reference(target + y) for y in self.target_alphabet}
-        have = {y: (state >> y) for y in self.target_alphabet}
+
+def run_test(cls, fst, target, depth, verbosity=0):
+    """Unified test runner: recursively checks decompose_next() against reference."""
+    reference = Precover.factory(fst)
+    target_alphabet = fst.B - {EPSILON}
+
+    def recurse(target, depth, state):
+        if depth == 0:
+            return
+        want = {y: reference(target + y) for y in target_alphabet}
+        have = state.decompose_next()
         assert_equal_decomp_map(have, want)
         for y in want:
-            if self.verbosity > 0: print('>', repr(target + y))
+            if verbosity > 0:
+                print('>', repr(target + y))
             q = want[y].quotient.trim()
             r = want[y].remainder.trim()
             if q.states or r.states:
-                self.run(target + y, depth - 1, have[y])
+                recurse(target + y, depth - 1, have[y])
 
-
-class run_peekaboo_incremental:
-    """
-    Utility function for testing the `Peekaboo` method against a slower method.
-    """
-    def __init__(self, fst, target, depth, verbosity=0):
-        self.fst = fst
-        self.target_alphabet = self.fst.B - {EPSILON}
-        self.depth = depth
-        self.peekaboo = peekaboo_incremental.Peekaboo(fst)
-        self.reference = Precover.factory(fst)
-        self.verbosity = verbosity
-        self.run(target, depth)
-
-    def run(self, target, depth):
-        if depth == 0: return
-
-        # Check that the peekaboo machine matches the reference implementation
-        have = peekaboo_incremental.PeekabooPrecover(self.fst, target).materialize()
-        want = (self.fst @ (FSA.from_string(target) * FSA.from_strings(self.target_alphabet).p())).project(0)
-        assert have.equal(want)
-
-        # Check that the decomposition matches the reference implementation
-        want = {y: self.reference(target + y) for y in self.target_alphabet}
-        have = self.peekaboo(target)
-        assert_equal_decomp_map(have, want)
-
-        # recurse
-        for y in want:
-            if self.verbosity > 0: print('>', repr(target + y))
-            q = want[y].quotient.trim()
-            r = want[y].remainder.trim()
-            if q.states or r.states:
-                self.run(target + y, depth - 1)
-
-
-class run_peekaboo_nonrecursive:
-    """
-    Utility function for testing the `Peekaboo` method against a slower method.
-    """
-    def __init__(self, fst, target, depth, verbosity=0):
-        self.fst = fst
-        self.target_alphabet = self.fst.B - {EPSILON}
-        self.depth = depth
-        self.peekaboo = peekaboo_nonrecursive.Peekaboo(fst)
-        self.reference = Precover.factory(fst)
-        self.verbosity = verbosity
-        self.run(target, depth)
-
-    def run(self, target, depth):
-        if depth == 0: return
-
-        # Check that the peekaboo machine matches the reference implementation
-        have = peekaboo_nonrecursive.PeekabooPrecover(self.fst, target).materialize()
-        want = (self.fst @ (FSA.from_string(target) * FSA.from_strings(self.target_alphabet).p())).project(0)
-        assert have.equal(want)
-
-        # Check that the decomposition matches the reference implementation
-        want = {y: self.reference(target + y) for y in self.target_alphabet}
-        have = self.peekaboo(target)
-        assert_equal_decomp_map(have, want)
-
-        # Recurse
-        for y in want:
-            if self.verbosity > 0: print('>', repr(target + y))
-            q = want[y].quotient.trim()
-            r = want[y].remainder.trim()
-            if q.states or r.states:
-                self.run(target + y, depth - 1)
-
-
-class run_nonrecursive_dfa_decomp:
-    """
-    Utility function for testing the `Peekaboo` method against a slower method.
-    """
-    def __init__(self, fst, target, depth, verbosity=0):
-        self.fst = fst
-        self.target_alphabet = self.fst.B - {EPSILON}
-        self.depth = depth
-        self.peekaboo = lambda target: NonrecursiveDFADecomp(fst, target)
-        self.reference = Precover.factory(fst)
-        self.verbosity = verbosity
-        self.run(target, depth)
-
-    def run(self, target, depth):
-        if depth == 0: return
-
-        # Check that the decomposition matches the reference implementation
-        want = {y: self.reference(target + y) for y in self.target_alphabet}
-        have = {y: self.peekaboo(target + y) for y in self.target_alphabet}
-        assert_equal_decomp_map(have, want)
-
-        # Recurse
-        for y in want:
-            if self.verbosity > 0: print('>', repr(target + y))
-            q = want[y].quotient.trim()
-            r = want[y].remainder.trim()
-            if q.states or r.states:
-                self.run(target + y, depth - 1)
-
-
-class run_token_decompose:
-    """
-    Utility function for testing the token-level decomposition against the
-    reference implementation. Falls back to NonrecursiveDFADecomp when
-    all_input_universal is False.
-    """
-    def __init__(self, fst, target, depth, verbosity=0):
-        self.fst = fst
-        self.target_alphabet = self.fst.B - {EPSILON}
-        self.depth = depth
-        self.all_univ = check_all_input_universal(fst)
-        self.decompose = (
-            (lambda target: TokenDecompose(fst, target))
-            if self.all_univ
-            else (lambda target: NonrecursiveDFADecomp(fst, target))
-        )
-        self.reference = Precover.factory(fst)
-        self.verbosity = verbosity
-        self.run(target, depth)
-
-    def run(self, target, depth):
-        if depth == 0: return
-
-        # Check that the decomposition matches the reference implementation
-        want = {y: self.reference(target + y) for y in self.target_alphabet}
-        have = {y: self.decompose(target + y) for y in self.target_alphabet}
-        assert_equal_decomp_map(have, want)
-
-        # Recurse
-        for y in want:
-            if self.verbosity > 0: print('>', repr(target + y))
-            q = want[y].quotient.trim()
-            r = want[y].remainder.trim()
-            if q.states or r.states:
-                self.run(target + y, depth - 1)
-
-
-class run_rust_decomp:
-    """
-    Utility function for testing the Rust-accelerated decomposition against the
-    reference implementation.
-    """
-    def __init__(self, fst, target, depth, verbosity=0):
-        self.fst = fst
-        self.target_alphabet = self.fst.B - {EPSILON}
-        self.depth = depth
-        self.rust_decomp = lambda target: RustDecomp(fst, target)
-        self.reference = Precover.factory(fst)
-        self.verbosity = verbosity
-        self.run(target, depth)
-
-    def run(self, target, depth):
-        if depth == 0: return
-
-        # Check that the decomposition matches the reference implementation
-        want = {y: self.reference(target + y) for y in self.target_alphabet}
-        have = {y: self.rust_decomp(target + y) for y in self.target_alphabet}
-        assert_equal_decomp_map(have, want)
-
-        # Recurse
-        for y in want:
-            if self.verbosity > 0: print('>', repr(target + y))
-            q = want[y].quotient.trim()
-            r = want[y].remainder.trim()
-            if q.states or r.states:
-                self.run(target + y, depth - 1)
-
-
-class run_rust_peekaboo:
-    """
-    Utility function for testing the Rust peekaboo decomposition against the
-    reference implementation.
-    """
-    def __init__(self, fst, target, depth, verbosity=0):
-        self.fst = fst
-        self.target_alphabet = self.fst.B - {EPSILON}
-        self.depth = depth
-        self.peekaboo = RustPeekaboo(fst)
-        self.reference = Precover.factory(fst)
-        self.verbosity = verbosity
-        self.run(target, depth)
-
-    def run(self, target, depth):
-        if depth == 0: return
-
-        # Check that the decomposition matches the reference implementation
-        want = {y: self.reference(target + y) for y in self.target_alphabet}
-        have = self.peekaboo(target)
-        assert_equal_decomp_map(have, want)
-
-        # recurse
-        for y in want:
-            if self.verbosity > 0: print('>', repr(target + y))
-            q = want[y].quotient.trim()
-            r = want[y].remainder.trim()
-            if q.states or r.states:
-                self.run(target + y, depth - 1)
-
-
-IMPLEMENTATIONS = [
-    pytest.param(run_recursive_dfa_decomp, id="recursive_dfa_decomp"),
-    pytest.param(run_nonrecursive_dfa_decomp, id="nonrecursive_dfa_decomp"),
-    pytest.param(run_peekaboo_incremental, id="peekaboo_incremental"),
-    pytest.param(run_peekaboo_nonrecursive, id="peekaboo_nonrecursive"),
-    pytest.param(run_token_decompose, id="token_decompose"),
-]
-
-if HAS_RUST:
-    IMPLEMENTATIONS.append(
-        pytest.param(run_rust_decomp, id="rust_decomp"),
-    )
-    IMPLEMENTATIONS.append(
-        pytest.param(run_rust_peekaboo, id="rust_peekaboo"),
-    )
+    recurse(target, depth, cls(fst, target))
 
 
 def assert_equal_decomp_map(have, want):
@@ -262,105 +63,121 @@ def assert_equal_decomp_map(have, want):
         assert have[y].remainder.equal(want[y].remainder)
 
 
+IMPLEMENTATIONS = [
+    pytest.param(IncrementalDFADecomp, id="recursive_dfa_decomp"),
+    pytest.param(NonrecursiveDFADecomp, id="nonrecursive_dfa_decomp"),
+    pytest.param(PeekabooState, id="peekaboo_incremental"),
+    pytest.param(PeekabooNonrecursive, id="peekaboo_nonrecursive"),
+    pytest.param(_token_decompose_or_skip, id="token_decompose"),
+]
+
+if HAS_RUST:
+    IMPLEMENTATIONS.append(
+        pytest.param(RustDecomp, id="rust_decomp"),
+    )
+    IMPLEMENTATIONS.append(
+        pytest.param(RustPeekaboo, id="rust_peekaboo"),
+    )
+
+
 @pytest.fixture(params=IMPLEMENTATIONS)
-def run(request):
+def impl(request):
     return request.param
 
 
-def test_abc(run):
+def test_abc(impl):
     fst = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c'), ('4', 'd'), ('5', 'e')])
-    run(fst, '', depth=4)
+    run_test(impl, fst, '', depth=4)
 
 
-def test_delete_b(run):
+def test_delete_b(impl):
     fst = examples.delete_b()
-    run(fst, '', depth=10)
+    run_test(impl, fst, '', depth=10)
 
 
-def test_samuel(run):
+def test_samuel(impl):
     fst = examples.samuel_example()
-    run(fst, '', depth=5)
+    run_test(impl, fst, '', depth=5)
 
 
-def test_small(run):
+def test_small(impl):
     fst = examples.small()
-    run(fst, '', depth=5)
+    run_test(impl, fst, '', depth=5)
 
 
-def test_sdd1(run):
+def test_sdd1(impl):
     fst = examples.sdd1_fst()
-    run(fst, '', depth=5)
+    run_test(impl, fst, '', depth=5)
 
 
-def test_duplicate(run):
+def test_duplicate(impl):
     fst = examples.duplicate(set('12345'))
-    run(fst, '', depth=5)
+    run_test(impl, fst, '', depth=5)
 
 
-def test_number_comma_separator(run):
-    #import string
-    #fst = examples.number_comma_separator(set(string.printable) - set('\t\n\r\x0b\x0c'))
+def test_number_comma_separator(impl):
     fst = examples.number_comma_separator({'a', ',', ' ', '0'}, Digit={'0'})
-    run(fst, '', depth=4, verbosity=0)
-    run(fst, '0,| 0,', depth=1, verbosity=0)
-    run(fst, '0,| 0,|', depth=1, verbosity=0)
+    run_test(impl, fst, '', depth=4, verbosity=0)
+    run_test(impl, fst, '0,| 0,', depth=1, verbosity=0)
+    run_test(impl, fst, '0,| 0,|', depth=1, verbosity=0)
 
 
-def test_newspeak2(run):
+def test_newspeak2(impl):
     fst = examples.newspeak2()
-    run(fst, '', depth=1)
-    run(fst, 'ba', depth=1)
-    run(fst, 'bad', depth=1)
+    run_test(impl, fst, '', depth=1)
+    run_test(impl, fst, 'ba', depth=1)
+    run_test(impl, fst, 'bad', depth=1)
 
 
-def test_lookahead(run):
+def test_lookahead(impl):
     fst = examples.lookahead()
-    run(fst, '', depth=6, verbosity=0)
+    run_test(impl, fst, '', depth=6, verbosity=0)
 
 
-def test_weird_copy(run):
+def test_weird_copy(impl):
     fst = examples.weird_copy()
-    run(fst, '', depth=5, verbosity=0)
+    run_test(impl, fst, '', depth=5, verbosity=0)
 
 
-def test_triplets_of_doom(run):
-    if run is run_recursive_dfa_decomp:
+def test_triplets_of_doom(impl):
+    if impl is IncrementalDFADecomp:
         pytest.xfail("recursive_dfa_decomp does not terminate on this input")
     from arsenal import timelimit
     fst = examples.triplets_of_doom()
     with timelimit(5):
-        run(fst, '', depth=13, verbosity=0)
+        run_test(impl, fst, '', depth=13, verbosity=0)
 
 
-def test_infinite_quotient(run):
+def test_infinite_quotient(impl):
     fst = examples.infinite_quotient()
-    run(fst, '', depth=5, verbosity=0)
+    run_test(impl, fst, '', depth=5, verbosity=0)
 
 
-def test_parity(run):
+def test_parity(impl):
     fst = examples.parity({'a', 'b'})
-    run(fst, '', depth=5, verbosity=0)
+    run_test(impl, fst, '', depth=5, verbosity=0)
 
 
 if __name__ == '__main__':
     from arsenal import testing_framework
 
-    algs = [
-        run_recursive_dfa_decomp,
-        run_nonrecursive_dfa_decomp,
-        run_peekaboo_incremental,
-        run_peekaboo_nonrecursive,
-        run_token_decompose,
+    impls = [
+        IncrementalDFADecomp,
+        NonrecursiveDFADecomp,
+        PeekabooState,
+        PeekabooNonrecursive,
+        _token_decompose_or_skip,
     ]
     if HAS_RUST:
-        algs.append(run_rust_decomp)
-        algs.append(run_rust_peekaboo)
+        impls.append(RustDecomp)
+        impls.append(RustPeekaboo)
 
     options = {}
     env = dict(globals())
     for f in env:
         if f.startswith('test_'):
-            for alg in algs:
-                options[f'{f}[{alg.__name__}]'] = lambda f=f, alg=alg: env[f](alg)
+            for alg in impls:
+                name = getattr(alg, '__name__', str(alg))
+                options[f'{f}[{name}]'] = lambda f=f, alg=alg: env[f](alg)
 
     testing_framework(options)

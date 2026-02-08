@@ -9,6 +9,12 @@ class LazyIncremental(IncrementalDecomposition):
     """
     Lazy, recursive DFA-based algorithm using the incremental ``>>`` interface.
 
+    **Finite-language only.** This algorithm enumerates source *strings* (not
+    automaton states) and its universality check may diverge on FSTs whose
+    quotient or remainder languages are infinite.  It is therefore excluded
+    from ``test_general.py`` (which exercises FSTs with infinite languages)
+    and should only be tested on finite-language FSTs.
+
     Usage::
 
         state = LazyIncremental(fst, '')
