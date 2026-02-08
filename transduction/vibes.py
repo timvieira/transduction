@@ -2,22 +2,33 @@
 Staging ground for vibe-coded methods, which need to be properly vetted
 before being incorporated into the library.
 """
+import html as _html
+from collections import defaultdict
+
 from transduction.fsa import EPSILON
+
 
 # ---------------------------------------------
 # Edge-label compressor (regex-style summaries)
 # ---------------------------------------------
-import unicodedata
+
+def _fmt_symbol(s):
+    """Format a single symbol for display.  Strings are shown bare, other
+    types use ``repr()``."""
+    return str(s) if isinstance(s, str) else repr(s)
+
 
 def _escape_char(c):
-    specials = {']', '\\', '^', '-', '"'}
+    """Backslash-escape characters that are special inside bracket expressions."""
+    specials = {']', '\\', '^', '-'}
     return '\\' + c if c in specials else c
 
+
 def _char_ranges(chars):
+    """Yield ``(lo, hi)`` pairs for runs of consecutive codepoints in *chars*."""
     cps = sorted(ord(c) for c in chars)
     if not cps:
         return
-    # group consecutive codepoints
     start = prev = cps[0]
     for k in cps[1:]:
         if k != prev + 1:
@@ -26,7 +37,13 @@ def _char_ranges(chars):
         prev = k
     yield chr(start), chr(prev)
 
+
 def _range_tokens(chars):
+    """Convert a set of characters into compact regex-style range tokens.
+
+    Runs of 3+ consecutive codepoints become ``a-z`` style ranges; shorter
+    runs are listed individually.
+    """
     toks = []
     for a, b in _char_ranges(chars):
         if ord(b) - ord(a) + 1 >= 3:
@@ -34,148 +51,219 @@ def _range_tokens(chars):
         elif a == b:
             toks.append(_escape_char(a))
         else:
-            for cp in range(ord(a), ord(b)+1):
+            for cp in range(ord(a), ord(b) + 1):
                 toks.append(_escape_char(chr(cp)))
     return toks
 
-def _ascii_buckets():
-    import string
-    return [
-        ("DIGIT", set(string.digits), "[0-9]"),
-        ("LOWER", set(string.ascii_lowercase), "[a-z]"),
-        ("UPPER", set(string.ascii_uppercase), "[A-Z]"),
-        ("ALPHA", set(string.ascii_letters), "[A-Za-z]"),
-        ("ALNUM", set(string.ascii_letters + string.digits), "[A-Za-z0-9]"),
-        ("SPACE", set([' ', '\t']), r"[ \t]"),
-        ("PRINTABLE", set(chr(i) for i in range(32, 127)), r"[ -~]"),
-        ("PUNCT", set('!\"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~'), r"[[:punct:]]"),
-    ]
 
-def _unicode_bucket_name(c):
-    return unicodedata.category(c)  # e.g., 'Lu', 'Ll', 'Nd'
+def _format_complement(S, alphabet, max_exclusions, alphabet_name="Σ"):
+    """Try to express *S* as ``Σ`` or ``Σ − {exclusions}``.
 
-def compress_symbols(symbols, alphabet=None, max_exclusions=5, use_unicode=False):
+    Returns a string if the complement is compact, otherwise ``None``.
+    *alphabet_name* controls the symbol used (e.g. ``"A"`` for FST input,
+    ``"B"`` for FST output).
     """
-    Turn a set/list of single-character symbols into a compact label string.
-    If multi-character symbols are present, falls back to a literal union with braces.
+    if alphabet is None:
+        return None
+    sigma = set(alphabet)
+    if S == sigma:
+        return alphabet_name
+    excl = sigma - S
+    if 0 < len(excl) <= max_exclusions and len(excl) < len(S):
+        excl_str = ", ".join(_fmt_symbol(x) for x in sorted(excl, key=repr))
+        return f"{alphabet_name} − {{{excl_str}}}"
+    return None
+
+
+def _format_char_class(chars):
+    """Format single-character symbols as a bracket expression like ``[a-zA-Z0-9]``."""
+    if len(chars) == 1:
+        return _escape_char(next(iter(chars)))
+    toks = _range_tokens(chars)
+    return "[" + "".join(toks) + "]"
+
+
+def compress_symbols(symbols, alphabet=None, max_exclusions=5,
+                     alphabet_name="Σ"):
+    """Turn a set of symbols into a compact label string.
+
+    Tries, in order:
+    1. Complement notation (e.g. ``Σ − {excl}``) when the excluded set is small
+    2. Bracket expression with ranges for single-character symbols: ``[a-z0-9]``
+    3. Literal set notation for everything else: ``{'ab', 'cd'}``
+
+    *alphabet_name* controls the symbol used in complement notation
+    (default ``"Σ"``; use ``"A"``/``"B"`` for FST input/output).
     """
     S = set(symbols)
-    assert len(S) > 0
+    assert S
 
-    # If any symbol length != 1, fall back to literal listing (range compression is for single chars)
-    if any(len(s) != 1 for s in S):
-        items = sorted(S)
-        if alphabet is not None and len(set(alphabet) - S) <= max_exclusions and len(set(alphabet) - S) < len(S):
-            excl = sorted(set(alphabet) - S)
-            excl_str = ", ".join(repr(x) for x in excl)
-            return f"Σ − {{{excl_str}}}"
-        return "{" + ", ".join(repr(x) for x in items) + "}"
+    # Complement notation (works for any symbol type)
+    comp = _format_complement(S, alphabet, max_exclusions, alphabet_name)
+    if comp is not None:
+        return comp
 
-    Σ = set(alphabet) if alphabet is not None else set(S)
+    # Bracket expression only for sets of single characters
+    if all(isinstance(s, str) and len(s) == 1 for s in S):
+        return _format_char_class(S)
 
-    # Full set / small complement
-    if S == Σ:
-        return "Σ"
-    if len(Σ - S) <= max_exclusions and len(Σ - S) < len(S):
-        excl = sorted(Σ - S)
-        excl_str = ", ".join(f'"{_escape_char(c)}"' for c in excl)
-        return f"Σ − {{{excl_str}}}"
+    # Everything else: literal set notation
+    return "{" + ", ".join(_fmt_symbol(x) for x in sorted(S, key=repr)) + "}"
 
-    candidates = []
 
-    # ASCII buckets fully covered
-    for _, bucket, name in _ascii_buckets():
-        cov = bucket & Σ
-        if cov and cov.issubset(S):
-            candidates.append((cov, name, len(name)))
+# ---------------------------------------------------------
+# FST label compression: (input, output) pair → compact label
+# ---------------------------------------------------------
 
-    # Unicode categories fully covered (optional)
-    if use_unicode:
-        cat_to_syms = {}
-        for c in Σ:
-            cat = _unicode_bucket_name(c)
-            cat_to_syms.setdefault(cat, set()).add(c)
-        for cat, bucket in cat_to_syms.items():
-            if bucket.issubset(S):
-                name = f"[[:{cat}:]]"
-                candidates.append((bucket, name, len(name)))
+def _factor_pairs(pairs):
+    """Decompose ``(a, b)`` pairs into a union of cartesian products.
 
-    # ASCII ranges
-    ascii_in_S = [c for c in S if ord(c) < 128]
-    if ascii_in_S:
-        toks = _range_tokens(ascii_in_S)
-        if toks:
-            name = "[" + "".join(toks) + "]"
-            candidates.append((set(ascii_in_S), name, len(name)))
+    Groups by output symbol, then merges groups sharing the same input set.
+    Returns a list of ``(input_set, output_set)`` tuples.
 
-    uncovered = set(S)
-    pieces = []
-    while uncovered:
-        best = None
-        best_gain = 0.0
-        for cov, name, cost in candidates:
-            gain = len(uncovered & cov)
-            if gain <= 0:
-                continue
-            score = gain / (cost + 1e-6)
-            if score > best_gain:
-                best_gain = score
-                best = (cov, name, cost)
-        if best is None:
-            c = sorted(uncovered)[0]
-            pieces.append(f'"{_escape_char(c)}"')
-            uncovered.remove(c)
+    Example: ``{(a,x), (a,y), (b,x), (b,y)}`` → ``[({a,b}, {x,y})]``
+    """
+    by_output = defaultdict(set)
+    for a, b in pairs:
+        by_output[b].add(a)
+
+    input_set_to_outputs = defaultdict(set)
+    for b, inputs in by_output.items():
+        input_set_to_outputs[frozenset(inputs)].add(b)
+
+    return [(inputs, outputs)
+            for inputs, outputs in input_set_to_outputs.items()]
+
+
+def compress_fst_labels(pairs, input_alphabet=None, output_alphabet=None,
+                        max_exclusions=5):
+    """Compress a set of ``(input, output)`` arc label pairs into a compact
+    edge label string.
+
+    - Identity arcs ``a:a`` are displayed without a colon (like FSA arcs)
+      and compressed via ``compress_symbols``.
+    - Deletion arcs ``a:ε`` and insertion arcs ``ε:b`` are grouped and
+      compressed on the non-epsilon side.
+    - Relational arcs ``a:b`` (a≠b, neither ε) are factored into a union
+      of cartesian products via ``_factor_pairs``.
+    """
+    # Categorize pairs
+    eps_out = set()    # ε:b  (insertion)
+    in_eps = set()     # a:ε  (deletion)
+    identity = set()   # a:a  (copy)
+    relational = set() # a:b  where a ≠ b, neither ε
+
+    for a, b in pairs:
+        if a == EPSILON and b == EPSILON:
+            pass  # pure ε:ε handled as epsilon edge by caller
+        elif a == EPSILON:
+            eps_out.add(b)
+        elif b == EPSILON:
+            in_eps.add(a)
+        elif a == b:
+            identity.add(a)
         else:
-            cov, name, _ = best
-            pieces.append(name)
-            uncovered -= cov
+            relational.add((a, b))
 
-    # Regroup many literals back into one bracket if helpful
-    literals = [p for p in pieces if p.startswith('"')]
-    nonlits = [p for p in pieces if not p.startswith('"')]
-    if len(literals) >= 3:
-        lits = [p.strip('"') for p in literals]
-        lit_toks = _range_tokens(lits)
-        nonlits.append("[" + "".join(lit_toks) + "]")
-        pieces = nonlits
+    pieces = []
 
-    # Check complement again vs union length
-    if alphabet is not None:
-        union_len = sum(len(p) for p in pieces) + max(0, len(pieces)-1)
-        if len(Σ - S) <= max_exclusions:
-            excl = sorted(Σ - S)
-            excl_str = ", ".join(f'"{_escape_char(c)}"' for c in excl)
-            comp = f"Σ − {{{excl_str}}}"
-            if len(comp) < union_len:
-                return comp
+    # Identity arcs: display like FSA (no colon)
+    if identity:
+        pieces.append(compress_symbols(
+            identity, alphabet=input_alphabet,
+            max_exclusions=max_exclusions, alphabet_name="A",
+        ))
 
-    return " ∪ ".join(pieces)
+    # Deletion arcs: compress(inputs):ε
+    if in_eps:
+        label = compress_symbols(
+            in_eps, alphabet=input_alphabet,
+            max_exclusions=max_exclusions, alphabet_name="A",
+        )
+        pieces.append(f'{label}:ε')
+
+    # Insertion arcs: ε:compress(outputs)
+    if eps_out:
+        label = compress_symbols(
+            eps_out, alphabet=output_alphabet,
+            max_exclusions=max_exclusions, alphabet_name="B",
+        )
+        pieces.append(f'ε:{label}')
+
+    # Relational arcs: factor into cartesian products
+    if relational:
+        for inputs, outputs in _factor_pairs(relational):
+            in_label = compress_symbols(
+                inputs, alphabet=input_alphabet,
+                max_exclusions=max_exclusions, alphabet_name="A",
+            )
+            out_label = compress_symbols(
+                outputs, alphabet=output_alphabet,
+                max_exclusions=max_exclusions, alphabet_name="B",
+            )
+            pieces.append(f'{in_label}:{out_label}')
+
+    return ', '.join(pieces)
+
 
 # ------------------------------------------------
 # Graphviz integration: merge & visualize edges
 # ------------------------------------------------
+
 def visualize_automaton(
     automaton,
     rankdir="LR",
-    use_unicode=False,
     max_exclusions=5,
     epsilon_symbol="ε",
     node_attrs=None,
     edge_attrs=None,
+    fmt_state=str,
+    sty_node=lambda q: {},
 ):
-    """Visualize a materialized FSA using Graphviz (does not support Lazy automata)."""
+    """Visualize a materialized FSA or FST using Graphviz.
+
+    Parallel edges between the same pair of states are merged into a single
+    edge with a compact label.  For FSAs, labels are compressed via
+    ``compress_symbols``; for FSTs, via ``compress_fst_labels`` (identity
+    arcs displayed without colons, relational arcs factored into cartesian
+    products).
+
+    Args:
+        fmt_state: Callable mapping a state to its display label (default ``str``).
+        sty_node: Callable mapping a state to a dict of extra Graphviz node
+            attributes (e.g. ``{'fillcolor': '#90EE90', 'style': 'filled,rounded'}``).
+    """
     from graphviz import Digraph
 
-    # Merge parallel edges (u, v) by symbol set
-    from collections import defaultdict
-    uv_to_syms = defaultdict(set)
-    uv_to_eps = set()  # track presence of epsilon edges separately
-    for u in automaton.states:
-        for a, v in automaton.arcs(u):
-            if a == EPSILON:
-                uv_to_eps.add((u, v))
-            else:
-                uv_to_syms[(u, v)].add(a)
+    is_fst = hasattr(automaton, 'B')   # FSTs have .A and .B alphabets
+
+    # Assign unique DOT node IDs via enumeration.  Using str(q) as a node ID
+    # is unsafe: str(1) == str('1'), so mixed-type states would silently merge.
+    node_id = {}
+    for i, q in enumerate(automaton.states):
+        node_id[q] = f"n{i}"
+
+    # Collect and merge parallel edges
+    uv_to_eps = set()
+
+    if is_fst:
+        uv_to_pairs = defaultdict(set)
+        for u in automaton.states:
+            for a, b, v in automaton.arcs(u):
+                if a == EPSILON and b == EPSILON:
+                    uv_to_eps.add((u, v))
+                else:
+                    uv_to_pairs[(u, v)].add((a, b))
+        input_alpha = automaton.A - {EPSILON}
+        output_alpha = automaton.B - {EPSILON}
+    else:
+        uv_to_syms = defaultdict(set)
+        for u in automaton.states:
+            for a, v in automaton.arcs(u):
+                if a == EPSILON:
+                    uv_to_eps.add((u, v))
+                else:
+                    uv_to_syms[(u, v)].add(a)
 
     # Graphviz setup
     _node_attrs = dict(
@@ -201,28 +289,36 @@ def visualize_automaton(
     )
 
     # Invisible entry arrow for each start state
-    for s in automaton.start:
-        ghost = f"__start_{s}"
+    for q in automaton.start:
+        ghost = f"__ghost_{node_id[q]}"
         dot.node(ghost, label="", shape="point", width="0")
-        dot.edge(ghost, str(s), label="")
+        dot.edge(ghost, node_id[q])
 
-    # Nodes (doublecircle for finals)
+    # Nodes
     for q in automaton.states:
-        is_final = automaton.is_final(q)
-        if is_final:
-            dot.node(str(q), peripheries='2')
-        else:
-            dot.node(str(q))
+        label = _html.escape(str(fmt_state(q)))
+        sty = dict(peripheries='2' if automaton.is_final(q) else '1')
+        sty.update(sty_node(q))
+        dot.node(node_id[q], label=label, **sty)
 
-    # First, epsilon-only edges
-    for (u, v) in sorted(uv_to_eps):
-        # If there are both epsilon and symbol edges u→v, we’ll make two edges.
-        kwargs = {}
-        dot.edge(str(u), str(v), label=epsilon_symbol, **kwargs)
+    # Epsilon edges
+    for u, v in uv_to_eps:
+        dot.edge(node_id[u], node_id[v], label=epsilon_symbol)
 
-    # Then symbol edges
-    for (u, v), S in sorted(uv_to_syms.items()):
-        label = compress_symbols(S, alphabet=automaton.syms - {EPSILON}, max_exclusions=max_exclusions, use_unicode=use_unicode)
-        dot.edge(str(u), str(v), label=label)
+    # Content edges
+    if is_fst:
+        for (u, v), pairs in uv_to_pairs.items():
+            label = compress_fst_labels(
+                pairs, input_alpha, output_alpha,
+                max_exclusions=max_exclusions,
+            )
+            dot.edge(node_id[u], node_id[v], label=label)
+    else:
+        for (u, v), S in uv_to_syms.items():
+            label = compress_symbols(
+                S, alphabet=automaton.syms - {EPSILON},
+                max_exclusions=max_exclusions,
+            )
+            dot.edge(node_id[u], node_id[v], label=label)
 
     return dot
