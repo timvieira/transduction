@@ -42,7 +42,7 @@ have terminated. Both are represented as finite automata.
 
 | Class | File | Description |
 |-------|------|-------------|
-| `LMState` | `lm/base.py` | ABC: `logp_next`, `eos`, `<<`, `advance`, `greedy_decode`, `sample_decode` |
+| `LMState` | `lm/base.py` | ABC: `logp_next`, `eos`, `<<`, `__call__`, `greedy_decode`, `sample_decode` |
 | `ByteNgramLM` / `CharNgramLM` | `lm/ngram.py` | Lightweight n-gram LMs for testing |
 | `StateLM` | `lm/statelm.py` | Incremental LM state with KV-cache |
 | `TokenizedLLM` | `lm/statelm.py` | Wraps HuggingFace causal LMs |

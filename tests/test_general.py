@@ -23,7 +23,7 @@ class run_recursive_dfa_decomp:
         self.fst = fst
         self.target_alphabet = self.fst.B - {EPSILON}
         self.depth = depth
-        self.reference = lambda target: Precover(fst, target)
+        self.reference = Precover.factory(fst)
         self.verbosity = verbosity
         self.run(target, depth, IncrementalDFADecomp(fst, target))
 
@@ -49,7 +49,7 @@ class run_peekaboo_incremental:
         self.target_alphabet = self.fst.B - {EPSILON}
         self.depth = depth
         self.peekaboo = peekaboo_incremental.Peekaboo(fst)
-        self.reference = lambda target: Precover(fst, target)
+        self.reference = Precover.factory(fst)
         self.verbosity = verbosity
         self.run(target, depth)
 
@@ -84,7 +84,7 @@ class run_peekaboo_nonrecursive:
         self.target_alphabet = self.fst.B - {EPSILON}
         self.depth = depth
         self.peekaboo = peekaboo_nonrecursive.Peekaboo(fst)
-        self.reference = lambda target: Precover(fst, target)
+        self.reference = Precover.factory(fst)
         self.verbosity = verbosity
         self.run(target, depth)
 
@@ -119,7 +119,7 @@ class run_nonrecursive_dfa_decomp:
         self.target_alphabet = self.fst.B - {EPSILON}
         self.depth = depth
         self.peekaboo = lambda target: NonrecursiveDFADecomp(fst, target)
-        self.reference = lambda target: Precover(fst, target)
+        self.reference = Precover.factory(fst)
         self.verbosity = verbosity
         self.run(target, depth)
 
@@ -156,7 +156,7 @@ class run_token_decompose:
             if self.all_univ
             else (lambda target: NonrecursiveDFADecomp(fst, target))
         )
-        self.reference = lambda target: Precover(fst, target)
+        self.reference = Precover.factory(fst)
         self.verbosity = verbosity
         self.run(target, depth)
 
@@ -187,7 +187,7 @@ class run_rust_decomp:
         self.target_alphabet = self.fst.B - {EPSILON}
         self.depth = depth
         self.rust_decomp = lambda target: RustDecomp(fst, target)
-        self.reference = lambda target: Precover(fst, target)
+        self.reference = Precover.factory(fst)
         self.verbosity = verbosity
         self.run(target, depth)
 
@@ -218,7 +218,7 @@ class run_rust_peekaboo:
         self.target_alphabet = self.fst.B - {EPSILON}
         self.depth = depth
         self.peekaboo = RustPeekaboo(fst)
-        self.reference = lambda target: Precover(fst, target)
+        self.reference = Precover.factory(fst)
         self.verbosity = verbosity
         self.run(target, depth)
 

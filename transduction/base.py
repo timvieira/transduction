@@ -17,7 +17,7 @@ class DecompositionFunction(ABC):
         result.quotient          # set of source strings
         result.remainder         # set of source strings
 
-    Implementations: AbstractAlgorithm, LazyIncremental
+    Implementations: AbstractAlgorithm
     """
     @abstractmethod
     def __call__(self, target) -> 'PrecoverDecomp': ...
@@ -35,7 +35,7 @@ class DecompositionResult(ABC):
         result.quotient    # FSA
         result.remainder   # FSA
 
-    Implementations: NonrecursiveDFADecomp, TokenDecompose, RustDecomp
+    Implementations: Precover, NonrecursiveDFADecomp, TokenDecompose, RustDecomp
     """
     quotient: 'FSA'
     remainder: 'FSA'
@@ -55,10 +55,17 @@ class IncrementalDecomposition(DecompositionResult):
         state.quotient           # FSA for target 'ab'
         state.remainder          # FSA for target 'ab'
 
-    Implementations: PeekabooState, IncrementalDFADecomp
+    Implementations: PeekabooState, IncrementalDFADecomp, LazyIncremental
     """
     @abstractmethod
     def __rshift__(self, y) -> 'IncrementalDecomposition': ...
+
+    def __call__(self, ys):
+        """Advance state by a sequence of target symbols. Returns the final state."""
+        s = self
+        for y in ys:
+            s = s >> y
+        return s
 
 
 class PrecoverDecomp:

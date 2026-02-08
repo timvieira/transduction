@@ -156,7 +156,7 @@ transduction/              Python package
   rust_bridge.py           Python <-> Rust conversion layer
   examples.py              Example FSTs for testing
   lm/                      Language model integration
-    base.py                LMState ABC (logp_next, eos, <<, advance, greedy/sample decode)
+    base.py                LMState ABC (logp_next, eos, <<, __call__, greedy/sample decode)
     ngram.py               ByteNgramLM, CharNgramLM (lightweight n-gram LMs)
     statelm.py             StateLM: incremental LM state with KV caching
     transduced.py          TransducedLM: pushforward of an inner LM through an FST

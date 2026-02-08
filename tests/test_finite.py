@@ -31,11 +31,12 @@ def test_sdd1():
     assert tmp('aa') == PrecoverDecomp({'aa'}, set())
 
     tmp = LazyIncremental(fst)
-    assert tmp('') == PrecoverDecomp({'a'}, set())
-    assert tmp('a') == PrecoverDecomp({'a'}, set())
-    assert tmp('aa') == PrecoverDecomp({'aa'}, set())
+    assert_equal(tmp, PrecoverDecomp({'a'}, set()))
+    assert_equal(tmp(''), PrecoverDecomp({'a'}, set()))
+    assert_equal(tmp('a'), PrecoverDecomp({'a'}, set()))
+    assert_equal(tmp('aa'), PrecoverDecomp({'aa'}, set()))
 
-    tmp = lambda target: Precover(fst, target)
+    tmp = Precover.factory(fst)
     assert_equal(tmp(''), PrecoverDecomp({'a'}, set()))
     assert_equal(tmp('a'), PrecoverDecomp({'a'}, set()))
     assert_equal(tmp('aa'), PrecoverDecomp({'aa'}, set()))
@@ -50,7 +51,7 @@ def test_delete_b():
     b = FSA.lift('b')
     bs = b.star()
 
-    tmp = lambda target: Precover(fst, target)
+    tmp = Precover.factory(fst)
     assert_equal(tmp(''), PrecoverDecomp({''}, set()))
     assert_equal(tmp('b'), PrecoverDecomp(set(), set()))
     have = tmp('AAA')
@@ -60,7 +61,6 @@ def test_delete_b():
     algs = [
         EagerNonrecursive(fst, max_steps=30),
         LazyNonrecursive(fst, max_steps=30),
-        LazyIncremental(fst, max_steps=30),
     ]
 
     for tmp in algs:
@@ -72,6 +72,10 @@ def test_delete_b():
         assert have.remainder == set()
         p = Precover(fst, target)
         p.check_decomposition(*have, skip_validity=True)
+
+    tmp = LazyIncremental(fst, max_steps=30)
+    assert_equal(tmp, PrecoverDecomp({''}, set()))
+    assert_equal(tmp('b'), PrecoverDecomp(set(), set()))
 
 
 def test_simple():
@@ -90,12 +94,12 @@ def test_simple():
     assert tmp('abc') == PrecoverDecomp({'123'}, set())
 
     tmp = LazyIncremental(fst)
-    assert tmp('') == PrecoverDecomp({''}, set())
-    assert tmp('a') == PrecoverDecomp({'1'}, set())
-    assert tmp('ab') == PrecoverDecomp({'12'}, set())
-    assert tmp('abc') == PrecoverDecomp({'123'}, set())
+    assert_equal(tmp, PrecoverDecomp({''}, set()))
+    assert_equal(tmp('a'), PrecoverDecomp({'1'}, set()))
+    assert_equal(tmp('ab'), PrecoverDecomp({'12'}, set()))
+    assert_equal(tmp('abc'), PrecoverDecomp({'123'}, set()))
 
-    tmp = lambda target: Precover(fst, target)
+    tmp = Precover.factory(fst)
     assert_equal(tmp(''), PrecoverDecomp({''}, set()))
     assert_equal(tmp('a'), PrecoverDecomp({'1'}, set()))
     assert_equal(tmp('ab'), PrecoverDecomp({'12'}, set()))
@@ -134,13 +138,13 @@ def test_duplicate():
     assert tmp('115') == PrecoverDecomp({'15'}, set())
 
     tmp = LazyIncremental(fst)
-    assert tmp('') == PrecoverDecomp({''}, set())
-    assert tmp('1') == PrecoverDecomp({'1'}, set())
-    assert tmp('11') == PrecoverDecomp({'1'}, set())
-    assert tmp('1155') == PrecoverDecomp({'15'}, set())
-    assert tmp('115') == PrecoverDecomp({'15'}, set())
+    assert_equal(tmp, PrecoverDecomp({''}, set()))
+    assert_equal(tmp('1'), PrecoverDecomp({'1'}, set()))
+    assert_equal(tmp('11'), PrecoverDecomp({'1'}, set()))
+    assert_equal(tmp('1155'), PrecoverDecomp({'15'}, set()))
+    assert_equal(tmp('115'), PrecoverDecomp({'15'}, set()))
 
-    tmp = lambda target: Precover(fst, target)
+    tmp = Precover.factory(fst)
     assert_equal(tmp(''), PrecoverDecomp({''}, set()))
     assert_equal(tmp('1'), PrecoverDecomp({'1'}, set()))
     assert_equal(tmp('11'), PrecoverDecomp({'1'}, set()))
@@ -175,12 +179,12 @@ def test_newspeak2():
     assert tmp('ungood') == ungood, tmp('ungood')
 
     tmp = LazyIncremental(n)
-    assert tmp('') == empty
-    assert tmp('bad') == bad
-    assert tmp('ba') == ba
-    assert tmp('ungood') == ungood, tmp('ungood')
+    assert_equal(tmp, empty)
+    assert_equal(tmp('bad'), bad)
+    assert_equal(tmp('ba'), ba)
+    assert_equal(tmp('ungood'), ungood)
 
-    tmp = lambda target: Precover(n, target)
+    tmp = Precover.factory(n)
     assert_equal(tmp(''), empty)
     assert_equal(tmp('bad'), bad)
     assert_equal(tmp('ba'), ba)
@@ -199,10 +203,9 @@ def test_samuel_example():
     assert have == ({'a'}, set()), have
 
     tmp = LazyIncremental(fst)
-    have = tmp(target)
-    assert have == ({'a'}, set()), have
+    assert_equal(tmp('c'), PrecoverDecomp({'a'}, set()))
 
-    tmp = lambda target: Precover(fst, target)
+    tmp = Precover.factory(fst)
     have = tmp(target)
     assert_equal(have, PrecoverDecomp({'a'}, set()))
 

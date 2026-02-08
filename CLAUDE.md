@@ -27,7 +27,7 @@
 
 Self-contained language model interface for use with enumeration/sampling:
 
-- `transduction/lm/base.py` — `LMState` ABC (defines `logp_next`, `eos`, `__lshift__`, plus `advance`, `greedy_decode`, `sample_decode`)
+- `transduction/lm/base.py` — `LMState` ABC (defines `logp_next`, `eos`, `__lshift__`, `__call__`, `greedy_decode`, `sample_decode`)
 - `transduction/lm/ngram.py` — `ByteNgramLM`, `CharNgramLM` (lightweight n-gram LMs for testing)
 - `transduction/lm/statelm.py` — `StateLM`, `TokenizedLLM`, `load_model_by_name`
   - Wraps HuggingFace causal LMs with KV-cache-based incremental decoding

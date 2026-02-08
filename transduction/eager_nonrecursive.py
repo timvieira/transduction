@@ -1,4 +1,4 @@
-from transduction.base import AbstractAlgorithm, PrecoverDecomp
+from transduction.base import AbstractAlgorithm, DecompositionResult, PrecoverDecomp
 from transduction.fsa import FSA, EPSILON
 from transduction.universality import UniversalityFilter
 from transduction.util import display_table
@@ -15,7 +15,7 @@ from functools import cached_property
 from collections import deque
 
 
-class Precover:
+class Precover(DecompositionResult):
     """
     Representation of the precover of target string `target` in the FST `fst`.
 
@@ -23,6 +23,17 @@ class Precover:
     may be infinite.  The key is to represent them each as automata.
 
     """
+
+    @classmethod
+    def factory(cls, fst, **kwargs):
+        """Return a callable that creates Precover instances for a fixed FST.
+
+        Usage::
+
+            ref = Precover.factory(fst)
+            result = ref('abc')   # -> Precover(fst, 'abc')
+        """
+        return lambda target: cls(fst, target, **kwargs)
 
     def __init__(self, fst, target, impl='push'):
         self.fst = fst

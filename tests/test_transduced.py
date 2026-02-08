@@ -64,7 +64,7 @@ def brute_force_pushforward(inner_lm, fst, target, max_source_len=8):
 
     def source_logp(source):
         """Compute log P_inner(source) including EOS."""
-        state = inner_lm.initial().advance(source)
+        state = inner_lm.initial()(source)
         return state.logp + state.logp_next[state.eos]
 
     # Group by source to deduplicate outputs (relation() may yield
@@ -390,28 +390,28 @@ class TestLMState:
         tokens = state.sample_decode(max_len=3)
         assert len(tokens) <= 3
 
-    # --- advance tests ---
+    # --- __call__ tests ---
 
     def test_ngram_advance(self, ngram_lm):
-        """advance on NgramState matches sequential <<."""
+        """__call__ on NgramState matches sequential <<."""
         state = ngram_lm.initial()
         s1 = state << b'a' << b'b'
-        s2 = state.advance([b'a', b'b'])
+        s2 = state([b'a', b'b'])
         assert s1.logp == pytest.approx(s2.logp)
 
     def test_transduced_advance(self, char_ngram_lm):
-        """advance on TransducedState matches sequential <<."""
+        """__call__ on TransducedState matches sequential <<."""
         fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
         fst = copy_fst(fst_alpha)
         tlm = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
         state = tlm.initial()
         s1 = state << 'a' << 'b'
-        s2 = state.advance(['a', 'b'])
+        s2 = state(['a', 'b'])
         assert s1.logp == pytest.approx(s2.logp)
 
     def test_advance_empty(self, ngram_lm):
-        """advance with empty sequence returns same state."""
+        """__call__ with empty sequence returns same state."""
         state = ngram_lm.initial()
-        s = state.advance([])
+        s = state([])
         assert s is state
 

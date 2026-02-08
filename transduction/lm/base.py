@@ -56,6 +56,7 @@ class LMState(ABC):
                      and __getitem__(token) → logp
         eos        — EOS sentinel token (attribute or property)
         __lshift__ — advance state by one token, returns new state
+        __call__   — advance state by a sequence of tokens, returns final state
     """
 
     @property
@@ -79,7 +80,7 @@ class LMState(ABC):
             state = state << best_tok
         return tokens
 
-    def advance(self, xs):
+    def __call__(self, xs):
         """Advance state by a sequence of tokens. Returns the final state."""
         s = self
         for x in xs:
