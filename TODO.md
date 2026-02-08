@@ -1,0 +1,146 @@
+# Documentation & Naming TODO
+
+## Critical — would confuse a new contributor
+
+- [ ] **Explain "precover" concept.** It appears in class names, docstrings, and
+  variable names across the entire codebase (`PrecoverDecomp`, `PrecoverNFA`,
+  `Precover`, `LazyPrecoverNFA`) but nowhere is there a plain-English
+  explanation of what a precover is. The LaTeX formula in `PrecoverDecomp`
+  assumes the reader already knows. Add a conceptual explanation (e.g., in
+  `base.py` or a top-level docstring).
+
+- [ ] **Document `Lazy` ABC methods (`lazy.py`).** `arcs()`, `arcs_x()`,
+  `start()`, `is_final()` — the core interface for the lazy automaton
+  framework — are all undocumented. The difference between `arcs()` and
+  `arcs_x()` is particularly unclear.
+
+- [ ] **Document `PeekabooState` internals (`peekaboo_incremental.py`).** Has
+  ~10 undocumented internal state variables (`decomp`, `resume_frontiers`,
+  `incoming`, `_univ`, etc.). The incremental computation logic is complex and
+  there's no overview of how the pieces fit together.
+
+## High — causes confusion
+
+- [ ] **Document `FST.arcs()` dual return signature (`fst.py`).** With `x=None`
+  it yields `(a, b, j)`, with `x` provided it yields `(b, j)`. No docstring
+  explains this.
+
+- [ ] **Document minimization method tradeoffs (`fsa.py`).** Three methods
+  `min_brzozowski()`, `min_fast()`, `min_faster()` with no guidance on which to
+  use. `min` aliases `min_faster` but there's no explanation of tradeoffs.
+
+- [ ] **Document `ensure_arc_indexes()` (`fst.py`).** Creates 4 indexes with
+  cryptic names: `index_iy_xj`, `index_i_xj`, `index_ix_j`, `index_ixy_j` —
+  no explanation of the naming scheme or when each is needed.
+
+- [ ] **Document `AbstractAlgorithm` / `LazyIncremental` constructor params
+  (`base.py`, `lazy_incremental.py`).** `empty_source`, `empty_target`,
+  `extend` — what are these for? The `extend` lambda especially needs
+  explanation.
+
+- [ ] **Document `Precover` class (`eager_nonrecursive.py`).** Constructor
+  parameter `impl='push'` is unexplained. What are the `impl` options and when
+  would you pick one over the other?
+
+- [ ] **Document `EpsilonRemove` (`lazy.py`).** No docstring at all. What does
+  it do? How does epsilon removal work in the lazy framework?
+
+## Medium — naming issues
+
+- [ ] **Rename `FSA.D(x)` (`fsa.py`).** Single-letter method name; "left
+  derivative" is the only comment. Consider `left_derivative(x)`.
+
+- [ ] **Rename `FSA.p()` (`fsa.py`).** Single-letter method for Kleene plus.
+  Consider `plus()` or `kleene_plus()`.
+
+- [ ] **Clarify `Relevance` wrapper (`precover_nfa.py`).** "Relevance" is
+  vague; the `startswith` pruning logic has no explanation.
+
+- [ ] **Clarify `FilteredDFA` vs `TruncatedDFA`.** Similar names in
+  `peekaboo_nonrecursive.py` and `peekaboo_incremental.py` respectively;
+  differences unclear.
+
+- [ ] **Rename `spawn(keep_init=)` (`fst.py`).** `keep_init` is inconsistent
+  with the new `start`/`stop` naming. Should be `keep_start`.
+
+- [ ] **Document `to_rust_fst()` (`rust_bridge.py`).** Magic number
+  `RUST_EPSILON = 2**32 - 1` needs explanation. Return tuple
+  `(rust_fst, sym_map, state_map)` should document each element.
+
+- [ ] **Document `extract_token_bytes()` and `ByteTrie`
+  (`token_decompose.py`).** "Hub structure" comment is cryptic. What is a
+  "hub"? When does this work vs fail?
+
+- [ ] **Document `enumeration.py` classes.** `prioritized_enumeration` and
+  `importance_sampling` lack algorithmic explanations. `Item.weight` units
+  (log probability?) undocumented.
+
+- [ ] **Document `bpe_wfst()` (`bpe.py`).** Acronyms undefined (BPE WFST).
+  Parameters `tokenizer`, `readable` lack documentation.
+
+## Inline TODOs/XXXs from source
+
+### fst.py
+
+- [ ] Ensure epsilon sentinel objects (`ε_1`, `ε_2`) are truly unique (line 10)
+- [ ] Add tests for `dump()` method (line 52)
+- [ ] Refactor `delta` data structure to separate input/output labels (line 69)
+- [ ] Add tests for `make_total()` (line 228)
+- [ ] Guard against state-renaming collisions in `make_total()` (line 236)
+- [ ] Add assertions for bad epsilon cases in `_compose()` (line 294)
+- [ ] Convert `_compose()` to lazy machine pattern (line 295)
+- [ ] Convert `_augment_epsilon_transitions()` to lazy pattern (line 346)
+- [ ] Tighten `reachable()`/`coreachable()` — no need to materialize `adj`
+  (line 554)
+- [ ] Consider implementing `coreachable()` as `self.reverse().reachable()`
+  (line 569)
+
+### dfa_decomp_incremental.py
+
+- [ ] Known issue: `IncrementalDFADecomp` diverges on some inputs (e.g.,
+  `triplets_of_doom`) because it doesn't truncate the target buffer (line 7)
+- [ ] DFA may have infinitely many states (line 20)
+- [ ] Optimize: copying parent state is slow (line 42)
+
+### peekaboo_incremental.py
+
+- [ ] Revisit whether merging `incoming` dicts across depths is correct
+  (line 135)
+- [ ] Fix graphviz visualization: plates show precover for next-symbol
+  extension, not current target (line 159)
+- [ ] Use `Integerizer` in graphviz so nodes aren't misidentified by string
+  repr (line 165)
+- [ ] Color active vs inactive nodes in graphviz (line 168)
+- [ ] Add output ports between graphviz plates (line 174)
+
+### peekaboo_nonrecursive.py
+
+- [ ] Hook up `Peekaboo`/`PeekabooStrings` to the finite test suite (line 14)
+
+### fsa.py
+
+- [ ] Use indexing to find nonempty set difference in `min_fast()` (line 441)
+- [ ] Support NFA/epsilon arcs in `epsremove()` (line 627)
+
+### lazy_incremental.py
+
+- [ ] `frontier()` state depends on target used for filtering — document or fix
+  (line 90)
+- [ ] Document the "lazy frontier machine" arcs (line 108)
+- [ ] `candidates` vs inner loop duplication (line 155)
+
+### lm/statelm.py
+
+- [ ] Add documentation for `decode_hf_tokenizer` assumptions (line 36)
+- [ ] Handle tokenizers with multiple byte representations for the same token
+  (line 162)
+
+### tests/test_finite.py
+
+- [ ] Unify test frameworks or bring recursive testing strategy to finite tests
+  (line 6)
+
+### examples.py
+
+- [ ] Dump pynini-based machine to Python code to remove pynini dependency
+  (line 294, commented out)

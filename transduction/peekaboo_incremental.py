@@ -1,8 +1,9 @@
 from transduction.base import PrecoverDecomp, IncrementalDecomposition
 from transduction.lazy import Lazy
 from transduction.fsa import FSA, frozenset
-from transduction.fst import (
-    EPSILON, check_all_input_universal, compute_ip_universal_states,
+from transduction.fst import EPSILON
+from transduction.universality import (
+    check_all_input_universal, compute_ip_universal_states,
     UniversalityFilter,
 )
 from transduction.precover_nfa import PeekabooLookaheadNFA as PeekabooPrecover

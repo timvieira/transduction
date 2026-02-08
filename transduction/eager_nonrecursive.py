@@ -1,6 +1,6 @@
 from transduction.base import AbstractAlgorithm, PrecoverDecomp
 from transduction.fsa import FSA, EPSILON
-from transduction.fst import UniversalityFilter
+from transduction.universality import UniversalityFilter
 from transduction.util import display_table
 from transduction.lazy import is_universal
 from transduction.precover_nfa import (

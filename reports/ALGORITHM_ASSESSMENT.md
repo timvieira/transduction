@@ -86,7 +86,7 @@ computation via the `>>` operator for step-by-step decoding.
 Check `check_all_input_universal(fst)` first. If true, use **`TokenDecompose`**:
 
 ```python
-from transduction.fst import check_all_input_universal
+from transduction.universality import check_all_input_universal
 from transduction.token_decompose import TokenDecompose
 
 if check_all_input_universal(fst):

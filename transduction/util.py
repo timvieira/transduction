@@ -13,7 +13,13 @@ def _pick_from_mimebundle(obj, prefer=(
     "text/markdown",
     "application/json",
     "text/plain",
-)):   
+)):
+    """Extract the best HTML-embeddable representation from an object's mimebundle.
+
+    Queries ``obj._repr_mimebundle_()`` and returns an HTML fragment for the
+    highest-priority MIME type found.  Returns ``None`` if no mimebundle is
+    available.
+    """   
     bundle = None
 
     if hasattr(obj, "_repr_mimebundle_"):
@@ -64,6 +70,12 @@ def _pick_from_mimebundle(obj, prefer=(
 
 
 def _as_html_cell(x):
+    """Convert an arbitrary object to an HTML fragment for embedding in a table cell.
+
+    Tries, in order: unwrapping IPython ``HTML``/``SVG`` objects, mimebundle
+    extraction, ``_repr_html_``/``_repr_svg_``/image repr methods, LaTeX repr,
+    and finally falls back to ``html.escape(str(x))`` inside ``<pre>`` tags.
+    """
     if isinstance(x, HTML):
         return x.data
     if isinstance(x, SVG):
@@ -107,6 +119,16 @@ def _as_html_cell(x):
 
 
 def format_table(rows, headings=None):
+    """Build an HTML ``<table>`` string from a list of rows.
+
+    Each element in a row is converted to HTML via ``_as_html_cell``, so cells
+    can contain IPython display objects (FSA/FST graphviz, images, HTML
+    fragments, etc.) alongside plain values.
+
+    Args:
+        rows: Iterable of row iterables.  Each element becomes one ``<td>``.
+        headings: Optional column header labels.
+    """
     head_html = ""
     if headings:
         head_cells = "".join(f"<th>{h}</th>" for h in headings)
@@ -126,4 +148,10 @@ def format_table(rows, headings=None):
 
 
 def display_table(rows, **kwargs):
+    """Render a table in a Jupyter notebook.
+
+    Convenience wrapper that calls ``format_table`` and displays the result
+    as an IPython ``HTML`` object.  Accepts the same keyword arguments as
+    ``format_table`` (e.g. ``headings``).
+    """
     display(HTML(format_table(rows, **kwargs)))

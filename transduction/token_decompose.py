@@ -19,7 +19,7 @@ the O(|fst_states| * N) states produced by the generic approach.
 from collections import defaultdict, deque
 from transduction.base import DecompositionResult
 from transduction.fsa import FSA, EPSILON
-from transduction.fst import check_all_input_universal
+from transduction.universality import check_all_input_universal
 
 
 def extract_token_bytes(fst):

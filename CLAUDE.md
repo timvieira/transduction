@@ -4,17 +4,21 @@
 
 ### Python Package
 
-- `transduction/fst.py` — FST class, UniversalityFilter
+- `transduction/fst.py` — FST class
+- `transduction/universality.py` — UniversalityFilter, check_all_input_universal, compute_ip_universal_states
 - `transduction/fsa.py` — FSA class
-- `transduction/peekaboo_recursive.py` — Peekaboo algorithm (recommended for autoregressive decoding)
+- `transduction/base.py` — ABCs (DecompositionFunction, DecompositionResult, IncrementalDecomposition), PrecoverDecomp, AbstractAlgorithm
+- `transduction/precover_nfa.py` — All PrecoverNFA variants (PrecoverNFA, TruncationMarkerPrecoverNFA, PopPrecoverNFA, TargetSideBuffer, Relevance, PeekabooLookaheadNFA, PeekabooFixedNFA)
+- `transduction/peekaboo_incremental.py` — Peekaboo algorithm (recommended for autoregressive decoding)
 - `transduction/peekaboo_nonrecursive.py` — Non-incremental peekaboo
 - `transduction/eager_nonrecursive.py` — Reference Precover implementation
 - `transduction/dfa_decomp_nonrecursive.py` — NonrecursiveDFADecomp
-- `transduction/dfa_decomp_recursive.py` — RecursiveDFADecomp (diverges on some inputs)
+- `transduction/dfa_decomp_incremental.py` — IncrementalDFADecomp (diverges on some inputs)
+- `transduction/lazy_incremental.py` — LazyIncremental decomposition
 - `transduction/token_decompose.py` — BPE-optimized fast path
 - `transduction/enumeration.py` — LM-weighted path enumeration (prioritized_enumeration, importance_sampling)
 - `transduction/lazy.py` — Lazy automaton framework (LazyDeterminize, EpsilonRemove)
-- `transduction/goo.py` — BPE WFST builder (`bpe_wfst`), LazyPrecoverNFA, NonrecursiveDFADecomp
+- `transduction/bpe.py` — BPE WFST builder (`bpe_wfst`)
 - `transduction/rust_bridge.py` — Python ↔ Rust conversion layer
 - `transduction/examples.py` — Example FSTs for testing
 
@@ -60,7 +64,9 @@ Eliminated deps (previously external, now inlined):
 
 - `test_general.py`: 90/91 pass, 1 xfail (`test_triplets_of_doom[recursive_dfa_decomp]` — pre-existing Python timeout)
 - `test_enumeration.py`: 12/12 pass (9 small grammar tests + 3 BPE-scale GPT-2 integration tests)
-- 7 decomposition implementations tested: recursive_dfa_decomp, nonrecursive_dfa_decomp, peekaboo_recursive, peekaboo_nonrecursive, token_decompose, rust_decomp, rust_peekaboo
+- `test_push_labels.py`: 30 pass
+- `test_transduced.py`: 23 pass
+- 7 decomposition implementations tested: incremental_dfa_decomp, nonrecursive_dfa_decomp, peekaboo_incremental, peekaboo_nonrecursive, token_decompose, rust_decomp, rust_peekaboo
 
 ## Build Pipeline
 
@@ -75,6 +81,10 @@ pip install --force-reinstall crates/transduction-core/target/wheels/transductio
 python -m pytest tests/test_general.py -v
 python -m pytest tests/test_enumeration.py -v
 ```
+
+## TODO
+
+See `TODO.md` in the project root for documentation and naming improvements.
 
 ## Reports
 

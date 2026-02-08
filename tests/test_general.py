@@ -3,7 +3,7 @@ from transduction import examples, FSA, EPSILON, Precover
 from transduction.dfa_decomp_nonrecursive import NonrecursiveDFADecomp
 from transduction.dfa_decomp_incremental import IncrementalDFADecomp
 from transduction.token_decompose import TokenDecompose
-from transduction.fst import check_all_input_universal
+from transduction.universality import check_all_input_universal
 from transduction import peekaboo_nonrecursive
 from transduction import peekaboo_incremental
 
