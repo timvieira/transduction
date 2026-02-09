@@ -55,7 +55,7 @@ class LMState(ABC):
         logp_next  — dict-like with items() → (token, logp) pairs
                      and __getitem__(token) → logp
         eos        — EOS sentinel token (attribute or property)
-        __lshift__ — advance state by one token, returns new state
+        __rshift__ — advance state by one token, returns new state
         __call__   — advance state by a sequence of tokens, returns final state
     """
 
@@ -65,7 +65,7 @@ class LMState(ABC):
         ...
 
     @abstractmethod
-    def __lshift__(self, token):
+    def __rshift__(self, token):
         ...
 
     def greedy_decode(self, max_len=100):
@@ -77,14 +77,14 @@ class LMState(ABC):
             if best_tok == state.eos:
                 break
             tokens.append(best_tok)
-            state = state << best_tok
+            state = state >> best_tok
         return tokens
 
     def __call__(self, xs):
         """Advance state by a sequence of tokens. Returns the final state."""
         s = self
         for x in xs:
-            s = s << x
+            s = s >> x
         return s
 
     def sample(self):
@@ -92,7 +92,7 @@ class LMState(ABC):
         tok = self.logp_next.sample()
         if tok == self.eos:
             return self
-        return self << tok
+        return self >> tok
 
     def sample_decode(self, max_len=100):
         """Sample autoregressively until EOS or max_len. Returns list of tokens."""
@@ -103,5 +103,5 @@ class LMState(ABC):
             if tok == state.eos:
                 break
             tokens.append(tok)
-            state = state << tok
+            state = state >> tok
         return tokens

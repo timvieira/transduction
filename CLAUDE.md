@@ -27,12 +27,12 @@
 
 Self-contained language model interface for use with enumeration/sampling:
 
-- `transduction/lm/base.py` — `LMState` ABC (defines `logp_next`, `eos`, `__lshift__`, `__call__`, `greedy_decode`, `sample_decode`)
+- `transduction/lm/base.py` — `LMState` ABC (defines `logp_next`, `eos`, `__rshift__`, `__call__`, `greedy_decode`, `sample_decode`)
 - `transduction/lm/ngram.py` — `ByteNgramLM`, `CharNgramLM` (lightweight n-gram LMs for testing)
 - `transduction/lm/statelm.py` — `StateLM`, `TokenizedLLM`, `load_model_by_name`
   - Wraps HuggingFace causal LMs with KV-cache-based incremental decoding
   - `StateLM.initial('gpt2')` loads a model and returns the initial state
-  - `state << token` advances by one token (bytes), caching KV pairs
+  - `state >> token` advances by one token (bytes), caching KV pairs
   - `state.logp_next[token]` returns log-probability (accepts bytes or int token ID)
   - `state.eos` returns the EOS token (bytes)
   - Includes inlined dependencies: `decode_hf_tokenizer`, `LazyProb`, `flatten`/`unflatten`

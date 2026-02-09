@@ -204,7 +204,7 @@ from transduction.lm.base import LMState
 class StateLM(LMState):
     """Immutable LM state for incremental decoding with KV cache sharing.
 
-    ``state << token`` returns a new state; the parent's cache is reused.
+    ``state >> token`` returns a new state; the parent's cache is reused.
     Multiple children can branch from the same parent (e.g., in
     ``prioritized_enumeration``).  Linear chains (``importance_sampling``)
     create one child per state.
@@ -219,7 +219,7 @@ class StateLM(LMState):
     Rejected alternatives:
     - ``copy.deepcopy``: slow, opaque, bad with CUDA tensors.
     - Recompute from scratch: defeats the purpose of incremental decoding.
-    - Refcount / lazy clone: fragile — ``<<`` can be called *after* an earlier
+    - Refcount / lazy clone: fragile — ``>>`` can be called *after* an earlier
       child already evaluated ``.out``, so the refcount at creation time doesn't
       predict future children.
 
@@ -229,7 +229,7 @@ class StateLM(LMState):
     ``list.append`` of references — no tensor cloning).  The model's
     ``torch.cat`` inside ``cache.update()`` creates new tensors, leaving the
     parent's originals untouched.  Zero tensor clones, negligible overhead
-    vs. forward pass, safe regardless of ``<<`` ordering.
+    vs. forward pass, safe regardless of ``>>`` ordering.
     """
 
     def __init__(self, lm, logp, context, parent):
@@ -239,7 +239,7 @@ class StateLM(LMState):
         self.context = context
         self.parent = parent
 
-    def __lshift__(self, x):
+    def __rshift__(self, x):
         if x not in self.logp_next or x == self.eos:
             raise ValueError(f"Out of vocabulary: {x!r}")
         return StateLM(

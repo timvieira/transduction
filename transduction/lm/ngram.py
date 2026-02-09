@@ -9,13 +9,13 @@ Usage:
     # Byte-level
     lm = ByteNgramLM.train(b"Hello world.", n=3)
     state = lm.initial()
-    state = state << b'H'
+    state = state >> b'H'
     print(state.logp_next[b'e'])   # log P(e | H)
 
     # Character-level
     lm = CharNgramLM.train("abcabc", n=2)
     state = lm.initial()
-    state = state << 'a'
+    state = state >> 'a'
     print(state.logp_next['b'])    # log P(b | a)
 """
 
@@ -43,7 +43,7 @@ class NgramState(LMState):
     """Immutable n-gram LM state, compatible with StateLM interface.
 
     Supports:
-        state << token     -> new state
+        state >> token     -> new state
         state.logp_next[x] -> log P(x | context)
         state.logp         -> cumulative log probability
         state.eos          -> EOS token
@@ -56,7 +56,7 @@ class NgramState(LMState):
         self.logp = logp
         self.history = history        # full path as nested tuple (like StateLM.context)
 
-    def __lshift__(self, token):
+    def __rshift__(self, token):
         byte_val = _to_byte(token)
         if byte_val is None or bytes([byte_val]) == self.eos:
             raise ValueError(f"Out of vocabulary: {token!r}")
@@ -87,6 +87,10 @@ class NgramState(LMState):
     def path_bytes(self):
         """Recover the full input as a bytes object."""
         return bytes(_to_byte(t) for t in self.path())
+
+    def __lt__(self, other):
+        # Higher logp → smaller → explored first in min-heap
+        return self.logp > other.logp
 
     def __repr__(self):
         ctx_bytes = bytes(self._context)
@@ -182,7 +186,7 @@ class CharNgramState(LMState):
     """Immutable char-level n-gram LM state, compatible with StateLM interface.
 
     Supports:
-        state << token     -> new state
+        state >> token     -> new state
         state.logp_next[x] -> log P(x | context)
         state.logp         -> cumulative log probability
         state.eos          -> EOS token
@@ -195,7 +199,7 @@ class CharNgramState(LMState):
         self.logp = logp
         self.history = history
 
-    def __lshift__(self, token):
+    def __rshift__(self, token):
         if token not in self.logp_next or token == self.eos:
             raise ValueError(f"Out of vocabulary: {token!r}")
         lp = self.logp_next[token]
@@ -218,6 +222,10 @@ class CharNgramState(LMState):
         tokens.reverse()
         return tokens
 
+    def __lt__(self, other):
+        # Higher logp → smaller → explored first in min-heap
+        return self.logp > other.logp
+
     def __repr__(self):
         return f'CharNgramState({self._context!r})'
 
@@ -232,7 +240,7 @@ class CharNgramLM:
     Usage:
         lm = CharNgramLM.train("abcabc", n=2)
         state = lm.initial()
-        state = state << 'a'
+        state = state >> 'a'
         print(state.logp_next['b'])
     """
 

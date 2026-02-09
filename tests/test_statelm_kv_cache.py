@@ -22,11 +22,11 @@ class TestKVCacheBranching:
 
     def test_branching_produces_correct_logprobs(self, lm):
         """Two children from same parent should each get correct logprobs."""
-        parent = lm << b' the'
+        parent = lm >> b' the'
 
         # Branch: create two children from the same parent
-        child_a = parent << b' cat'
-        child_b = parent << b' dog'
+        child_a = parent >> b' cat'
+        child_b = parent >> b' dog'
 
         # Evaluate both children
         logp_a = child_a.logp_next[b' is']
@@ -40,23 +40,23 @@ class TestKVCacheBranching:
         assert logp_a != logp_b
 
         # Verify against fresh computation (no shared cache)
-        fresh_a = lm << b' the' << b' cat'
-        fresh_b = lm << b' the' << b' dog'
+        fresh_a = lm >> b' the' >> b' cat'
+        fresh_b = lm >> b' the' >> b' dog'
 
         assert np.isclose(logp_a, fresh_a.logp_next[b' is'], rtol=1e-5)
         assert np.isclose(logp_b, fresh_b.logp_next[b' is'], rtol=1e-5)
 
     def test_deep_branching(self, lm):
         """Test branching at multiple depths."""
-        root = lm << b' hello'
+        root = lm >> b' hello'
 
         # Branch at depth 1
-        branch_a = root << b' world'
-        branch_b = root << b' there'
+        branch_a = root >> b' world'
+        branch_b = root >> b' there'
 
         # Further branch from branch_a
-        leaf_a1 = branch_a << b' how'
-        leaf_a2 = branch_a << b' what'
+        leaf_a1 = branch_a >> b' how'
+        leaf_a2 = branch_a >> b' what'
 
         # Evaluate in interleaved order (stresses cache sharing)
         results = {
@@ -70,9 +70,9 @@ class TestKVCacheBranching:
             assert np.isfinite(val), f"{key} logprob should be finite"
 
         # Verify against fresh computation
-        fresh_a1 = lm << b' hello' << b' world' << b' how'
-        fresh_a2 = lm << b' hello' << b' world' << b' what'
-        fresh_b = lm << b' hello' << b' there'
+        fresh_a1 = lm >> b' hello' >> b' world' >> b' how'
+        fresh_a2 = lm >> b' hello' >> b' world' >> b' what'
+        fresh_b = lm >> b' hello' >> b' there'
 
         assert np.isclose(results['a1'], fresh_a1.logp_next[b' are'], rtol=1e-5)
         assert np.isclose(results['a2'], fresh_a2.logp_next[b' is'], rtol=1e-5)
@@ -80,11 +80,11 @@ class TestKVCacheBranching:
 
     def test_many_children_from_one_parent(self, lm):
         """Stress test: many children branching from single parent."""
-        parent = lm << b' the'
+        parent = lm >> b' the'
 
         # Create many children
         suffixes = [b' cat', b' dog', b' bird', b' fish', b' horse']
-        children = [parent << s for s in suffixes]
+        children = [parent >> s for s in suffixes]
 
         # Evaluate all children
         logps = [c.logp_next[b' is'] for c in children]
@@ -95,5 +95,5 @@ class TestKVCacheBranching:
 
         # Verify against fresh computation
         for suffix, child_logp in zip(suffixes, logps):
-            fresh = lm << b' the' << suffix
+            fresh = lm >> b' the' >> suffix
             assert np.isclose(child_logp, fresh.logp_next[b' is'], rtol=1e-5)

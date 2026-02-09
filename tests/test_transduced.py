@@ -40,7 +40,7 @@ class TinyState(LMState):
     def eos(self):
         return '<EOS>'
 
-    def __lshift__(self, token):
+    def __rshift__(self, token):
         lp = self._probs.get(token, -np.inf)
         return TinyState(self._probs, self.logp + lp)
 
@@ -135,9 +135,9 @@ class TestTransducedLM:
         fst = copy_fst(fst_alpha)
 
         tlm = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
-        state = tlm.initial() << 'a'
+        state = tlm.initial() >> 'a'
 
-        inner_state = char_ngram_lm.initial() << 'a'
+        inner_state = char_ngram_lm.initial() >> 'a'
         tlm_lp = state.logp_next
 
         for y in fst_alpha:
@@ -148,7 +148,7 @@ class TestTransducedLM:
                     f"Symbol {y!r}: inner={inner_lp:.4f}, transduced={got:.4f}"
 
     def test_incremental_consistency(self, char_ngram_lm):
-        """logp after << y1 << y2 equals sum of logp_next[y_i] from successive states."""
+        """logp after >> y1 >> y2 equals sum of logp_next[y_i] from successive states."""
         fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
         fst = copy_fst(fst_alpha)
         tlm = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
@@ -156,10 +156,10 @@ class TestTransducedLM:
         state0 = tlm.initial()
         lp1 = state0.logp_next['a']
 
-        state1 = state0 << 'a'
+        state1 = state0 >> 'a'
         lp2 = state1.logp_next['b']
 
-        state2 = state1 << 'b'
+        state2 = state1 >> 'b'
 
         expected = lp1 + lp2
         assert state2.logp == pytest.approx(expected, abs=1e-10)
@@ -226,7 +226,7 @@ class TestTransducedLM:
         fst = copy_fst(fst_alpha)
         tlm = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
 
-        state = tlm.initial() << 'a' << 'b' << 'a'
+        state = tlm.initial() >> 'a' >> 'b' >> 'a'
         assert state.path() == ['a', 'b', 'a']
 
     def test_logp_starts_at_zero(self, char_ngram_lm):
@@ -260,7 +260,7 @@ class TestTransducedLM:
             def logp_next(self):
                 return LogpNext(self._probs)
 
-            def __lshift__(self, token):
+            def __rshift__(self, token):
                 lp = self._probs.get(token, -np.inf)
                 return TinyState(self._probs, self.logp + lp,
                                  history=(self.history, token))
@@ -394,19 +394,19 @@ class TestLMState:
     # --- __call__ tests ---
 
     def test_ngram_advance(self, ngram_lm):
-        """__call__ on NgramState matches sequential <<."""
+        """__call__ on NgramState matches sequential >>."""
         state = ngram_lm.initial()
-        s1 = state << b'a' << b'b'
+        s1 = state >> b'a' >> b'b'
         s2 = state([b'a', b'b'])
         assert s1.logp == pytest.approx(s2.logp)
 
     def test_transduced_advance(self, char_ngram_lm):
-        """__call__ on TransducedState matches sequential <<."""
+        """__call__ on TransducedState matches sequential >>."""
         fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
         fst = copy_fst(fst_alpha)
         tlm = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
         state = tlm.initial()
-        s1 = state << 'a' << 'b'
+        s1 = state >> 'a' >> 'b'
         s2 = state(['a', 'b'])
         assert s1.logp == pytest.approx(s2.logp)
 
@@ -446,8 +446,8 @@ class TestFusedTransducedLM:
         orig = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
         fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
 
-        orig_state = orig.initial() << 'a'
-        fused_state = fused.initial() << 'a'
+        orig_state = orig.initial() >> 'a'
+        fused_state = fused.initial() >> 'a'
 
         for y in fst_alpha:
             o = orig_state.logp_next[y]
@@ -520,7 +520,7 @@ class TestFusedTransducedLM:
         assert abs(fused_b - bf_b) < 0.5, f"b: bf={bf_b:.4f}, fused={fused_b:.4f}"
 
     def test_incremental_consistency(self, char_ngram_lm):
-        """logp after << y1 << y2 equals sum of conditional logps."""
+        """logp after >> y1 >> y2 equals sum of conditional logps."""
         fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
         fst = copy_fst(fst_alpha)
         fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
@@ -528,10 +528,10 @@ class TestFusedTransducedLM:
         state0 = fused.initial()
         lp1 = state0.logp_next['a']
 
-        state1 = state0 << 'a'
+        state1 = state0 >> 'a'
         lp2 = state1.logp_next['b']
 
-        state2 = state1 << 'b'
+        state2 = state1 >> 'b'
 
         expected = lp1 + lp2
         assert state2.logp == pytest.approx(expected, abs=1e-10)
@@ -565,7 +565,7 @@ class TestFusedTransducedLM:
         fst = copy_fst(fst_alpha)
         fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
 
-        state = fused.initial() << 'a' << 'b' << 'a'
+        state = fused.initial() >> 'a' >> 'b' >> 'a'
         assert state.path() == ['a', 'b', 'a']
 
     def test_repr(self, char_ngram_lm):

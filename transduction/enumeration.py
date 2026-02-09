@@ -96,7 +96,7 @@ class prioritized_enumeration:
                 next_item = Item(
                     weight = next_weight,
                     state = next_state,
-                    source = item.source << x,
+                    source = item.source >> x,
                 )
                 #print('push:', next_item)
                 self.queue[next_item] = next_weight
@@ -166,7 +166,7 @@ class importance_sampling:
             item = Item(
                 weight = item.weight + Z,
                 state = T[x_t],
-                source = item.source << x_t,
+                source = item.source >> x_t,
             )
 
 
@@ -219,5 +219,5 @@ class crude_importance_sampling:
             item = Item(
                 weight = item.weight + Z,
                 state = T[x_t],
-                source = item.source << x_t,
+                source = item.source >> x_t,
             )

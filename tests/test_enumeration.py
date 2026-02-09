@@ -23,7 +23,7 @@ GRAMMAR = """
 
 class StatefulLM(LMState):
     """Wraps a stateless EarleyLM into the stateful interface expected by
-    the enumeration classes (`.eos`, `.logp_next`, `<< token`)."""
+    the enumeration classes (`.eos`, `.logp_next`, `>> token`)."""
 
     def __init__(self, lm, eos, context=()):
         self._lm = lm
@@ -42,7 +42,7 @@ class StatefulLM(LMState):
             for k, v in p.items()
         })
 
-    def __lshift__(self, token):
+    def __rshift__(self, token):
         return StatefulLM(self._lm, self._eos, self._context + (token,))
 
     def __repr__(self):

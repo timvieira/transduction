@@ -16,7 +16,7 @@ Usage:
     tlm = TransducedLM(inner, fst)
 
     state = tlm.initial()
-    state = state << 'h'
+    state = state >> 'h'
     print(state.logp_next['e'])
     print(state.logp)
 """
@@ -73,7 +73,7 @@ class TransducedState(LMState):
     """Immutable state for the TransducedLM.
 
     Supports:
-        state << y         -> new state (advance by target symbol y)
+        state >> y         -> new state (advance by target symbol y)
         state.logp_next[y] -> log P(y | target_so_far)
         state.logp         -> cumulative log probability
         state.eos          -> EOS token
@@ -98,7 +98,7 @@ class TransducedState(LMState):
         self._ensure_computed()
         return self._logp_next_cache
 
-    def __lshift__(self, y):
+    def __rshift__(self, y):
         if y == self.eos or y not in self.tlm.fst.B:
             raise ValueError(f"Out of vocabulary: {y!r}")
         self._ensure_computed()
@@ -242,7 +242,7 @@ class TransducedState(LMState):
                 next_weight = item.weight + lm_logp_next[x]
                 if next_weight == -np.inf:
                     continue
-                heapq.heappush(heap, BeamItem(next_dfa_state, item.lm_state << x, next_weight))
+                heapq.heappush(heap, BeamItem(next_dfa_state, item.lm_state >> x, next_weight))
 
         # Budget exhausted: score remaining items without expanding so they
         # still contribute to scores and carry_forward.
@@ -295,7 +295,7 @@ class TransducedLM:
                  decomp_state_cls=None, univ_cls=None):
         """
         Args:
-            inner_lm: LM with StateLM interface (has .initial(), state << x, state.logp_next)
+            inner_lm: LM with StateLM interface (has .initial(), state >> x, state.logp_next)
             fst: FST instance mapping source → target
             max_steps: budget per logp_next computation
             max_beam: max items carried forward between steps

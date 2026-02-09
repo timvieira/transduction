@@ -31,7 +31,7 @@ Usage:
     tlm = FusedTransducedLM(inner, fst)
 
     state = tlm.initial()
-    state = state << 'h'
+    state = state >> 'h'
     print(state.logp_next['e'])
 """
 
@@ -247,7 +247,7 @@ class _FusedSearch:
 
             self._queue[BeamItem(
                 dfa_state=next_dfa_state,
-                lm_state=item.lm_state << x,
+                lm_state=item.lm_state >> x,
                 weight=w,
             )] = w
 
@@ -313,7 +313,7 @@ class FusedTransducedState(LMState):
         self._ensure_computed()
         return self._logp_next_cache
 
-    def __lshift__(self, y):
+    def __rshift__(self, y):
         if y == self.eos:
             raise ValueError(f"Out of vocabulary: {y!r}")
         self._ensure_computed()
