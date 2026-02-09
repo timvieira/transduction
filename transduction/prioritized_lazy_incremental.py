@@ -16,6 +16,48 @@ class BFSHeuristic:
         return self.depth < other.depth
 
 
+class SourceTrie:
+    """Interned trie of source paths.  O(1) extend, O(1) hashing.
+
+    Each source path is represented as an integer node ID.  ``extend(node, symbol)``
+    returns the child ID, allocating it on first access.  Strings are reconstructed
+    only when needed (e.g., to build the output FSA), not in the inner loop.
+
+    Shared across ``>>`` steps alongside ``FrontierGraph``.
+    """
+
+    def __init__(self, empty_source, extend):
+        self._extend = extend
+        self._empty_source = empty_source
+        self._children = {}    # (node_id, symbol) -> child_id
+        self._parent = [None]  # node_id -> (parent_id, symbol) | None
+        self.initial = 0       # root = empty source
+
+    def extend(self, node, symbol):
+        """Return the child of *node* via *symbol*, creating it if new.  O(1)."""
+        key = (node, symbol)
+        child = self._children.get(key)
+        if child is not None:
+            return child
+        child = len(self._parent)
+        self._parent.append((node, symbol))
+        self._children[key] = child
+        return child
+
+    def to_string(self, node):
+        """Reconstruct the source string for *node* by walking the parent chain."""
+        symbols = []
+        cur = node
+        while self._parent[cur] is not None:
+            cur, sym = self._parent[cur]
+            symbols.append(sym)
+        symbols.reverse()
+        result = self._empty_source
+        for sym in symbols:
+            result = self._extend(result, sym)
+        return result
+
+
 class FrontierGraph:
     """Target-independent transition graph over interned powerset-construction nodes.
 
@@ -140,6 +182,7 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
             self.max_steps = max_steps
             self.heuristic = heuristic
             self._graph = FrontierGraph(fst, empty_target, extend)
+            self._trie = SourceTrie(empty_source, extend)
             self._all_input_universal = check_all_input_universal(fst)
             self._ip_universal_states = (
                 frozenset() if self._all_input_universal
@@ -156,6 +199,7 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
             self.max_steps = parent.max_steps
             self.heuristic = parent.heuristic
             self._graph = parent._graph
+            self._trie = parent._trie
             self._all_input_universal = parent._all_input_universal
             self._ip_universal_states = parent._ip_universal_states
             self.parent = parent
@@ -214,13 +258,15 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
         self._is_final_cache = {}
 
         graph = self._graph
+        trie = self._trie
 
         # heap entries: (h_state, tiebreak, xs, node)
+        # xs is a trie node ID (int), not a string.
         heap = []
         counter = 0
 
         if len(self.target) == 0:
-            heapq.heappush(heap, (self.heuristic, counter, self.empty_source, graph.initial))
+            heapq.heappush(heap, (self.heuristic, counter, trie.initial, graph.initial))
             counter += 1
         else:
             # Remainder strings that are still final under the new target stay in remainder.
@@ -253,7 +299,7 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
             # Expand children: extend xs by each source symbol with a live successor.
             for source_symbol, next_node in graph.arcs(node):
                 if self._is_live(next_node):
-                    next_xs = self.extend(xs, source_symbol)
+                    next_xs = trie.extend(xs, source_symbol)
                     child_h = h_state >> source_symbol
                     heapq.heappush(heap, (child_h, counter, next_xs, next_node))
                     counter += 1
@@ -322,11 +368,11 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
 
     @property
     def quotient(self):
-        return FSA.from_strings(self._quotient)
+        return FSA.from_strings(self._trie.to_string(xs) for xs in self._quotient)
 
     @property
     def remainder(self):
-        return FSA.from_strings(self._remainder)
+        return FSA.from_strings(self._trie.to_string(xs) for xs in self._remainder)
 
     def __rshift__(self, y):
         return PrioritizedLazyIncremental(self.fst, self.target + y, parent=self)
