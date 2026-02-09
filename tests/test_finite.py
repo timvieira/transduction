@@ -1,150 +1,64 @@
+import pytest
 from transduction import (
     DecompositionResult, LazyNonrecursive, LazyIncremental, LazyPrecoverNFA,
-    EagerNonrecursive, examples, Precover, FSA
+    EagerNonrecursive, examples, Precover, FSA, EPSILON, PrioritizedLazyIncremental
 )
-
-# TODO: unify frameworks, or at least bring the recursive testing strategy here
-# because it should hit a broader set of test strings.  The challenge will be in
-# excluding examples, or using max_steps and defining some kind of expected
-# behavior for limited runs (e.g., check that the precover is a subset of the
-# true precover rather than equal to the precover).  Note that there is still
-# likely some value in testing some of the outputs on specific example, but that
-# could just be done for one of the many equivalent methods, e.g., `Precover`.
 
 
 def assert_equal(have, want):
-    assert have.quotient.equal(want.quotient), [have.quotient.min(), want.quotient]
-    assert have.remainder.equal(want.remainder), [have.remainder.min(), want.remainder]
+    """Compare two DecompositionResults, handling both set and FSA quotient/remainder."""
+    hq, hr = have.quotient, have.remainder
+    wq, wr = want.quotient, want.remainder
+    if isinstance(hq, (set, frozenset)):
+        hq = FSA.from_strings(hq)
+    if isinstance(wq, (set, frozenset)):
+        wq = FSA.from_strings(wq)
+    if isinstance(hr, (set, frozenset)):
+        hr = FSA.from_strings(hr)
+    if isinstance(wr, (set, frozenset)):
+        wr = FSA.from_strings(wr)
+    assert hq.equal(wq), [hq.min(), wq.min()]
+    assert hr.equal(wr), [hr.min(), wr.min()]
 
 
-def test_sdd1():
+def _precover_factory(fst, **kwargs):
+    """Precover.factory, ignoring kwargs it doesn't support (e.g., max_steps)."""
+    return Precover.factory(fst)
+
+
+IMPLEMENTATIONS = [
+    pytest.param(EagerNonrecursive, id="eager_nonrecursive"),
+    pytest.param(LazyNonrecursive, id="lazy_nonrecursive"),
+    pytest.param(LazyIncremental, id="lazy_incremental"),
+    pytest.param(_precover_factory, id="precover"),
+]
+
+
+@pytest.fixture(params=IMPLEMENTATIONS)
+def impl(request):
+    return request.param
+
+
+def test_sdd1(impl):
     fst = examples.sdd1_fst()
-
-    tmp = EagerNonrecursive(fst)
-    assert tmp('') == DecompositionResult({'a'}, set())
-    assert tmp('a') == DecompositionResult({'a'}, set())
-    assert tmp('aa') == DecompositionResult({'aa'}, set())
-
-    tmp = LazyNonrecursive(fst)
-    assert tmp('') == DecompositionResult({'a'}, set())
-    assert tmp('a') == DecompositionResult({'a'}, set())
-    assert tmp('aa') == DecompositionResult({'aa'}, set())
-
-    tmp = LazyIncremental(fst)
-    assert_equal(tmp, DecompositionResult({'a'}, set()))
-    assert_equal(tmp(''), DecompositionResult({'a'}, set()))
-    assert_equal(tmp('a'), DecompositionResult({'a'}, set()))
-    assert_equal(tmp('aa'), DecompositionResult({'aa'}, set()))
-
-    tmp = Precover.factory(fst)
+    tmp = impl(fst)
     assert_equal(tmp(''), DecompositionResult({'a'}, set()))
     assert_equal(tmp('a'), DecompositionResult({'a'}, set()))
     assert_equal(tmp('aa'), DecompositionResult({'aa'}, set()))
 
 
-def test_delete_b():
-    # this example has an infinite quotient for non-empty target strings, but
-    # always an empty remainder
-    fst = examples.delete_b()
-
-    a = FSA.lift('a')
-    b = FSA.lift('b')
-    bs = b.star()
-
-    tmp = Precover.factory(fst)
-    assert_equal(tmp(''), DecompositionResult({''}, set()))
-    assert_equal(tmp('b'), DecompositionResult(set(), set()))
-    have = tmp('AAA')
-    want = (bs * a * bs * a * bs * a).min()
-    assert_equal(have, DecompositionResult(want, set()))
-
-    algs = [
-        EagerNonrecursive(fst, max_steps=30),
-        LazyNonrecursive(fst, max_steps=30),
-    ]
-
-    for tmp in algs:
-        assert tmp('') == DecompositionResult({''}, set())
-        assert tmp('b') == DecompositionResult(set(), set())
-
-        target = 'AAA'
-        have = tmp(target)
-        assert have.remainder == set()
-        p = Precover(fst, target)
-        p.check_decomposition(*have, skip_validity=True)
-
-    tmp = LazyIncremental(fst, max_steps=30)
-    assert_equal(tmp, DecompositionResult({''}, set()))
-    assert_equal(tmp('b'), DecompositionResult(set(), set()))
-
-
-def test_simple():
+def test_simple(impl):
     fst = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c'), ('4', 'd'), ('5', 'e')])
-
-    tmp = LazyNonrecursive(fst)
-    assert tmp('') == DecompositionResult({''}, set())
-    assert tmp('a') == DecompositionResult({'1'}, set())
-    assert tmp('ab') == DecompositionResult({'12'}, set())
-    assert tmp('abc') == DecompositionResult({'123'}, set())
-
-    tmp = EagerNonrecursive(fst, max_steps=50)
-    assert tmp('') == DecompositionResult({''}, set())
-    assert tmp('a') == DecompositionResult({'1'}, set())
-    assert tmp('ab') == DecompositionResult({'12'}, set())
-    assert tmp('abc') == DecompositionResult({'123'}, set())
-
-    tmp = LazyIncremental(fst)
-    assert_equal(tmp, DecompositionResult({''}, set()))
-    assert_equal(tmp('a'), DecompositionResult({'1'}, set()))
-    assert_equal(tmp('ab'), DecompositionResult({'12'}, set()))
-    assert_equal(tmp('abc'), DecompositionResult({'123'}, set()))
-
-    tmp = Precover.factory(fst)
+    tmp = impl(fst)
     assert_equal(tmp(''), DecompositionResult({''}, set()))
     assert_equal(tmp('a'), DecompositionResult({'1'}, set()))
     assert_equal(tmp('ab'), DecompositionResult({'12'}, set()))
     assert_equal(tmp('abc'), DecompositionResult({'123'}, set()))
 
 
-def test_lazy_precover_nfa():
-    fst = examples.replace([('a', 'A'), ('b', 'B')])
-
-    c = LazyPrecoverNFA(fst, 'AB')
-
-    assert set(c.arcs((0, ''))) == {('a', (0, 'A'))}
-    assert set(c.arcs((0, 'A'))) == {('b', (0, 'AB'))}
-    assert set(c.arcs((0, 'AB'))) == {('a', (0, 'AB')), ('b', (0, 'AB'))}
-
-    assert c.is_final((0, 'AB'))
-    assert not c.is_final((0, 'A'))
-    assert set(c.start()) == {(0, '')}
-
-
-def test_duplicate():
+def test_duplicate(impl):
     fst = examples.duplicate(set('12345'))
-
-    tmp = EagerNonrecursive(fst)
-    assert tmp('') == DecompositionResult({''}, set())
-    assert tmp('1') == DecompositionResult({'1'}, set())
-    assert tmp('11') == DecompositionResult({'1'}, set())
-    assert tmp('1155') == DecompositionResult({'15'}, set())
-    assert tmp('115') == DecompositionResult({'15'}, set())
-
-    tmp = LazyNonrecursive(fst)
-    assert tmp('') == DecompositionResult({''}, set())
-    assert tmp('1') == DecompositionResult({'1'}, set())
-    assert tmp('11') == DecompositionResult({'1'}, set())
-    assert tmp('1155') == DecompositionResult({'15'}, set())
-    assert tmp('115') == DecompositionResult({'15'}, set())
-
-    tmp = LazyIncremental(fst)
-    assert_equal(tmp, DecompositionResult({''}, set()))
-    assert_equal(tmp('1'), DecompositionResult({'1'}, set()))
-    assert_equal(tmp('11'), DecompositionResult({'1'}, set()))
-    assert_equal(tmp('1155'), DecompositionResult({'15'}, set()))
-    assert_equal(tmp('115'), DecompositionResult({'15'}, set()))
-
-    tmp = Precover.factory(fst)
+    tmp = impl(fst)
     assert_equal(tmp(''), DecompositionResult({''}, set()))
     assert_equal(tmp('1'), DecompositionResult({'1'}, set()))
     assert_equal(tmp('11'), DecompositionResult({'1'}, set()))
@@ -152,10 +66,8 @@ def test_duplicate():
     assert_equal(tmp('115'), DecompositionResult({'15'}, set()))
 
 
-def test_newspeak2():
-
+def test_newspeak2(impl):
     n = examples.newspeak2()
-
     ba = DecompositionResult(
         {'bar', 'bax', 'baq', 'ban', 'bap', 'bau', 'bao', 'bay', 'bag', 'bae', 'bah',
          'bak', 'bai', 'bav', 'bac', 'bal', 'bam', 'bab', 'baz', 'baa', 'baf', 'bat',
@@ -166,70 +78,108 @@ def test_newspeak2():
     bad = DecompositionResult(set(), set())
     ungood = DecompositionResult({'bad', 'ungood'}, set())
 
-    tmp = EagerNonrecursive(n)
-    assert tmp('') == empty
-    assert tmp('bad') ==  bad
-    assert tmp('ba') == ba
-    assert tmp('ungood') == ungood, tmp('ungood')
-
-    tmp = LazyNonrecursive(n)
-    assert tmp('') == empty
-    assert tmp('bad') == bad
-    assert tmp('ba') == ba
-    assert tmp('ungood') == ungood, tmp('ungood')
-
-    tmp = LazyIncremental(n)
-    assert_equal(tmp, empty)
-    assert_equal(tmp('bad'), bad)
-    assert_equal(tmp('ba'), ba)
-    assert_equal(tmp('ungood'), ungood)
-
-    tmp = Precover.factory(n)
+    tmp = impl(n)
     assert_equal(tmp(''), empty)
     assert_equal(tmp('bad'), bad)
     assert_equal(tmp('ba'), ba)
     assert_equal(tmp('ungood'), ungood)
 
 
-def test_samuel_example():
+def test_samuel_example(impl):
     fst = examples.samuel_example()
-    target = 'c'
-    tmp = LazyNonrecursive(fst)
-    have = tmp(target)
-    assert have == ({'a'}, set())
-
-    tmp = EagerNonrecursive(fst)
-    have = tmp(target)
-    assert have == ({'a'}, set()), have
-
-    tmp = LazyIncremental(fst)
+    tmp = impl(fst)
     assert_equal(tmp('c'), DecompositionResult({'a'}, set()))
 
-    tmp = Precover.factory(fst)
-    have = tmp(target)
-    assert_equal(have, DecompositionResult({'a'}, set()))
+
+def test_delete_b(impl):
+    fst = examples.delete_b()
+    tmp = impl(fst, max_steps=30)
+    assert_equal(tmp(''), DecompositionResult({''}, set()))
+    assert_equal(tmp('b'), DecompositionResult(set(), set()))
 
 
-def test_number_comma_separator():
+def test_number_comma_separator(impl):
     import string
     fst = examples.number_comma_separator(set(string.printable) - set('\t\n\r\x0b\x0c'))
-
-    tmp = LazyNonrecursive(fst)
-    assert tmp('1,| 2,| and 3') == ({'1, 2, and 3'}, set())
+    source_alphabet = fst.A - {EPSILON}
+    tmp = impl(fst)
+    assert_equal(tmp('1,| 2,| and 3'), DecompositionResult({'1, 2, and 3'}, set()))
     have = tmp('1,| 2,|')
-    want = ({'1, 2,' + x for x in tmp.source_alphabet if x not in '1234567890'}, set())
-    assert have == want
+    want = DecompositionResult(
+        {'1, 2,' + x for x in source_alphabet if x not in '1234567890'},
+        set(),
+    )
+    assert_equal(have, want)
 
-    #target = '1,| 2,'
-    #for y in tmp.target_alphabet:
-    #    Q,R = tmp(target+y)
-    #    assert len(R) == 0
-    #    if y == '|' and target.endswith(','):
-    #        assert len(Q) == len(tmp.source_alphabet) - len(digits), [target, y, Q]
-    #    else:
-    #        assert len(Q) <= 1, [target, y, Q]
-    #    if len(Q) > 0:
-    #        print(repr(y), Q)
+
+# ── Standalone tests (algorithm-specific) ─────────────────────────────────────
+
+def test_lazy_precover_nfa():
+    fst = examples.replace([('a', 'A'), ('b', 'B')])
+    c = LazyPrecoverNFA(fst, 'AB')
+    assert set(c.arcs((0, ''))) == {('a', (0, 'A'))}
+    assert set(c.arcs((0, 'A'))) == {('b', (0, 'AB'))}
+    assert set(c.arcs((0, 'AB'))) == {('a', (0, 'AB')), ('b', (0, 'AB'))}
+    assert c.is_final((0, 'AB'))
+    assert not c.is_final((0, 'A'))
+    assert set(c.start()) == {(0, '')}
+
+
+def test_delete_b_infinite_quotient():
+    """Exact FSA comparison for delete_b 'AAA' target (infinite quotient)."""
+    fst = examples.delete_b()
+    a = FSA.lift('a')
+    b = FSA.lift('b')
+    bs = b.star()
+    tmp = Precover.factory(fst)
+    have = tmp('AAA')
+    want = (bs * a * bs * a * bs * a).min()
+    assert_equal(have, DecompositionResult(want, set()))
+
+
+def test_delete_b_check_decomposition():
+    """Enumeration algorithms on delete_b 'AAA': valid decomposition with max_steps."""
+    fst = examples.delete_b()
+    for alg in [EagerNonrecursive(fst, max_steps=30), LazyNonrecursive(fst, max_steps=30)]:
+        have = alg('AAA')
+        assert have.remainder == set()
+        p = Precover(fst, 'AAA')
+        p.check_decomposition(*have, skip_validity=True)
+
+
+def test_prioritized_custom_heuristic():
+    """Custom >> heuristic produces the same results (exhaustive search, just different order)."""
+    fst = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c')])
+
+    class ReverseAlpha:
+        """Explore higher ord(symbol) first (lower priority value)."""
+        def __init__(self, priority=0):
+            self.priority = priority
+        def __rshift__(self, symbol):
+            return ReverseAlpha(-ord(symbol))
+
+    tmp = PrioritizedLazyIncremental(fst, heuristic=ReverseAlpha())
+    assert_equal(tmp(''), DecompositionResult({''}, set()))
+    assert_equal(tmp('a'), DecompositionResult({'1'}, set()))
+    assert_equal(tmp('ab'), DecompositionResult({'12'}, set()))
+    assert_equal(tmp('abc'), DecompositionResult({'123'}, set()))
+
+
+def test_prioritized_pruning():
+    """Pruning limits exploration depth, producing a subset of the full result."""
+    from transduction.prioritized_lazy_incremental import BFSHeuristic
+    fst = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c'), ('4', 'd'), ('5', 'e')])
+
+    tmp_full = LazyIncremental(fst)
+    tmp_pruned = PrioritizedLazyIncremental(fst, heuristic=BFSHeuristic(),
+                                            prune=lambda p: p > 1)
+
+    assert_equal(tmp_pruned(''), DecompositionResult({''}, set()))
+
+    have_pruned = tmp_pruned('a')
+    have_full = tmp_full('a')
+    assert have_pruned._quotient_set <= have_full._quotient_set
+    assert have_pruned._remainder_set <= have_full._remainder_set
 
 
 if __name__ == '__main__':
