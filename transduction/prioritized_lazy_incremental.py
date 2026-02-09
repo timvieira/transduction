@@ -17,24 +17,37 @@ class BFSHeuristic:
 
 
 class FrontierGraph:
-    """Interned frontier graph: caches powerset-construction nodes and transitions.
+    """Target-independent transition graph over interned powerset-construction nodes.
 
-    Each node is a canonical frozenset of (fst_state, target_buffer) pairs.
-    Transitions are cached per (node, symbol) so that duplicate source strings
-    reaching the same powerset state share work.
+    Each node is a canonical frozenset of ``(fst_state, target_buffer)`` pairs —
+    the "augmented powerset state" that pairs each reachable FST state with the
+    target-side output accumulated so far.  Interning guarantees that two source
+    strings reaching the same powerset state share a single node object, so
+    transition lookups and property checks (keyed by ``id(node)``) are never
+    duplicated.
+
+    This graph is shared across ``>>`` steps: the ``PrioritizedLazyIncremental``
+    parent and all its children reference the same ``FrontierGraph``, which grows
+    monotonically as new nodes are discovered.
     """
 
     def __init__(self, fst, empty_target, extend):
         self.fst = fst
         self.extend = extend
+        # Interning table: maps each frozenset to a single canonical object.
+        # Using id(node) as a cache key is safe because interned nodes are never
+        # garbage-collected (held by _intern) and distinct contents always map to
+        # distinct objects.
         self._intern = {}           # frozenset -> frozenset (canonical identity)
         self._transitions = {}      # (node_id, symbol) -> node
+        self._arcs = {}             # node_id -> [(symbol, next_node), ...]
 
         self.initial = self._intern_node(
             self._epsilon_closure({(s, empty_target) for s in fst.start})
         )
 
     def _intern_node(self, frontier_set):
+        """Return the canonical object for this frontier set, interning if new."""
         key = frozenset(frontier_set)
         return self._intern.setdefault(key, key)
 
@@ -53,7 +66,7 @@ class FrontierGraph:
         return result
 
     def step(self, node, symbol):
-        """Transition from node by source symbol, returning the interned successor."""
+        """Transition from *node* by a single source *symbol*, returning the interned successor."""
         key = (id(node), symbol)
         cached = self._transitions.get(key)
         if cached is not None:
@@ -64,6 +77,25 @@ class FrontierGraph:
                 next_set.add((j, self.extend(ys, b)))
         result = self._intern_node(self._epsilon_closure(next_set))
         self._transitions[key] = result
+        return result
+
+    def arcs(self, node):
+        """Return ``[(symbol, next_node), ...]`` for source symbols with non-empty transitions.
+
+        Only symbols that actually appear on arcs from states in *node* are included,
+        avoiding unnecessary work for large alphabets with sparse transitions.
+        """
+        key = id(node)
+        cached = self._arcs.get(key)
+        if cached is not None:
+            return cached
+        symbols = set()
+        for s, _ys in node:
+            for a, _b, j in self.fst.arcs(s):
+                if a != EPSILON:
+                    symbols.add(a)
+        result = [(a, self.step(node, a)) for a in symbols]
+        self._arcs[key] = result
         return result
 
 
@@ -131,61 +163,75 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
 
         self._compute()
 
+    def _is_live(self, node):
+        """Can any path through *node* still produce output matching the target?
+
+        A node is live if some ``(state, ys)`` pair has ``ys`` compatible with
+        ``target`` — either ``ys`` is a prefix of ``target`` (output so far is
+        consistent) or ``target`` is a prefix of ``ys`` (output already covers
+        the target and may extend it).  Dead nodes are pruned from the search.
+        """
+        cached = self._is_live_cache.get(id(node))
+        if cached is not None:
+            return cached
+        target = self.target
+        result = any(
+            (ys.startswith(target) or target.startswith(ys))
+            for (_, ys) in node
+        )
+        self._is_live_cache[id(node)] = result
+        return result
+
+    def _is_final(self, node):
+        """Does *node* contain an accepting FST state whose output covers the target?
+
+        True when some ``(state, ys)`` has ``state`` final and ``ys`` starts with
+        ``target``, witnessing that the source string maps to a target-side string
+        beginning with the current target prefix.
+        """
+        cached = self._is_final_cache.get(id(node))
+        if cached is not None:
+            return cached
+        target = self.target
+        result = any(
+            (s in self.fst.stop) for (s, ys) in node
+            if ys.startswith(target)
+        )
+        self._is_final_cache[id(node)] = result
+        return result
+
     def _compute(self):
-        self._quotient_hstates = {}
-        self._remainder_hstates = {}
-        self._quotient_nodes = {}
-        self._remainder_nodes = {}
+        """Heap-driven exploration to partition source strings into quotient and remainder.
+
+        For the root (empty target), seeds the heap with the graph's initial node.
+        For children (target extended by one symbol), re-filters the parent's
+        quotient and remainder against the new target, then continues exploring.
+        """
+        self._quotient = {}     # xs -> (h_state, node)
+        self._remainder = {}    # xs -> (h_state, node)
+        # Property caches are target-dependent, so reset each _compute call.
+        self._is_live_cache = {}
+        self._is_final_cache = {}
 
         graph = self._graph
-        target = self.target
-
-        # Per-node caches for this _compute call
-        _candidacy_cache = {}
-        _discontinuity_cache = {}
-
-        def _candidacy(node):
-            cached = _candidacy_cache.get(id(node))
-            if cached is not None:
-                return cached
-            result = any(
-                (ys.startswith(target) or target.startswith(ys))
-                for (_, ys) in node
-            )
-            _candidacy_cache[id(node)] = result
-            return result
-
-        def _discontinuity(node):
-            cached = _discontinuity_cache.get(id(node))
-            if cached is not None:
-                return cached
-            result = any(
-                (s in self.fst.stop) for (s, ys) in node
-                if ys.startswith(target)
-            )
-            _discontinuity_cache[id(node)] = result
-            return result
 
         # heap entries: (h_state, tiebreak, xs, node)
         heap = []
         counter = 0
 
-        N = len(target)
-        if N == 0:
+        if len(self.target) == 0:
             heapq.heappush(heap, (self.heuristic, counter, self.empty_source, graph.initial))
             counter += 1
         else:
-            # filter previous remainders
-            for xs, h_state in self.parent._remainder_hstates.items():
-                node = self.parent._remainder_nodes[xs]
-                if _discontinuity(node):
-                    self._remainder_hstates[xs] = h_state
-                    self._remainder_nodes[xs] = node
+            # Remainder strings that are still final under the new target stay in remainder.
+            for xs, (h_state, node) in self.parent._remainder.items():
+                if self._is_final(node):
+                    self._remainder[xs] = (h_state, node)
 
-            # filter previous quotient so that it satisfies the invariant
-            for xs, h_state in self.parent._quotient_hstates.items():
-                node = self.parent._quotient_nodes[xs]
-                if _candidacy(node):
+            # Quotient strings that are still live go back on the heap for re-evaluation,
+            # since universality may no longer hold under the extended target.
+            for xs, (h_state, node) in self.parent._quotient.items():
+                if self._is_live(node):
                     heapq.heappush(heap, (h_state, counter, xs, node))
                     counter += 1
 
@@ -194,42 +240,58 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
             h_state, _, xs, node = heapq.heappop(heap)
             steps += 1
 
-            if self._check_continuity(node, target, graph, _candidacy, _discontinuity):
-                self._quotient_hstates[xs] = h_state
-                self._quotient_nodes[xs] = node
+            # If this node is universal, xs belongs in the quotient — no need to
+            # explore its children.
+            if self._is_universal(node):
+                self._quotient[xs] = (h_state, node)
                 continue
 
-            if _discontinuity(node):
-                self._remainder_hstates[xs] = h_state
-                self._remainder_nodes[xs] = node
+            # Not universal, but if it's final, xs belongs in the remainder.
+            if self._is_final(node):
+                self._remainder[xs] = (h_state, node)
 
-            for source_symbol in self.source_alphabet:
-                next_xs = self.extend(xs, source_symbol)
-                next_node = graph.step(node, source_symbol)
-                if _candidacy(next_node):
+            # Expand children: extend xs by each source symbol with a live successor.
+            for source_symbol, next_node in graph.arcs(node):
+                if self._is_live(next_node):
+                    next_xs = self.extend(xs, source_symbol)
                     child_h = h_state >> source_symbol
                     heapq.heappush(heap, (child_h, counter, next_xs, next_node))
                     counter += 1
 
-    def _check_continuity(self, node, target, graph, _candidacy, _discontinuity):
-        """Node-based BFS universality check."""
+    def _is_universal(self, node):
+        """BFS check: does every extension of *node* remain final?
+
+        A node is universal if the sub-DFA rooted at it (under the augmented
+        powerset construction) accepts ``source_alphabet*`` — i.e., every
+        reachable node is final and complete.  Universal nodes are "cylinders"
+        of the precover: the source string and all its extensions map to the
+        target, so they belong in the quotient.
+        """
 
         # Fast path: if the entire FST's input projection is universal,
-        # every final frontier is universal.
+        # every final node is universal.
         if self._all_input_universal:
-            return _discontinuity(node)
+            return self._is_final(node)
 
-        # ip-universal witness: if the frontier contains (q, ys) where q is
+        # ip-universal witness: if the node contains (q, ys) where q is
         # ip-universal and ys already covers the target, then all extensions
-        # of xs will also have an ip-universal witness → universal.
+        # will also have an ip-universal witness.
+        target = self.target
         if self._ip_universal_states:
             for q, ys in node:
                 if q in self._ip_universal_states and ys.startswith(target):
                     return True
 
         N = len(target)
+        graph = self._graph
 
         def refine(n):
+            """Project node to target-relevant components for cycle detection.
+
+            Clips target buffers to length N and drops pairs incompatible with
+            the target prefix.  Two nodes with the same refined image behave
+            identically for universality, so we use this as the visited-set key.
+            """
             return frozenset({
                 (i, ys[:N]) for i, ys in n
                 if ys[:min(N, len(ys))] == target[:min(N, len(ys))]
@@ -241,11 +303,15 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
 
         while worklist:
             cur = worklist.popleft()
-            if not _discontinuity(cur):
+            if not self._is_final(cur):
+                return False
+            # Check completeness: every source symbol must have a transition.
+            succs = dict(graph.arcs(cur))
+            if len(succs) < len(self.source_alphabet):
                 return False
             for a in self.source_alphabet:
-                next_node = graph.step(cur, a)
-                if not _candidacy(next_node):
+                next_node = succs[a]
+                if not self._is_live(next_node):
                     return False
                 jj = refine(next_node)
                 if jj not in visited:
@@ -256,11 +322,11 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
 
     @property
     def quotient(self):
-        return FSA.from_strings(self._quotient_hstates)
+        return FSA.from_strings(self._quotient)
 
     @property
     def remainder(self):
-        return FSA.from_strings(self._remainder_hstates)
+        return FSA.from_strings(self._remainder)
 
     def __rshift__(self, y):
         return PrioritizedLazyIncremental(self.fst, self.target + y, parent=self)
