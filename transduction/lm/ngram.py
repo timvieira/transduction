@@ -21,6 +21,7 @@ Usage:
 
 import numpy as np
 from collections import Counter
+from functools import cached_property
 
 from transduction.lm.base import LMState, LogpNext
 
@@ -65,7 +66,7 @@ class NgramState(LMState):
         return NgramState(self.lm, new_ctx, self.logp + lp,
                           history=(self.history, token))
 
-    @property
+    @cached_property
     def logp_next(self):
         return self.lm._logp_next(self._context)
 
@@ -203,7 +204,7 @@ class CharNgramState(LMState):
         return CharNgramState(self.lm, new_ctx, self.logp + lp,
                               history=(self.history, token))
 
-    @property
+    @cached_property
     def logp_next(self):
         return self.lm._logp_next(self._context)
 

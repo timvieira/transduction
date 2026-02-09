@@ -4,7 +4,7 @@ Tests for the lazy automaton framework.
 import pytest
 from transduction.fsa import FSA, EPSILON
 from transduction.lazy import (
-    EpsilonRemove, LazyWrapper,
+    Cached, EpsilonRemove, LazyWrapper,
 )
 
 
@@ -278,6 +278,62 @@ def test_not_universal_non_final_reachable():
 
     lazy = LazyWrapper(m)
     assert not lazy.accepts_universal(1, {'a', 'b'})
+
+
+# Cache tests
+
+@pytest.mark.parametrize('make_fsa', ALL_MACHINES)
+def test_cache_preserves_language(make_fsa):
+    """Cached lazy FSA should recognize the same language."""
+    m = make_fsa()
+    lazy = LazyWrapper(m)
+    cached = lazy.det().cache()
+    assert cached.materialize().min().equal(m.min())
+
+
+@pytest.mark.parametrize('make_fsa', ALL_MACHINES)
+def test_cache_arcs_returns_same_object(make_fsa):
+    """Repeated arcs() calls should return the same cached list."""
+    m = make_fsa()
+    det = LazyWrapper(m).det().cache()
+    for state in det.start():
+        first = det.arcs(state)
+        second = det.arcs(state)
+        assert first is second
+
+
+@pytest.mark.parametrize('make_fsa', ALL_MACHINES)
+def test_cache_is_final_returns_same_value(make_fsa):
+    """is_final() should return consistent cached results."""
+    m = make_fsa()
+    det = LazyWrapper(m).det()
+    cached = det.cache()
+    for state in det.start():
+        assert cached.is_final(state) == det.is_final(state)
+
+
+def test_cache_on_nfa():
+    """Cache should work on an NFA (before determinization)."""
+    m = make_nondeterministic()
+    lazy = LazyWrapper(m)
+    cached = lazy.cache()
+    assert cached.materialize().min().equal(m.min())
+
+
+def test_cache_on_epsremove():
+    """Cache should work after epsilon removal."""
+    m = make_epsilon()
+    lazy = LazyWrapper(m)
+    cached = lazy.epsremove().cache()
+    assert cached.materialize().min().equal(m.min())
+
+
+def test_cache_chained():
+    """epsremove -> det -> cache should preserve language."""
+    m = make_complex()
+    lazy = LazyWrapper(m)
+    cached = lazy.epsremove().det().cache()
+    assert cached.materialize().min().equal(m.min())
 
 
 # Integration tests

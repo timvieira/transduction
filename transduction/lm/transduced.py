@@ -21,9 +21,9 @@ Usage:
     print(state.logp)
 """
 
+import heapq
+
 import numpy as np
-from dataclasses import dataclass
-from arsenal.datastructures import LocatorMaxHeap
 
 from transduction.lm.base import LMState, LogpNext
 
@@ -56,12 +56,17 @@ def _to_key(token):
     return None
 
 
-@dataclass(frozen=False, eq=True, unsafe_hash=True)
 class BeamItem:
     """Search frontier element for source-side expansion."""
-    dfa_state: object       # frozenset (powerset DFA state)
-    lm_state: object        # inner LM state
-    weight: float           # cumulative log P_inner of source prefix
+    __slots__ = ('dfa_state', 'lm_state', 'weight')
+
+    def __init__(self, dfa_state, lm_state, weight):
+        self.dfa_state = dfa_state
+        self.lm_state = lm_state
+        self.weight = weight
+
+    def __lt__(self, other):
+        return self.weight > other.weight  # higher weight = higher priority
 
 
 class TransducedState(LMState):
@@ -94,7 +99,7 @@ class TransducedState(LMState):
         return self._logp_next_cache
 
     def __lshift__(self, y):
-        if y == self.eos:
+        if y == self.eos or y not in self.tlm.fst.B:
             raise ValueError(f"Out of vocabulary: {y!r}")
         self._ensure_computed()
 
@@ -126,118 +131,125 @@ class TransducedState(LMState):
     def _compute_logp_next(self):
         """Core algorithm: bounded best-first search over source-side paths.
 
-        Uses the PeekabooState's decomposition to identify which DFA states
-        correspond to quotient (Q) or remainder (R) stops for each next
-        target symbol, and accumulates log-probability scores.
+        Computes P(y | target_so_far) for each next target symbol y by
+        searching over source-side paths weighted by the inner LM.
+
+        The search is guided by the PeekabooState's decomposition, which
+        classifies DFA states into four roles for each target symbol y:
+
+        - Quotient Q(y): all source continuations from this state produce y
+          as the next target symbol.  Contributes the full beam weight to
+          scores[y].  These states are *not* expanded further — they already
+          account for all continuations.
+
+        - Remainder R(y): the source can stop here (EOS) and still produce y.
+          Contributes weight + log P_inner(EOS) to scores[y].  Only counted
+          when the state is not already a quotient for y (to avoid
+          double-counting).
+
+        - Preimage: the source has produced exactly the current target prefix
+          and the FST is in a final state.  Same as remainder, but for the
+          outer EOS symbol rather than a regular target symbol.
+
+        - Resume frontier: states at the truncation boundary that should be
+          carried forward to seed the next step's search (after the user
+          advances by y).  These are saved in carry_forward[y] but do not
+          contribute to scores.
+
+        Q and R states are also added to carry_forward[y] so they can seed
+        the next step.
+
+        After the search, scores are normalized via logsumexp to produce a
+        proper conditional distribution.
         """
         decomp = self._peekaboo_state.decomp
         dfa = self._peekaboo_state.dfa
-        _target = self._peekaboo_state.target
 
-        # Build reverse lookups: dfa_state → set of symbols y
-        q_lookup = {}   # states that are quotient stops for symbol y
-        r_lookup = {}   # states that are remainder stops for symbol y
+        # The decomposition is keyed by symbol (decomp[y].quotient = set of
+        # DFA states), but the search visits states one at a time, so we
+        # invert to state → set of symbols for efficient lookup.
+        q_lookup = {}   # dfa_state → {y: state is a quotient stop for y}
+        r_lookup = {}   # dfa_state → {y: state is a remainder stop for y}
         for y, d in decomp.items():
             for state in d.quotient:
                 q_lookup.setdefault(state, set()).add(y)
             for state in d.remainder:
                 r_lookup.setdefault(state, set()).add(y)
 
-        # Resume frontiers for carry-forward
-        resume_states = {}  # dfa_state → set of symbols y
+        resume_states = {}  # dfa_state → {y: state is a resume frontier for y}
         for y, states in self._peekaboo_state.resume_frontiers.items():
             for state in states:
                 resume_states.setdefault(state, set()).add(y)
 
-        # scores[y] = list of log-weights contributing to P(y | target)
-        scores = {}
-        eos_scores = []
-        # carry_forward[y] = list of BeamItems to seed the next step
-        carry_forward = {}
+        # Accumulators populated by score_stops
+        scores = {}         # y → [log-weights] for regular target symbols
+        eos_scores = []     # [log-weights] for outer EOS
+        carry_forward = {}  # y → [BeamItems] to seed the next step
 
         EOS = self.tlm.inner_lm.eos if hasattr(self.tlm.inner_lm, 'eos') else self.tlm.inner_lm.initial().eos
-
-        # DFA states where the source has fully produced `target` and FST is final
         preimage_lookup = self._peekaboo_state.preimage_stops
 
-        # Initialize priority queue from beam
-        queue = LocatorMaxHeap()
-        for item in self._beam:
-            queue[item] = item.weight
-
-        steps = 0
-        while queue and steps < self.tlm.max_steps:
-            steps += 1
-            item, _ = queue.pop()
+        def score_stops(item):
+            """Classify item's DFA state and accumulate scores. Returns True if quotient."""
             dfa_state = item.dfa_state
-            lm_state = item.lm_state
             weight = item.weight
 
-            lm_logp_next = lm_state.logp_next
-
-            # --- Preimage stop check (EOS) ---
+            # Preimage: source completed the target prefix at a final FST state
             if dfa_state in preimage_lookup:
-                eos_scores.append(weight + lm_logp_next[EOS])
+                eos_lp = item.lm_state.logp_next._scores.get(EOS)
+                eos_scores.append(weight + (eos_lp if eos_lp is not None else -np.inf))
 
-            # --- Quotient check ---
-            is_quotient = False
-            q_syms = q_lookup.get(dfa_state, set())
-            if q_syms:
-                for y in q_syms:
-                    scores.setdefault(y, []).append(weight)
-                    carry_forward.setdefault(y, []).append(item)
-                is_quotient = True
-
-            # --- Remainder check ---
-            # Skip symbols that already have a quotient at this state:
-            # the quotient covers all continuations (including stopped),
-            # so remainder would double-count.
-            if dfa_state in r_lookup:
-                for y in r_lookup[dfa_state]:
-                    if y not in q_syms:
-                        scores.setdefault(y, []).append(weight + lm_logp_next[EOS])
-                    carry_forward.setdefault(y, []).append(item)
-
-            # Quotient states accept all continuations — don't expand
-            if is_quotient:
-                continue
-
-            # --- Expand ---
-            for x, next_dfa_state in dfa.arcs(dfa_state):
-                next_weight = float(weight + lm_logp_next[x])
-                if next_weight == -np.inf:
-                    continue
-                next_item = BeamItem(
-                    dfa_state=next_dfa_state,
-                    lm_state=lm_state << x,
-                    weight=next_weight,
-                )
-                queue[next_item] = next_weight
-
-        # Drain remaining queue items: record items at resume frontiers
-        while queue:
-            item, _ = queue.pop()
-            dfa_state = item.dfa_state
-            if dfa_state in preimage_lookup:
-                lm_logp_next_drain = item.lm_state.logp_next
-                eos_scores.append(item.weight + lm_logp_next_drain[EOS])
+            # Resume frontier: carry forward for the next target step
             if dfa_state in resume_states:
                 for y in resume_states[dfa_state]:
                     carry_forward.setdefault(y, []).append(item)
-            # Also check Q/R for drained items
-            q_syms = q_lookup.get(dfa_state, set())
-            if q_syms:
+
+            # Quotient: full weight, no further expansion needed
+            q_syms = q_lookup.get(dfa_state)
+            if q_syms is not None:
                 for y in q_syms:
-                    scores.setdefault(y, []).append(item.weight)
-                    carry_forward.setdefault(y, []).append(item)
-            if dfa_state in r_lookup:
-                lm_logp_next = item.lm_state.logp_next
-                for y in r_lookup[dfa_state]:
-                    if y not in q_syms:
-                        scores.setdefault(y, []).append(item.weight + lm_logp_next[EOS])
+                    scores.setdefault(y, []).append(weight)
                     carry_forward.setdefault(y, []).append(item)
 
-        # Normalize: logp_next[y] = logsumexp(scores[y]) - logsumexp(all_scores)
+            # Remainder: weight + P(EOS), skipping symbols already covered by Q
+            r_syms = r_lookup.get(dfa_state)
+            if r_syms is not None:
+                eos_lp = item.lm_state.logp_next._scores.get(EOS)
+                eos_weight = weight + (eos_lp if eos_lp is not None else -np.inf)
+                for y in r_syms:
+                    if q_syms is None or y not in q_syms:
+                        scores.setdefault(y, []).append(eos_weight)
+                    carry_forward.setdefault(y, []).append(item)
+
+            return bool(q_syms)
+
+        # Best-first search: pop highest-weight item, score it, expand if not quotient
+        heap = list(self._beam)
+        heapq.heapify(heap)
+
+        steps = 0
+        while heap and steps < self.tlm.max_steps:
+            steps += 1
+            item = heapq.heappop(heap)
+
+            is_quotient = score_stops(item)
+            if is_quotient:
+                continue
+
+            # Expand: advance the inner LM by each source symbol x, push children
+            lm_logp_next = item.lm_state.logp_next
+            for x, next_dfa_state in dfa.arcs(item.dfa_state):
+                next_weight = item.weight + lm_logp_next[x]
+                if next_weight == -np.inf:
+                    continue
+                heapq.heappush(heap, BeamItem(next_dfa_state, item.lm_state << x, next_weight))
+
+        # Budget exhausted: score remaining items without expanding so they
+        # still contribute to scores and carry_forward.
+        for item in heap:
+            score_stops(item)
+
+        # Normalize to a proper conditional: P(y | target) = exp(score(y)) / Z
         all_raw = []
         for y, s_list in scores.items():
             all_raw.append(logsumexp(s_list))

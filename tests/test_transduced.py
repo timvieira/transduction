@@ -9,6 +9,7 @@ from transduction.lm.base import LMState
 from transduction.lm.base import LogpNext
 from transduction.lm.ngram import ByteNgramLM, CharNgramLM, NgramState
 from transduction.lm.transduced import TransducedLM, TransducedState, logsumexp
+from transduction.lm.fused_transduced import FusedTransducedLM, FusedTransducedState
 
 
 # ---------------------------------------------------------------------------
@@ -414,4 +415,169 @@ class TestLMState:
         state = ngram_lm.initial()
         s = state([])
         assert s is state
+
+
+class TestFusedTransducedLM:
+    """Tests that FusedTransducedLM matches TransducedLM."""
+
+    def test_identity_transducer(self, char_ngram_lm):
+        """Fused and original should agree on copy FST."""
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst = copy_fst(fst_alpha)
+
+        orig = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
+        fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
+
+        orig_state = orig.initial()
+        fused_state = fused.initial()
+
+        for y in fst_alpha:
+            o = orig_state.logp_next[y]
+            f = fused_state.logp_next[y]
+            if o > -10:
+                assert abs(o - f) < 0.5, \
+                    f"Symbol {y!r}: orig={o:.4f}, fused={f:.4f}"
+
+    def test_identity_after_advance(self, char_ngram_lm):
+        """Fused matches original after advancing by a symbol."""
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst = copy_fst(fst_alpha)
+
+        orig = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
+        fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
+
+        orig_state = orig.initial() << 'a'
+        fused_state = fused.initial() << 'a'
+
+        for y in fst_alpha:
+            o = orig_state.logp_next[y]
+            f = fused_state.logp_next[y]
+            if o > -10:
+                assert abs(o - f) < 0.5, \
+                    f"Symbol {y!r}: orig={o:.4f}, fused={f:.4f}"
+
+    def test_small_fst(self, char_ngram_lm):
+        """Fused matches original on examples.small()."""
+        fst = examples.small()
+
+        orig = TransducedLM(char_ngram_lm, fst, max_steps=1000, max_beam=200)
+        fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=1000, max_beam=200)
+
+        orig_state = orig.initial()
+        fused_state = fused.initial()
+
+        orig_scores = dict(orig_state.logp_next.items())
+        fused_scores = dict(fused_state.logp_next.items())
+
+        for y in orig_scores:
+            o = orig_scores[y]
+            f = fused_scores.get(y, -np.inf)
+            if o > -10:
+                assert abs(o - f) < 0.5, \
+                    f"Symbol {y!r}: orig={o:.4f}, fused={f:.4f}"
+
+    def test_lowercase_fst(self, char_ngram_lm):
+        """Fused matches original on examples.lowercase()."""
+        fst = examples.lowercase()
+
+        orig = TransducedLM(char_ngram_lm, fst, max_steps=1000, max_beam=200)
+        fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=1000, max_beam=200)
+
+        orig_state = orig.initial()
+        fused_state = fused.initial()
+
+        orig_scores = dict(orig_state.logp_next.items())
+        fused_scores = dict(fused_state.logp_next.items())
+
+        for y in orig_scores:
+            o = orig_scores[y]
+            f = fused_scores.get(y, -np.inf)
+            if o > -10:
+                assert abs(o - f) < 0.5, \
+                    f"Symbol {y!r}: orig={o:.4f}, fused={f:.4f}"
+
+    def test_brute_force_comparison(self):
+        """Fused matches brute-force enumeration for a tiny FST."""
+        inner_lm = TinyLM()
+        fst = copy_fst(['a', 'b'])
+
+        fused = FusedTransducedLM(inner_lm, fst, max_steps=5000, max_beam=500)
+        state = fused.initial()
+
+        bf = brute_force_pushforward(inner_lm, fst, '', max_source_len=6)
+        Z = logsumexp(list(bf.values()))
+
+        a_strings = {k: v for k, v in bf.items() if k.startswith('a')}
+        b_strings = {k: v for k, v in bf.items() if k.startswith('b')}
+
+        bf_a = logsumexp(list(a_strings.values())) - Z if a_strings else -np.inf
+        bf_b = logsumexp(list(b_strings.values())) - Z if b_strings else -np.inf
+
+        fused_a = state.logp_next['a']
+        fused_b = state.logp_next['b']
+
+        assert abs(fused_a - bf_a) < 0.5, f"a: bf={bf_a:.4f}, fused={fused_a:.4f}"
+        assert abs(fused_b - bf_b) < 0.5, f"b: bf={bf_b:.4f}, fused={fused_b:.4f}"
+
+    def test_incremental_consistency(self, char_ngram_lm):
+        """logp after << y1 << y2 equals sum of conditional logps."""
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst = copy_fst(fst_alpha)
+        fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
+
+        state0 = fused.initial()
+        lp1 = state0.logp_next['a']
+
+        state1 = state0 << 'a'
+        lp2 = state1.logp_next['b']
+
+        state2 = state1 << 'b'
+
+        expected = lp1 + lp2
+        assert state2.logp == pytest.approx(expected, abs=1e-10)
+
+    def test_eos_normalization(self):
+        """logp_next (including EOS) should sum to approximately 1."""
+        inner_lm = TinyLM()
+        fst = copy_fst(['a', 'b'])
+
+        fused = FusedTransducedLM(inner_lm, fst, max_steps=5000, max_beam=500)
+        state = fused.initial()
+
+        lp = state.logp_next
+        all_logps = [lp[y] for y in ['a', 'b']] + [lp[state.eos]]
+        total = logsumexp(all_logps)
+
+        assert abs(total) < 0.1, \
+            f"Probabilities should sum to ~1 (log ~0), got log-sum={total:.6f}"
+
+    def test_logp_starts_at_zero(self, char_ngram_lm):
+        """Initial state has logp = 0."""
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst = copy_fst(fst_alpha)
+        fused = FusedTransducedLM(char_ngram_lm, fst)
+        state = fused.initial()
+        assert state.logp == 0.0
+
+    def test_path_recovery(self, char_ngram_lm):
+        """Path recovery returns the correct sequence of target symbols."""
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst = copy_fst(fst_alpha)
+        fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
+
+        state = fused.initial() << 'a' << 'b' << 'a'
+        assert state.path() == ['a', 'b', 'a']
+
+    def test_repr(self, char_ngram_lm):
+        """Repr doesn't crash."""
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst = copy_fst(fst_alpha)
+        fused = FusedTransducedLM(char_ngram_lm, fst)
+        state = fused.initial()
+        assert 'FusedTransducedState' in repr(state)
+        assert 'FusedTransducedLM' in repr(fused)
+
+    def test_inheritance(self):
+        """FusedTransducedState inherits from LMState."""
+        assert issubclass(FusedTransducedState, LMState)
 

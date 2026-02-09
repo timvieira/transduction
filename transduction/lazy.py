@@ -107,6 +107,9 @@ class Lazy:
         [start] = list(dfa.start())
         return is_universal(dfa, start, alphabet)
 
+    def cache(self):
+        return Cached(self)
+
     def renumber(self):
         return Renumber(self)
 
@@ -178,6 +181,28 @@ class LazyDeterminize(Lazy):
         result = frozenset(j for i in Q for j in self.fsa.arcs_x(i, x))
         if result:
             yield result
+
+
+class Cached(Lazy):
+    """Caches arcs and finality per state -- a lazy version of materialize."""
+
+    def __init__(self, base):
+        self.base = base
+        self._arcs_cache = {}
+        self._final_cache = {}
+
+    def start(self):
+        return self.base.start()
+
+    def arcs(self, state):
+        if state not in self._arcs_cache:
+            self._arcs_cache[state] = list(self.base.arcs(state))
+        return self._arcs_cache[state]
+
+    def is_final(self, state):
+        if state not in self._final_cache:
+            self._final_cache[state] = self.base.is_final(state)
+        return self._final_cache[state]
 
 
 class StartAt(Lazy):
