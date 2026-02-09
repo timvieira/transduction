@@ -36,17 +36,8 @@ class LazyIncremental(IncrementalDecomposition):
             self.extend = extend
             self.max_steps = max_steps
             self._frontier_cache = {}
-            # Bootstrap: build intermediate states for non-empty initial target
-            if len(target) > 0:
-                state = LazyIncremental(fst, '', empty_source=empty_source,
-                                        empty_target=empty_target, extend=extend,
-                                        max_steps=max_steps)
-                for ch in target[:-1]:
-                    state = state >> ch
-                self.parent = state
-                self._frontier_cache = state._frontier_cache
-            else:
-                self.parent = None
+            assert len(target) == 0, 'Use __call__ or >> to advance from an empty target'
+            self.parent = None
         else:
             # Incremental step: inherit config and shared cache from parent
             self.empty_source = parent.empty_source
@@ -116,7 +107,7 @@ class LazyIncremental(IncrementalDecomposition):
     def candidacy(self, xs, target):
         return any(
             (ys.startswith(target) or target.startswith(ys))
-            for (s, ys) in self.frontier(xs)
+            for (_, ys) in self.frontier(xs)
         )
 
     def discontinuity(self, xs, target):

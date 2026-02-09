@@ -25,6 +25,19 @@ class DecompositionResult:
         self.quotient = quotient
         self.remainder = remainder
 
+    def __iter__(self):
+        return iter((self.quotient, self.remainder))
+
+    def __eq__(self, other):
+        if isinstance(other, DecompositionResult):
+            return self.quotient == other.quotient and self.remainder == other.remainder
+        if isinstance(other, tuple) and len(other) == 2:
+            return self.quotient == other[0] and self.remainder == other[1]
+        raise NotImplementedError()
+
+    def __repr__(self):
+        return f'DecompositionResult({self.quotient!r}, {self.remainder!r})'
+
     def decompose_next(self):
         """Decompose for every next target symbol, returning a dict {y: DecompositionResult}."""
         target_alphabet = self.fst.B - {EPSILON}
