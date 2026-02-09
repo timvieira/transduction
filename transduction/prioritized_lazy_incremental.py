@@ -16,6 +16,57 @@ class BFSHeuristic:
         return self.depth < other.depth
 
 
+class FrontierGraph:
+    """Interned frontier graph: caches powerset-construction nodes and transitions.
+
+    Each node is a canonical frozenset of (fst_state, target_buffer) pairs.
+    Transitions are cached per (node, symbol) so that duplicate source strings
+    reaching the same powerset state share work.
+    """
+
+    def __init__(self, fst, empty_target, extend):
+        self.fst = fst
+        self.extend = extend
+        self._intern = {}           # frozenset -> frozenset (canonical identity)
+        self._transitions = {}      # (node_id, symbol) -> node
+
+        self.initial = self._intern_node(
+            self._epsilon_closure({(s, empty_target) for s in fst.start})
+        )
+
+    def _intern_node(self, frontier_set):
+        key = frozenset(frontier_set)
+        return self._intern.setdefault(key, key)
+
+    def _epsilon_closure(self, frontier):
+        """Extend frontier to include everything reachable by source-side epsilon transitions."""
+        worklist = set(frontier)
+        result = set()
+        while worklist:
+            pair = worklist.pop()
+            if pair in result:
+                continue
+            result.add(pair)
+            s, ys = pair
+            for b, next_state in self.fst.arcs(s, EPSILON):
+                worklist.add((next_state, self.extend(ys, b)))
+        return result
+
+    def step(self, node, symbol):
+        """Transition from node by source symbol, returning the interned successor."""
+        key = (id(node), symbol)
+        cached = self._transitions.get(key)
+        if cached is not None:
+            return cached
+        next_set = set()
+        for s, ys in node:
+            for b, j in self.fst.arcs(s, symbol):
+                next_set.add((j, self.extend(ys, b)))
+        result = self._intern_node(self._epsilon_closure(next_set))
+        self._transitions[key] = result
+        return result
+
+
 class PrioritizedLazyIncremental(IncrementalDecomposition):
     """
     Variant of :class:`LazyIncremental` with priority-based exploration and
@@ -56,7 +107,7 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
             self.extend = extend
             self.max_steps = max_steps
             self.heuristic = heuristic
-            self._frontier_cache = {}
+            self._graph = FrontierGraph(fst, empty_target, extend)
             self._all_input_universal = check_all_input_universal(fst)
             self._ip_universal_states = (
                 frozenset() if self._all_input_universal
@@ -72,7 +123,7 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
             self.extend = parent.extend
             self.max_steps = parent.max_steps
             self.heuristic = parent.heuristic
-            self._frontier_cache = parent._frontier_cache
+            self._graph = parent._graph
             self._all_input_universal = parent._all_input_universal
             self._ip_universal_states = parent._ip_universal_states
             self.parent = parent
@@ -83,45 +134,125 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
     def _compute(self):
         self._quotient_hstates = {}
         self._remainder_hstates = {}
+        self._quotient_nodes = {}
+        self._remainder_nodes = {}
 
-        # heap entries: (h_state, tiebreak, xs)
+        graph = self._graph
+        target = self.target
+
+        # Per-node caches for this _compute call
+        _candidacy_cache = {}
+        _discontinuity_cache = {}
+
+        def _candidacy(node):
+            cached = _candidacy_cache.get(id(node))
+            if cached is not None:
+                return cached
+            result = any(
+                (ys.startswith(target) or target.startswith(ys))
+                for (_, ys) in node
+            )
+            _candidacy_cache[id(node)] = result
+            return result
+
+        def _discontinuity(node):
+            cached = _discontinuity_cache.get(id(node))
+            if cached is not None:
+                return cached
+            result = any(
+                (s in self.fst.stop) for (s, ys) in node
+                if ys.startswith(target)
+            )
+            _discontinuity_cache[id(node)] = result
+            return result
+
+        # heap entries: (h_state, tiebreak, xs, node)
         heap = []
         counter = 0
 
-        N = len(self.target)
+        N = len(target)
         if N == 0:
-            heapq.heappush(heap, (self.heuristic, counter, self.empty_source))
+            heapq.heappush(heap, (self.heuristic, counter, self.empty_source, graph.initial))
             counter += 1
         else:
             # filter previous remainders
             for xs, h_state in self.parent._remainder_hstates.items():
-                if self.discontinuity(xs, self.target):
+                node = self.parent._remainder_nodes[xs]
+                if _discontinuity(node):
                     self._remainder_hstates[xs] = h_state
+                    self._remainder_nodes[xs] = node
 
             # filter previous quotient so that it satisfies the invariant
             for xs, h_state in self.parent._quotient_hstates.items():
-                if self.candidacy(xs, self.target):
-                    heapq.heappush(heap, (h_state, counter, xs))
+                node = self.parent._quotient_nodes[xs]
+                if _candidacy(node):
+                    heapq.heappush(heap, (h_state, counter, xs, node))
                     counter += 1
 
         steps = 0
         while heap and steps < self.max_steps:
-            h_state, _, xs = heapq.heappop(heap)
+            h_state, _, xs, node = heapq.heappop(heap)
             steps += 1
 
-            if self.continuity(xs, self.target):
+            if self._check_continuity(node, target, graph, _candidacy, _discontinuity):
                 self._quotient_hstates[xs] = h_state
+                self._quotient_nodes[xs] = node
                 continue
 
-            if self.discontinuity(xs, self.target):
+            if _discontinuity(node):
                 self._remainder_hstates[xs] = h_state
+                self._remainder_nodes[xs] = node
 
             for source_symbol in self.source_alphabet:
                 next_xs = self.extend(xs, source_symbol)
-                if self.candidacy(next_xs, self.target):
+                next_node = graph.step(node, source_symbol)
+                if _candidacy(next_node):
                     child_h = h_state >> source_symbol
-                    heapq.heappush(heap, (child_h, counter, next_xs))
+                    heapq.heappush(heap, (child_h, counter, next_xs, next_node))
                     counter += 1
+
+    def _check_continuity(self, node, target, graph, _candidacy, _discontinuity):
+        """Node-based BFS universality check."""
+
+        # Fast path: if the entire FST's input projection is universal,
+        # every final frontier is universal.
+        if self._all_input_universal:
+            return _discontinuity(node)
+
+        # ip-universal witness: if the frontier contains (q, ys) where q is
+        # ip-universal and ys already covers the target, then all extensions
+        # of xs will also have an ip-universal witness → universal.
+        if self._ip_universal_states:
+            for q, ys in node:
+                if q in self._ip_universal_states and ys.startswith(target):
+                    return True
+
+        N = len(target)
+
+        def refine(n):
+            return frozenset({
+                (i, ys[:N]) for i, ys in n
+                if ys[:min(N, len(ys))] == target[:min(N, len(ys))]
+            })
+
+        worklist = deque()
+        worklist.append(node)
+        visited = {refine(node)}
+
+        while worklist:
+            cur = worklist.popleft()
+            if not _discontinuity(cur):
+                return False
+            for a in self.source_alphabet:
+                next_node = graph.step(cur, a)
+                if not _candidacy(next_node):
+                    return False
+                jj = refine(next_node)
+                if jj not in visited:
+                    visited.add(jj)
+                    worklist.append(next_node)
+
+        return True
 
     @property
     def quotient(self):
@@ -133,104 +264,3 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
 
     def __rshift__(self, y):
         return PrioritizedLazyIncremental(self.fst, self.target + y, parent=self)
-
-    def candidacy(self, xs, target):
-        return any(
-            (ys.startswith(target) or target.startswith(ys))
-            for (_, ys) in self.frontier(xs)
-        )
-
-    def discontinuity(self, xs, target):
-        return any((s in self.fst.stop) for (s, ys) in self.frontier(xs)
-                   if ys.startswith(target))
-
-    def frontier(self, xs):
-        """Returns the state of `xs` in the powerset construction where each
-        state is paired with a target-side string."""
-        val = self._frontier_cache.get(xs)
-        if val is None:
-            val = self._compute_frontier(xs)
-            self._frontier_cache[xs] = val
-        return val
-
-    def _compute_frontier(self, xs):
-        if len(xs) == 0:
-            return self._epsilon_closure_frontier({(s, self.empty_target) for s in self.fst.start})
-        else:
-            return self.next_frontier(self.frontier(xs[:-1]), xs[-1])
-
-    def next_frontier(self, frontier, source_symbol):
-        "Transitions in the augmented-powerstate construction."
-        assert source_symbol != EPSILON
-        next_frontier = set()
-        for s, ys in frontier:
-            for a, b, j in self.fst.arcs(s):
-                if a == source_symbol:
-                    next_frontier.add((j, self.extend(ys, b)))
-        return self._epsilon_closure_frontier(next_frontier)
-
-    def _epsilon_closure_frontier(self, frontier):
-        "Extend `frontier` to include everything reachable by source-side epsilon transitions."
-        worklist = set(frontier)
-        next_frontier = set()
-        while worklist:
-            (s, ys) = worklist.pop()
-            if (s, ys) in next_frontier: continue
-            next_frontier.add((s, ys))
-            for b, next_state in self.fst.arcs(s, EPSILON):
-                worklist.add((next_state, self.extend(ys, b)))
-        return next_frontier
-
-    def continuity(self, xs, target):
-        "Is `xs` a cylinder of y's precover?"
-
-        # Fast path: if the entire FST's input projection is universal,
-        # every final frontier is universal.
-        if self._all_input_universal:
-            return self.discontinuity(xs, target)
-
-        # ip-universal witness: if the frontier contains (q, ys) where q is
-        # ip-universal and ys already covers the target, then all extensions
-        # of xs will also have an ip-universal witness → universal.
-        if self._ip_universal_states:
-            for q, ys in self.frontier(xs):
-                if q in self._ip_universal_states and ys.startswith(target):
-                    return True
-
-        alphabet = self.source_alphabet
-
-        def refine(frontier):
-            N = len(target)
-            return frozenset({
-                (i, ys[:N]) for i, ys in frontier
-                if ys[:min(N, len(ys))] == target[:min(N, len(ys))]
-            })
-
-        def arcs(xs):
-            for source_symbol in self.source_alphabet:
-                next_xs = self.extend(xs, source_symbol)
-                if self.candidacy(next_xs, target):
-                    yield source_symbol, next_xs
-
-        def is_final(xs):
-            return self.discontinuity(xs, target)
-
-        worklist = deque()
-        worklist.append(xs)
-        visited = {refine(self.frontier(xs))}
-
-        while worklist:
-            i = worklist.popleft()
-            if not is_final(i):
-                return False
-            dest = dict(arcs(i))
-            for a in alphabet:
-                if a not in dest:
-                    return False
-                j = dest[a]
-                jj = refine(self.frontier(j))
-                if jj not in visited:
-                    visited.add(jj)
-                    worklist.append(j)
-
-        return True
