@@ -31,6 +31,7 @@ IMPLEMENTATIONS = [
     pytest.param(LazyNonrecursive, id="lazy_nonrecursive"),
     pytest.param(LazyIncremental, id="lazy_incremental"),
     pytest.param(_precover_factory, id="precover"),
+    pytest.param(PrioritizedLazyIncremental, id="prioritized_lazy_incremental"),
 ]
 
 
@@ -178,8 +179,8 @@ def test_prioritized_max_steps():
 
     have_limited = tmp_limited('a')
     have_full = tmp_full('a')
-    assert have_limited._quotient_set <= have_full._quotient_set
-    assert have_limited._remainder_set <= have_full._remainder_set
+    assert have_limited._quotient_hstates.keys() <= have_full._quotient_set
+    assert have_limited._remainder_hstates.keys() <= have_full._remainder_set
 
 
 if __name__ == '__main__':
