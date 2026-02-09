@@ -152,11 +152,13 @@ def test_prioritized_custom_heuristic():
     fst = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c')])
 
     class ReverseAlpha:
-        """Explore higher ord(symbol) first (lower priority value)."""
-        def __init__(self, priority=0):
-            self.priority = priority
+        """Explore higher ord(symbol) first (lower = explored first)."""
+        def __init__(self, score=0):
+            self._score = score
         def __rshift__(self, symbol):
             return ReverseAlpha(-ord(symbol))
+        def __lt__(self, other):
+            return self._score < other._score
 
     tmp = PrioritizedLazyIncremental(fst, heuristic=ReverseAlpha())
     assert_equal(tmp(''), DecompositionResult({''}, set()))
@@ -165,21 +167,19 @@ def test_prioritized_custom_heuristic():
     assert_equal(tmp('abc'), DecompositionResult({'123'}, set()))
 
 
-def test_prioritized_pruning():
-    """Pruning limits exploration depth, producing a subset of the full result."""
-    from transduction.prioritized_lazy_incremental import BFSHeuristic
+def test_prioritized_max_steps():
+    """max_steps limits exploration, producing a subset of the full result."""
     fst = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c'), ('4', 'd'), ('5', 'e')])
 
     tmp_full = LazyIncremental(fst)
-    tmp_pruned = PrioritizedLazyIncremental(fst, heuristic=BFSHeuristic(),
-                                            prune=lambda p: p > 1)
+    tmp_limited = PrioritizedLazyIncremental(fst, max_steps=3)
 
-    assert_equal(tmp_pruned(''), DecompositionResult({''}, set()))
+    assert_equal(tmp_limited(''), DecompositionResult({''}, set()))
 
-    have_pruned = tmp_pruned('a')
+    have_limited = tmp_limited('a')
     have_full = tmp_full('a')
-    assert have_pruned._quotient_set <= have_full._quotient_set
-    assert have_pruned._remainder_set <= have_full._remainder_set
+    assert have_limited._quotient_set <= have_full._quotient_set
+    assert have_limited._remainder_set <= have_full._remainder_set
 
 
 if __name__ == '__main__':
