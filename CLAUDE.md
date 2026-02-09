@@ -80,6 +80,14 @@ Eliminated deps (previously external, now inlined):
   - When adding new algorithms or test cases, classify them as general vs finite-only
     and put them in the appropriate test file.
 
+## CRITICAL: Memory Limits
+
+**Always set a memory limit when running scripts that may consume unbounded
+memory** (benchmarks, determinization, materialization, enumeration, etc.).
+Use `resource.setrlimit(resource.RLIMIT_AS, (limit, limit))` at the top of
+the script or use `ulimit -v` from the shell. A reasonable default is 4 GB.
+Without this, a runaway process can exhaust RAM and crash the machine.
+
 ## Build Pipeline
 
 ```bash
