@@ -216,9 +216,9 @@ class TestWikitextEnumeration:
         assert len(fst.B) == 27   # 26 lower + space
 
     def test_decomposition(self, wikitext_lm):
-        """RustDecomp on 'timothy vieira' through lowercase FST."""
+        """RustDecomp on 'in january' through lowercase FST."""
         fst = byte_lowercase_fst()
-        target = tuple(bytes([b]) for b in b'timothy vieira')
+        target = tuple(bytes([b]) for b in b'in january')
 
         result = RustDecomp(fst, target)
         Q, R = result.quotient, result.remainder
@@ -227,19 +227,22 @@ class TestWikitextEnumeration:
 
     @pytest.mark.timeout(60)
     def test_prioritized_enumeration(self, wikitext_lm):
-        """Prioritized enumeration through byte lowercase FST with WikiText LM."""
+        """Prioritized enumeration through byte lowercase FST with WikiText LM.
+
+        Target 'in january' appears frequently in WikiText as 'in January'.
+        The n-gram LM should rank 'in January' as the most likely source.
+        """
         fst = byte_lowercase_fst()
-        target = tuple(bytes([b]) for b in b'timothy vieira')
+        target = tuple(bytes([b]) for b in b'in january')
 
         pe = prioritized_enumeration(
             wikitext_lm.initial(), fst, target,
             max_steps=100_000, decompose=RustDecomp,
         )
         all_terms = pe.quotient_terms + pe.remainder_terms
-        assert isinstance(all_terms, list)
-        # With matching alphabets, enumeration should find terms
-        for item in all_terms:
-            assert np.isfinite(item.weight)
+        assert len(all_terms) > 0
+        best = max(all_terms, key=lambda x: x.weight)
+        assert best.source.path_bytes() == b'in January'
 
     def test_greedy_decode_wikitext_lm(self, wikitext_lm):
         """Greedy decode from common prompts produces plausible continuations."""
