@@ -23,6 +23,8 @@ class FST:
         self.delta = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
         self.start = set()
         self.stop = set()
+        self._arcs_i = None      # lazy arc indexes (built on first arcs() call)
+        self._arcs_ix = None
         for i in start: self.add_start(i)
         for i in stop: self.add_stop(i)
         for i,a,b,j in arcs: self.add_arc(i,a,b,j)
@@ -69,6 +71,7 @@ class FST:
         self.delta[i][a][b].add(j)   # TODO: change this data structure to separate a and b.
         self.A.add(a)
         self.B.add(b)
+        self._arcs_i = None   # invalidate arc indexes
 
     def add_start(self, q):
         self.states.add(q)
@@ -100,17 +103,32 @@ class FST:
         self.index_ix_j = index_ix_j
         self.index_ixy_j = index_ixy_j
 
-    def arcs(self, i, x=None):
-        if x is None:
-            for a, A in self.delta[i].items():
+    def _build_arc_index(self):
+        """Build flat arc indexes for O(1) lookup, called lazily on first arcs() call."""
+        # state → tuple[(input, output, dest), ...]
+        arcs_i = {}
+        # (state, input) → tuple[(output, dest), ...]
+        arcs_ix = {}
+        for i, d in self.delta.items():
+            all_arcs = []
+            for a, A in d.items():
+                by_input = []
                 for b, B in A.items():
                     for j in B:
-                        yield a, b, j
+                        all_arcs.append((a, b, j))
+                        by_input.append((b, j))
+                arcs_ix[(i, a)] = tuple(by_input)
+            arcs_i[i] = tuple(all_arcs)
+        self._arcs_i = arcs_i
+        self._arcs_ix = arcs_ix
+
+    def arcs(self, i, x=None):
+        if self._arcs_i is None:
+            self._build_arc_index()
+        if x is None:
+            return self._arcs_i.get(i, ())
         else:
-            A = self.delta[i][x]
-            for b, B in A.items():
-                for j in B:
-                    yield b, j
+            return self._arcs_ix.get((i, x), ())
 
     def rename(self, f):
         "Note: If `f` is not bijective, states may merge."
