@@ -7,22 +7,28 @@ Usage:
     python -m pytest tests/test_ptb_nltk.py
 """
 from collections import defaultdict
-from nltk.tokenize import TreebankWordTokenizer
 
-from transduction.fsts.ptb import (
+from nltk.tokenize import TreebankWordTokenizer
+import pytest
+
+from transduction.fst import FST
+from transduction.applications.ptb import (
     build_ptb_fst_pynini,
     string_to_byte_strs,
     SEP,
+    MARKER,
 )
-from benchmark.data import load_wikitext, wikitext_detokenize
+from transduction.applications.wikitext import load_wikitext, wikitext_detokenize
+from transduction.fsa import EPSILON
 
 
 def fst_tokenize(fst, text):
     """Tokenize text using the FST."""
-    # add_eos=True appends end-of-string marker for NLTK-compatible period handling
-    byte_strs = string_to_byte_strs(text, add_eos=True)
+    byte_strs = string_to_byte_strs(text)
     try:
-        output = next(fst(byte_strs, None).language(tuple=True))
+        input_fst = FST.from_string(byte_strs)
+        output_fsa = (input_fst @ fst).project(1)
+        output = next(output_fsa.language(tuple=True))
     except StopIteration:
         return None  # FST rejected input
 
@@ -31,12 +37,12 @@ def fst_tokenize(fst, text):
     for sym in output:
         if sym == SEP:
             if current:
-                tokens.append(bytes(int(b) for b in current).decode('utf-8', errors='replace'))
+                tokens.append(bytes(current).decode('utf-8', errors='replace'))
                 current = []
-        elif int(sym) < 256 and sym != '3':  # Skip EOS marker (byte 3)
+        elif sym != MARKER and sym != EPSILON:
             current.append(sym)
     if current:
-        tokens.append(bytes(int(b) for b in current).decode('utf-8', errors='replace'))
+        tokens.append(bytes(current).decode('utf-8', errors='replace'))
     return tokens
 
 
@@ -85,10 +91,10 @@ def categorize_difference(text, fst_tokens, nltk_tokens):
     return 'other', fst_tok, nltk_tok
 
 
-def run_comparison(n_paragraphs=100, max_chars=500, verbose=True):
+def run_comparison(n_paragraphs=100, max_chars=500, verbose=True, fst=None):
     """Run comparison between FST and NLTK on wikitext paragraphs."""
-    print("Building PTB FST...")
-    fst = build_ptb_fst_pynini()
+    if fst is None:
+        fst = build_ptb_fst_pynini()
     nltk_tok = TreebankWordTokenizer()
 
     print(f"Loading {n_paragraphs} wikitext paragraphs...")
@@ -174,6 +180,62 @@ def run_comparison(n_paragraphs=100, max_chars=500, verbose=True):
         'categories': dict(categories),
         'errors': errors,
     }
+
+
+# ---------------------------------------------------------------------------
+# Pytest tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def ptb_fst():
+    return build_ptb_fst_pynini()
+
+
+def test_ptb_fst_matches_nltk(ptb_fst):
+    """Test that PTB FST matches NLTK on wikitext paragraphs."""
+    results = run_comparison(
+        n_paragraphs=100, max_chars=500, verbose=True, fst=ptb_fst
+    )
+    total = results['total']
+    matches = results['matches']
+    assert total > 0, "No paragraphs were tested"
+    # Allow up to 5% mismatch rate for known divergences
+    match_rate = matches / total
+    assert match_rate >= 0.95, (
+        f"Match rate {match_rate:.1%} ({matches}/{total}) is below 95%. "
+        f"Categories: {dict((k, len(v)) for k, v in results['categories'].items())}"
+    )
+
+
+def test_ptb_fst_simple_sentence(ptb_fst):
+    """Test FST tokenization on a simple sentence."""
+    nltk_tok = TreebankWordTokenizer()
+    text = "Hello, world!"
+    fst_tokens = fst_tokenize(ptb_fst, text)
+    nltk_tokens = nltk_tok.tokenize(text)
+    assert fst_tokens is not None, "FST rejected simple input"
+    assert fst_tokens == nltk_tokens, f"FST={fst_tokens} vs NLTK={nltk_tokens}"
+
+
+def test_ptb_fst_contractions(ptb_fst):
+    """Test FST tokenization handles contractions."""
+    nltk_tok = TreebankWordTokenizer()
+    text = "I can't believe it's not butter."
+    fst_tokens = fst_tokenize(ptb_fst, text)
+    nltk_tokens = nltk_tok.tokenize(text)
+    assert fst_tokens is not None, "FST rejected contractions input"
+    assert fst_tokens == nltk_tokens, f"FST={fst_tokens} vs NLTK={nltk_tokens}"
+
+
+def test_ptb_fst_quotes(ptb_fst):
+    """Test FST tokenization handles quotes."""
+    nltk_tok = TreebankWordTokenizer()
+    text = 'He said "hello" to her.'
+    fst_tokens = fst_tokenize(ptb_fst, text)
+    nltk_tokens = nltk_tok.tokenize(text)
+    assert fst_tokens is not None, "FST rejected quotes input"
+    assert fst_tokens == nltk_tokens, f"FST={fst_tokens} vs NLTK={nltk_tokens}"
 
 
 def main():

@@ -302,7 +302,7 @@ def remap_fst_to_single_chars(fst):
 def build_ptb_setup(text=None, max_chars=100):
     """Build PTB FST, remap to single-char symbols, train inner LM, and
     prepare a target sequence."""
-    from transduction.fsts.ptb import build_ptb_fst_pynini, string_to_byte_strs, decode_ptb_output
+    from transduction.applications.ptb import build_ptb_fst_pynini, string_to_byte_strs, decode_ptb_output
     from transduction.fst import FST
     from transduction.fsa import EPSILON
 

@@ -22,5 +22,5 @@ setup(
     ],
     readme='',
     scripts=[],
-    packages=['transduction'],
+    packages=['transduction', 'transduction.applications'],
 )

@@ -34,7 +34,7 @@ import datasets
 datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True
 
 # Local imports
-from transduction.fsts.ptb import (
+from transduction.applications.ptb import (
     build_ptb_fst_pynini,
     string_to_byte_strs,
     decode_ptb_output,
@@ -91,16 +91,14 @@ def decode_with_boundaries(output_tuple, boundary_char='|'):
     for sym in output_tuple:
         if sym == SEP:
             if current_token:
-                byte_vals = [int(b) for b in current_token]
-                tokens.append(bytes(byte_vals).decode('utf-8', errors='replace'))
+                tokens.append(bytes(current_token).decode('utf-8', errors='replace'))
                 current_token = []
             tokens.append(boundary_char)
         elif sym != MARKER and sym != EPSILON:
             current_token.append(sym)
 
     if current_token:
-        byte_vals = [int(b) for b in current_token]
-        tokens.append(bytes(byte_vals).decode('utf-8', errors='replace'))
+        tokens.append(bytes(current_token).decode('utf-8', errors='replace'))
 
     return ''.join(tokens)
 
