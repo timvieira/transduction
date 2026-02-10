@@ -11,6 +11,10 @@ class NonrecursiveDFADecomp(DecompositionResult):
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
 
+        oov = set(target) - self.target_alphabet
+        if oov:
+            raise ValueError(f"Out of vocabulary target symbols: {oov}")
+
         # Implementation note: this is a truncated representation of the
         # Precover(fst, target).  The recursive algorithm attempts to do
         # something differently where the automaton allows the target buffer to

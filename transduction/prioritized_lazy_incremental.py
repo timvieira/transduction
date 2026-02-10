@@ -657,4 +657,6 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
         return FSA.from_strings(self._source_trie.to_string(xs) for xs in self._remainder)
 
     def __rshift__(self, y):
+        if y not in self.target_alphabet:
+            raise ValueError(f"Out of vocabulary target symbol: {y!r}")
         return PrioritizedLazyIncremental(self.fst, self._target_trie.extend(self.target, y), parent=self)

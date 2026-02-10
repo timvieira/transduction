@@ -49,8 +49,9 @@ class prioritized_enumeration:
         dfa.stop |= R
         self.dfa = dfa.trim()
 
-        if not (set(target) <= fst.B):
-            print(f'[warn] OOVs: {set(target) - fst.B}')
+        oov = set(target) - fst.B
+        if oov:
+            raise ValueError(f"Out of vocabulary target symbols: {oov}")
 
         self.remainder_terms = []
         self.quotient_terms = []
@@ -122,8 +123,9 @@ class importance_sampling:
         dfa.stop |= R
         self.dfa = dfa.trim()
 
-        if not (set(target) <= fst.B):
-            print(f'[warn] OOVs: {set(target) - fst.B}')
+        oov = set(target) - fst.B
+        if oov:
+            raise ValueError(f"Out of vocabulary target symbols: {oov}")
 
         self.Q = Q
         self.R = R
@@ -178,8 +180,9 @@ class crude_importance_sampling:
 
     def __init__(self, lm, fst, target):
 
-        if not (set(target) <= fst.B):
-            print(f'[warn] OOVs: {set(target) - fst.B}')
+        oov = set(target) - fst.B
+        if oov:
+            raise ValueError(f"Out of vocabulary target symbols: {oov}")
 
         self.dfa = LazyPrecoverNFA(fst, target).det()
         self.lm = lm

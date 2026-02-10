@@ -101,7 +101,9 @@ class RustDecomp(DecompositionResult):
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
 
-        assert set(target) <= self.target_alphabet
+        oov = set(target) - self.target_alphabet
+        if oov:
+            raise ValueError(f"Out of vocabulary target symbols: {oov}")
 
         rust_fst, sym_map, state_map = to_rust_fst(fst)
 
@@ -120,6 +122,9 @@ class RustPeekaboo(DecompositionResult):
         self.fst = fst
         self.target = target
         self.target_alphabet = fst.B - {EPSILON}
+        oov = set(target) - self.target_alphabet
+        if oov:
+            raise ValueError(f"Out of vocabulary target symbols: {oov}")
         self._parent = _parent
         self._symbol = _symbol
         if _rust_cache is not None:

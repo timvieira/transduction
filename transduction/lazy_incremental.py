@@ -28,6 +28,9 @@ class LazyIncremental(IncrementalDecomposition):
         self.target = target
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
+        oov = set(target) - self.target_alphabet
+        if oov:
+            raise ValueError(f"Out of vocabulary target symbols: {oov}")
 
         if parent is None:
             # Initial state: store config and create shared frontier cache

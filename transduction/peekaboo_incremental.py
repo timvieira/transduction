@@ -211,6 +211,9 @@ class PeekabooState(IncrementalDecomposition):
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
+        oov = set(target) - self.target_alphabet
+        if oov:
+            raise ValueError(f"Out of vocabulary target symbols: {oov}")
         self.target = target
         self.parent = parent
 

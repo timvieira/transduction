@@ -181,6 +181,10 @@ class TokenDecompose(DecompositionResult):
 
         self.fst = fst
         self.target = target
+        target_alphabet = fst.B - {EPSILON}
+        oov = set(target) - target_alphabet
+        if oov:
+            raise ValueError(f"Out of vocabulary target symbols: {oov}")
         target_len = len(target)
 
         # Extract tokens and build trie

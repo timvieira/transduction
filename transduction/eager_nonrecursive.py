@@ -40,6 +40,9 @@ class Precover(DecompositionResult):
         self.target = target
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
+        oov = set(target) - self.target_alphabet
+        if oov:
+            raise ValueError(f"Out of vocabulary target symbols: {oov}")
         self.U = FSA.universal(self.source_alphabet)
         self.impl = impl
 
