@@ -18,18 +18,22 @@ from transduction.fsa import EPSILON as NATIVE_EPSILON
 
 
 EPS = "<eps>"
-MARKER = '257'    # Out-of-band word boundary marker (not a real byte) Removed at the end
-SEP = '258'       # Output separator symbol (word boundary in final output)
+MARKER = 257    # Out-of-band word boundary marker (not a real byte) Removed at the end
+SEP = 258       # Output separator symbol (word boundary in final output)
+
+# String forms for pynini symbol table (pynini requires string names)
+_MARKER_STR = str(MARKER)
+_SEP_STR = str(SEP)
 
 
 def char_to_byte_str(ch):
-    """Convert a single ASCII character to its byte value as string."""
-    return str(ord(ch))
+    """Convert a single ASCII character to its integer byte value."""
+    return ord(ch)
 
 
 def string_to_byte_strs(s):
-    """Convert a string to tuple of byte value strings."""
-    return tuple(str(b) for b in s.encode('utf-8'))
+    """Convert a string to tuple of integer byte values."""
+    return tuple(b for b in s.encode('utf-8'))
 
 
 def decode_ptb_output(output_tuple):
@@ -40,15 +44,13 @@ def decode_ptb_output(output_tuple):
     for sym in output_tuple:
         if sym == SEP:
             if current_token:
-                byte_vals = [int(b) for b in current_token]
-                tokens.append(bytes(byte_vals).decode('utf-8', errors='replace'))
+                tokens.append(bytes(current_token).decode('utf-8', errors='replace'))
                 current_token = []
         elif sym != MARKER and sym != NATIVE_EPSILON:
             current_token.append(sym)
 
     if current_token:
-        byte_vals = [int(b) for b in current_token]
-        tokens.append(bytes(byte_vals).decode('utf-8', errors='replace'))
+        tokens.append(bytes(current_token).decode('utf-8', errors='replace'))
 
     return ' '.join(tokens)
 
@@ -77,8 +79,8 @@ def _build_separator_inserter(symbols, ext_symbols):
     fst.set_final(start)
     fst.set_final(in_markers)
 
-    marker_id = ext_symbols.find(MARKER)
-    sep_id = ext_symbols.find(SEP)
+    marker_id = ext_symbols.find(_MARKER_STR)
+    sep_id = ext_symbols.find(_SEP_STR)
 
     # From start: first marker -> output SEP, go to in_markers
     fst.add_arc(start, pynini.Arc(marker_id, sep_id, 0, in_markers))
@@ -109,15 +111,15 @@ def build_ptb_fst_pynini():
     symbols.add_symbol(EPS, 0)
     for bt in range(256):
         symbols.add_symbol(str(bt), bt + 1)
-    symbols.add_symbol(MARKER, 257)
+    symbols.add_symbol(_MARKER_STR, 257)
 
     # Extended symbols: adds SEP for output
     ext_symbols = pynini.SymbolTable()
     ext_symbols.add_symbol(EPS, 0)
     for bt in range(256):
         ext_symbols.add_symbol(str(bt), bt + 1)
-    ext_symbols.add_symbol(MARKER, 257)
-    ext_symbols.add_symbol(SEP, 258)
+    ext_symbols.add_symbol(_MARKER_STR, 257)
+    ext_symbols.add_symbol(_SEP_STR, 258)
 
     # Helper function shortcuts
     def cb(ch):
@@ -127,7 +129,7 @@ def build_ptb_fst_pynini():
         return _chars_to_bytes(s, symbols)
 
     # Common acceptors
-    MARKER_ACC = pynini.accep(MARKER, token_type=symbols)
+    MARKER_ACC = pynini.accep(_MARKER_STR, token_type=symbols)
     SPACE = cb(" ")
     APOS = cb("'")
     QUOTE = cb('"')
@@ -139,7 +141,7 @@ def build_ptb_fst_pynini():
     # Build sigma (all bytes 0-255 + MARKER)
     sigma = pynini.union(
         *[pynini.accep(str(i), token_type=symbols) for i in range(256)],
-        pynini.accep(MARKER, token_type=symbols),
+        pynini.accep(_MARKER_STR, token_type=symbols),
     )
     sigma_star = pynini.closure(sigma)
 
@@ -439,14 +441,14 @@ def build_ptb_fst_pynini():
         if final_weight != pynini.Weight.zero(final_fst.weight_type()):
             native_fst.add_stop(state)
 
-    marker_id = ext_symbols.find(MARKER)
+    marker_id = ext_symbols.find(_MARKER_STR)
     for state in final_fst.states():
         for arc in final_fst.arcs(state):
             # Skip arcs with MARKER as input (unreachable — input never contains MARKER)
             if arc.ilabel == marker_id:
                 continue
-            input_sym = NATIVE_EPSILON if arc.ilabel == 0 else ext_symbols.find(arc.ilabel)
-            output_sym = NATIVE_EPSILON if arc.olabel in (0, marker_id) else ext_symbols.find(arc.olabel)
+            input_sym = NATIVE_EPSILON if arc.ilabel == 0 else int(ext_symbols.find(arc.ilabel))
+            output_sym = NATIVE_EPSILON if arc.olabel in (0, marker_id) else int(ext_symbols.find(arc.olabel))
             native_fst.add_arc(state, input_sym, output_sym, arc.nextstate)
 
     # Summary statistics

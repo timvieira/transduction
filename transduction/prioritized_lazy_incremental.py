@@ -177,16 +177,23 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
         ``h >> symbol`` returns a new heuristic state; ``h1 < h2`` orders
         the min-heap (smaller = explored first).  When ``None`` (default),
         uses :class:`BFSHeuristic` (orders by depth).
+
+        If the heuristic state exposes a ``.logp`` attribute (cumulative
+        log-probability), the ``logp_gap`` stopping criterion can be used.
+    logp_gap : float or None
+        Stop exploring when the best remaining heap entry's ``logp`` falls
+        more than ``logp_gap`` below the best quotient entry's ``logp``.
+        Requires the heuristic to expose a ``.logp`` attribute.
+        ``None`` (default) disables gap-based stopping.
     max_steps : int or float
-        Maximum number of heap pops before stopping early.
+        Hard safety limit on heap pops.
     max_beam : int or float
-        Maximum number of quotient/remainder entries to propagate from the
-        parent into each ``>>`` step.  When finite, only the top-K entries
-        (by heuristic score, lower = better) are kept, pruning the rest.
+        Hard safety limit on quotient/remainder entries propagated from
+        the parent into each ``>>`` step.
 
     Usage::
 
-        state = PrioritizedLazyIncremental(fst, heuristic=my_h)
+        state = PrioritizedLazyIncremental(fst, heuristic=my_h, logp_gap=10)
         state = state >> 'a'
         state.quotient    # FSA
         state.remainder   # FSA
@@ -194,6 +201,7 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
 
     def __init__(self, fst, target=None, parent=None, *, empty_source='',
                  empty_target='', extend=lambda x, y: x + y,
+                 logp_gap=None,
                  max_steps=float('inf'), max_beam=float('inf'),
                  heuristic=BFSHeuristic()):
         self.fst = fst
@@ -204,6 +212,7 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
             self.empty_source = empty_source
             self.empty_target = empty_target
             self.extend = extend
+            self.logp_gap = logp_gap
             self.max_steps = max_steps
             self.max_beam = max_beam
             self.heuristic = heuristic
@@ -223,6 +232,7 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
             self.empty_source = parent.empty_source
             self.empty_target = parent.empty_target
             self.extend = parent.extend
+            self.logp_gap = parent.logp_gap
             self.max_steps = parent.max_steps
             self.max_beam = parent.max_beam
             self.heuristic = parent.heuristic
@@ -295,11 +305,17 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
         return result
 
     def _compute(self):
-        """Heap-driven exploration to partition source strings into quotient and remainder.
+        """Lazy-expansion search with deferred ``graph.step`` calls.
 
-        For the root (empty target), seeds the heap with the graph's initial node.
-        For children (target extended by one symbol), re-filters the parent's
-        quotient and remainder against the new target, then continues exploring.
+        Each heap entry is either *resolved* (string is at a known graph node)
+        or *deferred* (string wants to transition through a source symbol, but
+        the expensive epsilon-closure ``graph.step`` hasn't been called yet).
+
+        Deferred entries are cheap to push.  The expensive ``graph.step`` only
+        runs when an entry is actually popped from the heap.  With an informed
+        heuristic (e.g. an LM), low-probability symbols are never popped and
+        their transitions are never computed — exploration cost scales with
+        ``max_steps`` rather than ``max_steps × |alphabet|``.
         """
         self._quotient = {}     # xs -> (h_state, node)
         self._remainder = {}    # xs -> (h_state, node)
@@ -319,15 +335,31 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
 
         graph = self._graph
         source_trie = self._source_trie
+        fst = self.fst
 
-        # heap entries: (h_state, tiebreak, xs, node)
-        # xs is a source trie node ID (int), not a string.
+        # Flat priority heap: (h_state, tiebreak, payload)
+        # payload = (xs, node, None)  — resolved: string xs is at node
+        # payload = (xs, parent, sym) — deferred: needs graph.step(parent, sym)
         heap = []
         counter = 0
 
-        if self._target_depth == 0:
-            heapq.heappush(heap, (self.heuristic, counter, source_trie.initial, graph.initial))
+        # Per-node caches (keyed by id(node); safe because nodes are interned).
+        node_class = {}           # 'universal' | 'remainder' | 'expand'
+        node_available_syms = {}  # set of source symbols (cheap to compute)
+
+        def enqueue(h_state, xs, node, sym=None):
+            """Push a heap entry.  sym=None → resolved; sym=<symbol> → deferred."""
+            nonlocal counter
+            # Eager fast-path: resolved entries at known-universal nodes.
+            if sym is None and node_class.get(id(node)) == 'universal':
+                self._quotient[xs] = (h_state, node)
+                return
+            heapq.heappush(heap, (h_state, counter, (xs, node, sym)))
             counter += 1
+
+        # --- Seed ---
+        if self._target_depth == 0:
+            enqueue(self.heuristic, source_trie.initial, graph.initial)
         else:
             K = self.max_beam
 
@@ -344,7 +376,7 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
             for h_state, xs, node in rem_candidates:
                 self._remainder[xs] = (h_state, node)
 
-            # Quotient strings that are still live go back on the heap for re-evaluation,
+            # Quotient strings that are still live go back for re-evaluation,
             # since universality may no longer hold under the extended target.
             # When beam-limited, keep only the top-K by heuristic score.
             quot_candidates = [
@@ -356,29 +388,81 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
                 quot_candidates.sort()
                 quot_candidates = quot_candidates[:K]
             for h_state, xs, node in quot_candidates:
-                heapq.heappush(heap, (h_state, counter, xs, node))
-                counter += 1
+                enqueue(h_state, xs, node)
 
+        # --- Main loop ---
         steps = 0
-        while heap and steps < self.max_steps:
-            h_state, _, xs, node = heapq.heappop(heap)
-            steps += 1
+        logp_gap = self.logp_gap
 
-            # A node must be final to be universal, so check finality first
-            # to skip the expensive BFS for non-final nodes.
-            if self._is_final(node):
-                if self._is_universal(node):
+        # Reference logp for gap stopping: use the parent's best quotient logp
+        # as the baseline.  This avoids a cold-start problem where the local
+        # best_quotient_logp starts at -inf and the gap check is disabled until
+        # the first local quotient is found.  The parent's estimate is already
+        # a good approximation of the prefix probability mass.
+        if self.parent is not None:
+            best_quotient_logp = max(
+                (getattr(h, 'logp', -float('inf'))
+                 for h, _node in self.parent._quotient.values()),
+                default=-float('inf'),
+            )
+        else:
+            best_quotient_logp = -float('inf')
+
+        while heap and steps < self.max_steps:
+            h_state, _, (xs, node, sym) = heapq.heappop(heap)
+
+            # Log-probability gap stopping: if the best remaining entry
+            # is far below the best quotient entry, the remaining mass is
+            # negligible — stop early.
+            if logp_gap is not None and best_quotient_logp > -float('inf'):
+                h_logp = getattr(h_state, 'logp', None)
+                if h_logp is not None and best_quotient_logp - h_logp > logp_gap:
+                    break
+
+            # Resolve deferred entries: call graph.step now.
+            if sym is not None:
+                node = graph.step(node, sym)
+                if not self._is_live(node):
+                    continue
+                # Fast-path: already known universal → straight to quotient.
+                if node_class.get(id(node)) == 'universal':
                     self._quotient[xs] = (h_state, node)
                     continue
+
+            nid = id(node)
+            steps += 1
+
+            # Classify node (cached per node per _compute call).
+            cls = node_class.get(nid)
+            if cls is None:
+                if self._is_final(node):
+                    cls = 'universal' if self._is_universal(node) else 'remainder'
+                else:
+                    cls = 'expand'
+                node_class[nid] = cls
+                # Compute available source symbols (cheap: just scan arc labels).
+                if cls != 'universal':
+                    syms = set()
+                    for s, _ys in node:
+                        for a, _b, j in fst.arcs(s):
+                            if a != EPSILON:
+                                syms.add(a)
+                    node_available_syms[nid] = syms
+
+            if cls == 'universal':
+                self._quotient[xs] = (h_state, node)
+                # Track best quotient logp for gap stopping.
+                h_logp = getattr(h_state, 'logp', None)
+                if h_logp is not None and h_logp > best_quotient_logp:
+                    best_quotient_logp = h_logp
+                continue
+
+            if cls == 'remainder':
                 self._remainder[xs] = (h_state, node)
 
-            # Expand children: extend xs by each source symbol with a live successor.
-            for source_symbol, next_node in graph.arcs(node):
-                if self._is_live(next_node):
-                    next_xs = source_trie.extend(xs, source_symbol)
-                    child_h = h_state >> source_symbol
-                    heapq.heappush(heap, (child_h, counter, next_xs, next_node))
-                    counter += 1
+            # Expand: push DEFERRED entries — graph.step not called until pop.
+            for a in node_available_syms[nid]:
+                enqueue(h_state >> a, source_trie.extend(xs, a), node, sym=a)
 
     def _add_pos(self, node):
         """Record *node* as known-universal in the element-indexed positive cache."""
