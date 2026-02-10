@@ -465,44 +465,101 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
         if self._has_neg_superset(node):
             return False
 
-        graph = self._graph
+        result = self._is_universal_bfs(node)
+        return result
 
-        def refine(n):
-            """Project node to target-relevant components for cycle detection.
+    def _is_universal_bfs(self, node):
+        """BFS over clipped states to check universality without graph bloat.
 
-            Clips target buffers to target depth and drops pairs incompatible with
-            the target prefix.  Two nodes with the same refined image behave
-            identically for universality, so we use this as the visited-set key.
-            """
-            target_ancestors = self._target_ancestors
-            return frozenset({
-                (i, self._clip(ys)) for i, ys in n
-                if ys in target_ancestors or self._clip(ys) == target
-            })
+        Works entirely with (fst_state, clipped_ys) pairs where ys is clipped
+        to ``target_depth``.  This avoids creating new interned graph nodes or
+        trie entries beyond the target depth, preventing the O(steps × BFS_size)
+        memory growth of the graph-based BFS.
+
+        Correctness relies on ``clip(extend(ys, b)) == clip(extend(clip(ys), b))``
+        — clipping commutes with extension — so the clipped BFS explores the
+        same refined state space as the original.
+        """
+        fst = self.fst
+        trie = self._target_trie
+        target = self.target
+        target_depth = self._target_depth
+        target_ancestors = self._target_ancestors
+        source_alphabet_len = len(self.source_alphabet)
+        fst_stop = fst.stop
+        trie_depth = trie._depth
+
+        def _extend_clipped(ys, b):
+            """Extend ys by output symbol b, clipping to target_depth."""
+            if b == EPSILON:
+                return ys
+            if trie_depth[ys] >= target_depth:
+                return ys   # at/past target depth; extension clips back
+            return trie.extend(ys, b)
+
+        def _eps_closure_clipped(pairs):
+            """Epsilon closure keeping ys clipped to target_depth."""
+            worklist = set(pairs)
+            result = set()
+            while worklist:
+                pair = worklist.pop()
+                if pair in result:
+                    continue
+                result.add(pair)
+                s, ys = pair
+                for b, next_s in fst.arcs(s, EPSILON):
+                    worklist.add((next_s, _extend_clipped(ys, b)))
+            return result
+
+        def _step_clipped(clipped_state, symbol):
+            """Transition clipped state by source symbol, returning clipped successor."""
+            next_pairs = set()
+            for s, ys in clipped_state:
+                for b, j in fst.arcs(s, symbol):
+                    next_pairs.add((j, _extend_clipped(ys, b)))
+            return frozenset(_eps_closure_clipped(next_pairs))
+
+        def _compatible(clipped_state):
+            """Filter to target-compatible pairs (for cycle detection)."""
+            return frozenset(
+                (s, ys) for s, ys in clipped_state
+                if ys in target_ancestors or ys == target
+            )
+
+        def _is_final_clipped(clipped_state):
+            return any(s in fst_stop for s, ys in clipped_state if ys == target)
+
+        # Build initial clipped state from raw node.
+        initial = frozenset((s, self._clip(ys)) for s, ys in node)
+        root_compat = _compatible(initial)
 
         worklist = deque()
-        worklist.append(node)
-        visited = {refine(node)}
+        worklist.append(initial)
+        visited = {root_compat}
 
         while worklist:
             cur = worklist.popleft()
-            if not self._is_final(cur):
+            if not _is_final_clipped(cur):
                 self._add_neg(node)
                 return False
-            # Check completeness: every source symbol must have a transition.
-            succs = dict(graph.arcs(cur))
-            if len(succs) < len(self.source_alphabet):
+            # Completeness: source symbols from ALL pairs (including incompatible).
+            src_symbols = set()
+            for s, _ys in cur:
+                for a, _b, j in fst.arcs(s):
+                    if a != EPSILON:
+                        src_symbols.add(a)
+            if len(src_symbols) < source_alphabet_len:
                 self._add_neg(node)
                 return False
-            for a in self.source_alphabet:
-                next_node = succs[a]
-                if not self._is_live(next_node):
+            for a in src_symbols:
+                next_clipped = _step_clipped(cur, a)
+                next_compat = _compatible(next_clipped)
+                if not next_compat:
                     self._add_neg(node)
                     return False
-                jj = refine(next_node)
-                if jj not in visited:
-                    visited.add(jj)
-                    worklist.append(next_node)
+                if next_compat not in visited:
+                    visited.add(next_compat)
+                    worklist.append(next_clipped)
 
         self._add_pos(node)
         return True
