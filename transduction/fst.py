@@ -142,6 +142,15 @@ class FST:
                 m.add_arc(f(i), a, b, f(j))
         return m
 
+    def map_labels(self, f):
+        "Transform arc labels by applying f(a, b) -> (a', b') to each arc."
+        m = self.spawn(keep_init=True, keep_stop=True)
+        for i in self.states:
+            for a, b, j in self.arcs(i):
+                a2, b2 = f(a, b)
+                m.add_arc(i, a2, b2, j)
+        return m
+
     def renumber(self):
         return self.rename(Integerizer())
 
@@ -271,15 +280,7 @@ class FST:
     @cached_property
     def T(self):
         "transpose swap left <-> right"
-        T = self.spawn()
-        for i in self.states:
-            for a, b, j in self.arcs(i):
-                T.add_arc(i, b, a, j)  # pylint: disable=W1114
-        for q in self.start:
-            T.add_start(q)
-        for q in self.stop:
-            T.add_stop(q)
-        return T
+        return self.map_labels(lambda a, b: (b, a))
 
     def __matmul__(self, other):
         "Relation composition; may coerce `other` to an appropriate type if need be."

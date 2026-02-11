@@ -12,14 +12,31 @@ from transduction.fsa import EPSILON
 # Edge-label compressor (regex-style summaries)
 # ---------------------------------------------
 
+# Sentinels wrapping meta-brackets ([ ] { }) so the visualizer can color them
+# differently from literal bracket characters in the alphabet.
+_MB_OPEN = '\ue000'
+_MB_CLOSE = '\ue001'
+
+def _m(bracket):
+    """Wrap a meta-bracket character in sentinels."""
+    return f"{_MB_OPEN}{bracket}{_MB_CLOSE}"
+
 def _fmt_symbol(s):
-    """Format a single symbol for display.  Strings are shown bare, other
-    types use ``repr()``."""
-    return str(s) if isinstance(s, str) else repr(s)
+    """Format a single symbol for display.  Strings are shown bare (with
+    space shown as ``␣``), length-1 bytes use the ``_fmt_byte`` style,
+    other types use ``repr()``."""
+    if isinstance(s, str):
+        return s.replace(' ', '␣')
+    if isinstance(s, bytes) and len(s) == 1:
+        return _fmt_byte(s[0])
+    return repr(s)
 
 
 def _escape_char(c):
-    """Backslash-escape characters that are special inside bracket expressions."""
+    """Backslash-escape characters that are special inside bracket expressions.
+    Space is rendered as ``␣``."""
+    if c == ' ':
+        return '␣'
     specials = {']', '\\', '^', '-'}
     return '\\' + c if c in specials else c
 
@@ -67,11 +84,11 @@ def _format_complement(S, alphabet, max_exclusions, alphabet_name="Σ"):
         return None
     sigma = set(alphabet)
     if S == sigma:
-        return alphabet_name
+        return _m(alphabet_name)
     excl = sigma - S
     if 0 < len(excl) <= max_exclusions and len(excl) < len(S):
         excl_str = ", ".join(_fmt_symbol(x) for x in sorted(excl, key=repr))
-        return f"{alphabet_name} − {{{excl_str}}}"
+        return f"{_m(alphabet_name)} {_m('−')} {_m('{')}{excl_str}{_m('}')}"
     return None
 
 
@@ -80,7 +97,76 @@ def _format_char_class(chars):
     if len(chars) == 1:
         return _escape_char(next(iter(chars)))
     toks = _range_tokens(chars)
-    return "[" + "".join(toks) + "]"
+    return _m("[") + "".join(toks) + _m("]")
+
+
+# -------------------------------------------------
+# Integer-label range compression (analogous to char ranges)
+# -------------------------------------------------
+
+def _int_ranges(ints):
+    """Yield ``(lo, hi)`` pairs for runs of consecutive integers in *ints*."""
+    vals = sorted(ints)
+    if not vals:
+        return
+    start = prev = vals[0]
+    for k in vals[1:]:
+        if k != prev + 1:
+            yield start, prev
+            start = k
+        prev = k
+    yield start, prev
+
+
+def _int_range_tokens(ints):
+    """Convert a set of integers into compact range tokens.
+
+    Runs of 3+ consecutive integers become ``a-b`` style ranges; shorter
+    runs are listed individually.
+    """
+    toks = []
+    for a, b in _int_ranges(ints):
+        if b - a + 1 >= 3:
+            toks.append(f"{a}-{b}")
+        else:
+            for v in range(a, b + 1):
+                toks.append(str(v))
+    return toks
+
+
+def _format_int_class(ints):
+    """Format integer symbols as a bracket expression like ``[0-9, 32-126]``."""
+    if len(ints) == 1:
+        return str(next(iter(ints)))
+    toks = _int_range_tokens(ints)
+    return _m("[") + ", ".join(toks) + _m("]")
+
+
+def _fmt_byte(b):
+    """Format a byte value (0-255) for display in bracket expressions.
+
+    Printable ASCII (0x20-0x7e) is shown as the character itself (with
+    bracket-expression specials escaped, space as ``␣``); everything else
+    uses ``\\xNN``.
+    """
+    if 0x20 <= b <= 0x7e:
+        return _escape_char(chr(b))
+    return f"\\x{b:02x}"
+
+
+def _format_bytes_class(byte_syms):
+    """Format a set of length-1 ``bytes`` as a bracket expression like ``[\\x00-\\x1f, a-z]``."""
+    vals = sorted(b[0] for b in byte_syms)
+    if len(vals) == 1:
+        return _fmt_byte(vals[0])
+    toks = []
+    for a, b in _int_ranges(vals):
+        if b - a + 1 >= 3:
+            toks.append(f"{_fmt_byte(a)}-{_fmt_byte(b)}")
+        else:
+            for v in range(a, b + 1):
+                toks.append(_fmt_byte(v))
+    return _m("[") + "".join(toks) + _m("]")
 
 
 def compress_symbols(symbols, alphabet=None, max_exclusions=5,
@@ -90,7 +176,9 @@ def compress_symbols(symbols, alphabet=None, max_exclusions=5,
     Tries, in order:
     1. Complement notation (e.g. ``Σ − {excl}``) when the excluded set is small
     2. Bracket expression with ranges for single-character symbols: ``[a-z0-9]``
-    3. Literal set notation for everything else: ``{'ab', 'cd'}``
+    3. Integer range compression: ``[0-9, 32-126]``
+    4. Byte range compression for length-1 ``bytes``: ``[\\x00-\\x1f, a-z]``
+    5. Literal set notation for everything else: ``{'ab', 'cd'}``
 
     *alphabet_name* controls the symbol used in complement notation
     (default ``"Σ"``; use ``"A"``/``"B"`` for FST input/output).
@@ -107,8 +195,16 @@ def compress_symbols(symbols, alphabet=None, max_exclusions=5,
     if all(isinstance(s, str) and len(s) == 1 for s in S):
         return _format_char_class(S)
 
+    # Integer range compression
+    if all(isinstance(s, int) for s in S):
+        return _format_int_class(S)
+
+    # Byte range compression for length-1 bytes objects
+    if all(isinstance(s, bytes) and len(s) == 1 for s in S):
+        return _format_bytes_class(S)
+
     # Everything else: literal set notation
-    return "{" + ", ".join(_fmt_symbol(x) for x in sorted(S, key=repr)) + "}"
+    return _m("{") + ", ".join(_fmt_symbol(x) for x in sorted(S, key=repr)) + _m("}")
 
 
 # ---------------------------------------------------------
@@ -207,8 +303,293 @@ def compress_fst_labels(pairs, input_alphabet=None, output_alphabet=None,
 
 
 # ------------------------------------------------
+# Expanded (uncompressed) label formatting
+# ------------------------------------------------
+
+def _expand_symbols(symbols, max_shown=50):
+    """Format a full set of symbols as a comma-separated list (no range compression)."""
+    syms = sorted(symbols, key=repr)
+    parts = [_fmt_symbol(s) for s in syms[:max_shown]]
+    text = ', '.join(parts)
+    if len(syms) > max_shown:
+        text += f', \u2026 ({len(syms)} total)'
+    return text
+
+
+def _expand_fst_pairs(pairs, max_shown=50):
+    """Format FST label pairs as a comma-separated list (no factoring)."""
+    sorted_pairs = sorted(pairs, key=repr)
+    parts = []
+    for a, b in sorted_pairs[:max_shown]:
+        fa = 'ε' if a is EPSILON else _fmt_symbol(a)
+        fb = 'ε' if b is EPSILON else _fmt_symbol(b)
+        if a == b:
+            parts.append(fa)
+        else:
+            parts.append(f'{fa}:{fb}')
+    text = ', '.join(parts)
+    if len(sorted_pairs) > max_shown:
+        text += f', \u2026 ({len(sorted_pairs)} total)'
+    return text
+
+
+# ------------------------------------------------
 # Graphviz integration: merge & visualize edges
 # ------------------------------------------------
+
+_META_BRACKET_COLOR = "#4a86c8"
+
+def _gv_html_escape(text):
+    """HTML-escape *text* for use inside a Graphviz HTML label.
+
+    In addition to the standard ``&<>"`` escapes, ``]`` must be
+    entity-encoded because Graphviz's HTML parser treats it as
+    a DOT attribute-list terminator inside ``<font>`` tags.
+    """
+    return _html.escape(text).replace("]", "&#93;")
+
+
+def _label_to_html(label, meta_color=_META_BRACKET_COLOR):
+    """Convert a label with meta-bracket sentinels to a Graphviz HTML label.
+
+    Characters between ``_MB_OPEN`` / ``_MB_CLOSE`` sentinels are rendered
+    in *meta_color*; everything else is HTML-escaped normally.
+    """
+    parts = []
+    i = 0
+    while i < len(label):
+        if label[i] == _MB_OPEN:
+            j = label.index(_MB_CLOSE, i + 1)
+            bracket = _gv_html_escape(label[i + 1 : j])
+            parts.append(
+                f'<font color="{meta_color}">{bracket}</font>'
+            )
+            i = j + 1
+        else:
+            parts.append(_gv_html_escape(label[i]))
+            i += 1
+    return "<" + "".join(parts) + ">"
+
+
+def strip_meta_brackets(label):
+    """Remove meta-bracket sentinels, returning a plain-text label."""
+    return label.replace(_MB_OPEN, "").replace(_MB_CLOSE, "")
+
+
+class InteractiveGraph:
+    """Wrapper around a Graphviz ``Digraph`` that adds click-to-expand edge
+    labels when displayed in a Jupyter notebook.
+
+    - In Jupyter: ``_repr_html_`` renders SVG with JavaScript popups.
+    - Elsewhere: ``_repr_svg_`` falls back to plain SVG.
+    - Attribute access delegates to the underlying ``dot`` Digraph
+      (e.g. ``.render()``, ``.pipe()``, ``.source``).
+    """
+
+    def __init__(self, dot, edge_labels):
+        self.dot = dot
+        self._edge_labels = edge_labels   # {edge_id: expanded_text}
+
+    def __getattr__(self, name):
+        return getattr(self.dot, name)
+
+    def __repr__(self):
+        return repr(self.dot)
+
+    def _repr_image_svg_xml(self):
+        return self.dot._repr_image_svg_xml()
+
+    def _repr_html_(self):
+        import json
+        import re
+        import uuid
+        svg_raw = self.dot.pipe(format='svg').decode('utf-8')
+        cid = f"ig_{uuid.uuid4().hex[:8]}"
+
+        # Strip Graphviz's fixed width/height (in pt) so the SVG scales
+        # naturally inside the viewport.  Keep the viewBox for aspect ratio.
+        svg = re.sub(r'(<svg[^>]*?)\s+width="[^"]*"', r'\1', svg_raw, count=1)
+        svg = re.sub(r'(<svg[^>]*?)\s+height="[^"]*"', r'\1', svg, count=1)
+
+        labels_json = json.dumps(self._edge_labels)
+        return (
+            # -- container: clipped viewport -----------------------------------
+            f'<div id="{cid}" style="position:relative;overflow:hidden;'
+            f'  border:1px solid #ddd;border-radius:4px;'
+            f'  width:100%;height:500px;cursor:grab">'
+            f'<div class="ig-inner" style="transform-origin:0 0">'
+            f'{svg}'
+            f'</div></div>'
+
+            # -- CSS -----------------------------------------------------------
+            f'<style>'
+            f'#{cid} .edge {{cursor:pointer}}'
+            f'#{cid} .edge-popup {{'
+            f'  position:absolute;background:#fffff8;border:1px solid #bbb;'
+            f'  border-radius:4px;padding:4px 8px;font:11px/1.4 monospace;'
+            f'  white-space:pre-wrap;max-width:500px;max-height:200px;'
+            f'  overflow:auto;z-index:1000;box-shadow:2px 2px 6px rgba(0,0,0,.15);'
+            f'}}'
+            f'#{cid} .ig-hint {{'
+            f'  position:absolute;bottom:6px;right:8px;font:10px sans-serif;'
+            f'  color:#999;pointer-events:none'
+            f'}}'
+            f'</style>'
+
+            # -- JavaScript: zoom, pan, click-to-expand ------------------------
+            f'<script>'
+            f'(function(){{'
+
+            # --- refs ---------------------------------------------------------
+            f'  var c=document.getElementById("{cid}"),'
+            f'      inner=c.querySelector(".ig-inner"),'
+            f'      svg=c.querySelector("svg"),'
+            f'      L={labels_json};'
+
+            # --- zoom / pan state ---------------------------------------------
+            f'  var scale=1,tx=0,ty=0;'
+            f'  function apply(){{inner.style.transform='
+            f'    "translate("+tx+"px,"+ty+"px) scale("+scale+")"}}'
+
+            # --- fit SVG to viewport on load ----------------------------------
+            f'  svg.style.width="100%";svg.style.height="auto";'
+
+            # --- wheel zoom toward cursor -------------------------------------
+            f'  c.addEventListener("wheel",function(e){{'
+            f'    e.preventDefault();'
+            f'    var f=e.deltaY<0?1.1:1/1.1,'
+            f'        r=c.getBoundingClientRect(),'
+            f'        mx=e.clientX-r.left,my=e.clientY-r.top;'
+            f'    tx=mx-f*(mx-tx);ty=my-f*(my-ty);'
+            f'    scale*=f;apply()'
+            f'  }},{{passive:false}});'
+
+            # --- drag to pan (distinguish from click via movement) ------------
+            f'  var dragging=false,dx,dy,moved;'
+            f'  c.addEventListener("mousedown",function(e){{'
+            f'    if(e.target.closest(".edge-popup"))return;'
+            f'    dragging=true;moved=false;dx=e.clientX-tx;dy=e.clientY-ty;'
+            f'    c.style.cursor="grabbing"'
+            f'  }});'
+            f'  document.addEventListener("mousemove",function(e){{'
+            f'    if(!dragging)return;moved=true;'
+            f'    tx=e.clientX-dx;ty=e.clientY-dy;apply()'
+            f'  }});'
+            f'  document.addEventListener("mouseup",function(){{'
+            f'    dragging=false;c.style.cursor="grab"'
+            f'  }});'
+
+            # --- click-to-expand edge labels ----------------------------------
+            f'  Object.keys(L).forEach(function(eid){{'
+            f'    var g=svg.getElementById(eid);'
+            f'    if(!g)return;'
+            f'    g.addEventListener("click",function(e){{'
+            f'      if(moved)return;'
+            f'      e.stopPropagation();'
+            f'      var old=c.querySelector(".edge-popup");'
+            f'      if(old){{old.remove();if(old.dataset.eid===eid)return}}'
+            f'      var r=c.getBoundingClientRect(),'
+            f'          p=document.createElement("div");'
+            f'      p.className="edge-popup";p.dataset.eid=eid;'
+            f'      p.textContent=L[eid];'
+            f'      p.style.left=(e.clientX-r.left+10)+"px";'
+            f'      p.style.top=(e.clientY-r.top-10)+"px";'
+            f'      c.appendChild(p)'
+            f'    }})'
+            f'  }});'
+
+            # --- dismiss popup on outside click -------------------------------
+            f'  document.addEventListener("click",function(e){{'
+            f'    if(moved)return;'
+            f'    if(!e.target.closest("#{cid} .edge")'
+            f'       && !e.target.closest("#{cid} .edge-popup")){{'
+            f'      var p=c.querySelector(".edge-popup");'
+            f'      if(p)p.remove()'
+            f'    }}'
+            f'  }});'
+
+            # --- hint ---------------------------------------------------------
+            f'  var h=document.createElement("div");h.className="ig-hint";'
+            f'  h.textContent="scroll to zoom \u00b7 drag to pan";'
+            f'  c.appendChild(h)'
+
+            f'}})();'
+            f'</script>'
+        )
+
+
+def _coalesce_unbranching(uv_to_data, uv_to_eps, automaton):
+    """Detect unbranching chains and return coalescing info.
+
+    A state is *collapsible* if it is not start/final, has exactly one
+    non-epsilon predecessor and one non-epsilon successor, and has no
+    epsilon edges.  Maximal chains of collapsible states are merged into
+    single edges.
+
+    Returns ``(removed_states, removed_edges, chains)`` where *chains*
+    is a list of ``((head, tail), [(u1,v1), ...])`` entries.
+    """
+    out_nbrs = defaultdict(set)
+    in_nbrs = defaultdict(set)
+    for u, v in uv_to_data:
+        out_nbrs[u].add(v)
+        in_nbrs[v].add(u)
+
+    eps_out_count = defaultdict(int)
+    eps_in_count = defaultdict(int)
+    for u, v in uv_to_eps:
+        eps_out_count[u] += 1
+        eps_in_count[v] += 1
+
+    start = set(automaton.start)
+    collapsible = set()
+    for q in automaton.states:
+        if (q not in start
+                and not automaton.is_final(q)
+                and len(out_nbrs.get(q, ())) == 1
+                and len(in_nbrs.get(q, ())) == 1
+                and not eps_out_count.get(q)
+                and not eps_in_count.get(q)):
+            collapsible.add(q)
+
+    if not collapsible:
+        return set(), set(), {}
+
+    removed_states = set()
+    removed_edges = set()
+    chains = []
+    visited = set()
+
+    for q in automaton.states:
+        if q in collapsible:
+            continue
+        for v in out_nbrs.get(q, ()):
+            if v not in collapsible or v in visited:
+                continue
+            chain = [q, v]
+            visited.add(v)
+            cur = v
+            while True:
+                (nxt,) = out_nbrs[cur]
+                if nxt in collapsible and nxt not in visited:
+                    chain.append(nxt)
+                    visited.add(nxt)
+                    cur = nxt
+                else:
+                    chain.append(nxt)
+                    break
+            if len(chain) <= 2:
+                continue
+            steps = []
+            for i in range(len(chain) - 1):
+                steps.append((chain[i], chain[i + 1]))
+                removed_edges.add((chain[i], chain[i + 1]))
+            for s in chain[1:-1]:
+                removed_states.add(s)
+            chains.append(((chain[0], chain[-1]), steps))
+
+    return removed_states, removed_edges, chains
+
 
 def visualize_automaton(
     automaton,
@@ -219,6 +600,7 @@ def visualize_automaton(
     edge_attrs=None,
     fmt_state=str,
     sty_node=lambda q: {},
+    coalesce_chains=True,
 ):
     """Visualize a materialized FSA or FST using Graphviz.
 
@@ -228,14 +610,22 @@ def visualize_automaton(
     arcs displayed without colons, relational arcs factored into cartesian
     products).
 
+    Returns an ``InteractiveGraph`` that renders as interactive SVG in Jupyter
+    (click edge labels to expand) and delegates to the underlying
+    ``graphviz.Digraph`` for ``.render()``, ``.pipe()``, etc.
+
     Args:
         fmt_state: Callable mapping a state to its display label (default ``str``).
         sty_node: Callable mapping a state to a dict of extra Graphviz node
             attributes (e.g. ``{'fillcolor': '#90EE90', 'style': 'filled,rounded'}``).
+        coalesce_chains: Collapse unbranching chains into single edges with
+            dot-separated labels (default ``True``).
     """
+    import uuid
     from graphviz import Digraph
 
     is_fst = hasattr(automaton, 'B')   # FSTs have .A and .B alphabets
+    prefix = uuid.uuid4().hex[:8]
 
     # Assign unique DOT node IDs via enumeration.  Using str(q) as a node ID
     # is unsafe: str(1) == str('1'), so mixed-type states would silently merge.
@@ -264,6 +654,16 @@ def visualize_automaton(
                     uv_to_eps.add((u, v))
                 else:
                     uv_to_syms[(u, v)].add(a)
+
+    # --- Chain coalescing (visualization-only) ---
+    removed_states = set()
+    removed_edges = set()
+    chain_edges = []
+    if coalesce_chains:
+        uv_data = uv_to_pairs if is_fst else uv_to_syms
+        removed_states, removed_edges, chain_edges = _coalesce_unbranching(
+            uv_data, uv_to_eps, automaton,
+        )
 
     # Graphviz setup
     _node_attrs = dict(
@@ -296,29 +696,85 @@ def visualize_automaton(
 
     # Nodes
     for q in automaton.states:
+        if q in removed_states:
+            continue
         label = _html.escape(str(fmt_state(q)))
         sty = dict(peripheries='2' if automaton.is_final(q) else '1')
         sty.update(sty_node(q))
         dot.node(node_id[q], label=label, **sty)
 
-    # Epsilon edges
+    # Epsilon edges (HTML label so it matches the styled content edges)
+    eps_html = f'<{_html.escape(epsilon_symbol)}>'
     for u, v in uv_to_eps:
-        dot.edge(node_id[u], node_id[v], label=epsilon_symbol)
+        dot.edge(node_id[u], node_id[v], label=eps_html)
 
-    # Content edges
+    # Content edges (HTML labels with colored meta-brackets)
+    edge_labels = {}  # edge_id → expanded label (for click-to-expand)
+    edge_idx = 0
+
     if is_fst:
         for (u, v), pairs in uv_to_pairs.items():
+            if (u, v) in removed_edges:
+                continue
             label = compress_fst_labels(
                 pairs, input_alpha, output_alpha,
                 max_exclusions=max_exclusions,
             )
-            dot.edge(node_id[u], node_id[v], label=label)
+            expanded = _expand_fst_pairs(pairs)
+            compressed_plain = strip_meta_brackets(label)
+            eid = f"e_{prefix}_{edge_idx}"
+            edge_idx += 1
+            dot.edge(node_id[u], node_id[v],
+                     label=_label_to_html(label), id=eid,
+                     tooltip=expanded)
+            if expanded != compressed_plain:
+                edge_labels[eid] = expanded
     else:
         for (u, v), S in uv_to_syms.items():
+            if (u, v) in removed_edges:
+                continue
             label = compress_symbols(
                 S, alphabet=automaton.syms - {EPSILON},
                 max_exclusions=max_exclusions,
             )
-            dot.edge(node_id[u], node_id[v], label=label)
+            expanded = _expand_symbols(S)
+            compressed_plain = strip_meta_brackets(label)
+            eid = f"e_{prefix}_{edge_idx}"
+            edge_idx += 1
+            dot.edge(node_id[u], node_id[v],
+                     label=_label_to_html(label), id=eid,
+                     tooltip=expanded)
+            if expanded != compressed_plain:
+                edge_labels[eid] = expanded
 
-    return dot
+    # Coalesced chain edges
+    for (head, tail), steps in chain_edges:
+        step_labels = []
+        step_expanded = []
+        if is_fst:
+            for u, v in steps:
+                step_labels.append(compress_fst_labels(
+                    uv_to_pairs[(u, v)], input_alpha, output_alpha,
+                    max_exclusions=max_exclusions,
+                ))
+                step_expanded.append(_expand_fst_pairs(uv_to_pairs[(u, v)]))
+        else:
+            for u, v in steps:
+                step_labels.append(compress_symbols(
+                    uv_to_syms[(u, v)],
+                    alphabet=automaton.syms - {EPSILON},
+                    max_exclusions=max_exclusions,
+                ))
+                step_expanded.append(_expand_symbols(uv_to_syms[(u, v)]))
+        merged_label = _m('\u00b7').join(step_labels)
+        expanded = '\n'.join(step_expanded)
+        compressed_plain = strip_meta_brackets(merged_label)
+        eid = f"e_{prefix}_{edge_idx}"
+        edge_idx += 1
+        dot.edge(node_id[head], node_id[tail],
+                 label=_label_to_html(merged_label), id=eid,
+                 tooltip=expanded)
+        if expanded != compressed_plain:
+            edge_labels[eid] = expanded
+
+    return InteractiveGraph(dot, edge_labels)

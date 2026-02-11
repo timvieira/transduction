@@ -182,6 +182,7 @@ def delete_b():
     fst.add_arc(0, 'a', 'A', 0)
     fst.add_arc(0, 'b', EPSILON, 0)
     fst.add_stop(0)
+    fst.B.add('b')     # avoid OOV errors.
     return fst
 
 

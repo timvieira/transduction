@@ -137,22 +137,21 @@ class LazyIncremental(IncrementalDecomposition):
         assert source_symbol != EPSILON
         next_frontier = set()
         for s, ys in frontier:
-            for a, b, j in self.fst.arcs(s):
-                if a == source_symbol:
-                    next_frontier.add((j, self.extend(ys, b)))
+            for b, j in self.fst.arcs(s, source_symbol):
+                next_frontier.add((j, self.extend(ys, b)))
         return self._epsilon_closure_frontier(next_frontier)
 
     def _epsilon_closure_frontier(self, frontier):
         "Extend `frontier` to include everything reachable by source-side epsilon transitions."
+        # Note: this can be a problem when we have a producted input-side epsilon loop.
         worklist = set(frontier)
         next_frontier = set()
         while worklist:
             (s, ys) = worklist.pop()
             if (s, ys) in next_frontier: continue
             next_frontier.add((s, ys))
-            for tmp, b, next_state in self.fst.arcs(s):
-                if tmp == EPSILON:
-                    worklist.add((next_state, self.extend(ys, b)))
+            for b, next_state in self.fst.arcs(s, EPSILON):
+                worklist.add((next_state, self.extend(ys, b)))    
         return next_frontier
 
     def continuity(self, xs, target):

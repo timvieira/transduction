@@ -245,6 +245,17 @@ class FSA:
             m.add(f(i), a, f(j))
         return m
 
+    def map_labels(self, f):
+        "Transform arc labels by applying f to each label."
+        m = FSA()
+        for i in self.start:
+            m.add_start(i)
+        for i in self.stop:
+            m.add_stop(i)
+        for i, a, j in self.arcs():
+            m.add(i, f(a), j)
+        return m
+
     def rename_apart(self, other):
         f = Integerizer()
         self = self.rename(lambda i: f((0, i)))
