@@ -35,10 +35,9 @@ Usage:
     print(state.logp_next['e'])
 """
 
+import heapq
 import numpy as np
 from dataclasses import dataclass
-
-from arsenal.datastructures import LocatorMaxHeap
 
 from transduction.lm.base import LMState, LogpNext
 from transduction.lm.transduced import logsumexp, _to_key, BeamItem
@@ -141,9 +140,8 @@ class _FusedSearch:
         )
 
         # Seed the priority queue
-        self._queue = LocatorMaxHeap()
-        for item in beam:
-            self._queue[item] = item.weight
+        self._queue = list(beam)
+        heapq.heapify(self._queue)
 
     # --- Caching helpers ---
 
@@ -245,11 +243,11 @@ class _FusedSearch:
             if w == -np.inf:
                 continue
 
-            self._queue[BeamItem(
+            heapq.heappush(self._queue, BeamItem(
                 dfa_state=next_dfa_state,
                 lm_state=item.lm_state >> x,
                 weight=w,
-            )] = w
+            ))
 
             # If successor has truncated tuples, note which target symbols
             # sit at the truncation boundary so we can resume there next step.
@@ -270,14 +268,14 @@ class _FusedSearch:
         steps = 0
         while self._queue and steps < self._max_steps:
             steps += 1
-            item, _ = self._queue.pop()
+            item = heapq.heappop(self._queue)
             is_quotient = self._score_item(item)
             if not is_quotient:
                 self._expand(item)
 
         # Budget exhausted — score remaining items without expanding
         while self._queue:
-            item, _ = self._queue.pop()
+            item = heapq.heappop(self._queue)
             self._score_item(item)
 
         return self.scores, self.eos_scores, self.carry_forward

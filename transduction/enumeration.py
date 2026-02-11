@@ -1,8 +1,8 @@
 from transduction import Precover, LazyPrecoverNFA
 
+import heapq
 import numpy as np
 from dataclasses import dataclass
-from arsenal.datastructures import LocatorMaxHeap
 
 from arsenal import colors
 from arsenal.maths import sample
@@ -26,6 +26,8 @@ class Item:
     weight: float
     state: object
     source: object
+    def __lt__(self, other):
+        return self.weight > other.weight  # higher weight = higher priority (max-heap via heapq)
     def __repr__(self):
         return f'Item({self.weight:.3f}, {self.state}, {repr(self.source)})'
 
@@ -55,10 +57,10 @@ class prioritized_enumeration:
 
         self.remainder_terms = []
         self.quotient_terms = []
-        self.queue = LocatorMaxHeap()
+        self.queue = []
 
         for q in self.dfa.start:
-            self.queue[Item(weight = 0, state = q, source = lm)] = 0
+            heapq.heappush(self.queue, Item(weight = 0, state = q, source = lm))
 
         self.Q = Q
         self.R = R
@@ -77,7 +79,7 @@ class prioritized_enumeration:
             if t > max_steps:
                 print(colors.light.red % 'stopped early')
                 break
-            (item, _) = self.queue.pop()
+            item = heapq.heappop(self.queue)
             if verbosity > 0: print('pop:', item)
             lm_logp_next = item.source.logp_next
             if item.state in self.Q:
@@ -100,7 +102,7 @@ class prioritized_enumeration:
                     source = item.source >> x,
                 )
                 #print('push:', next_item)
-                self.queue[next_item] = next_weight
+                heapq.heappush(self.queue, next_item)
 
 
 class importance_sampling:

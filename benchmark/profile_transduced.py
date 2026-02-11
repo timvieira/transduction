@@ -22,6 +22,7 @@ import time
 import cProfile
 import pstats
 import io
+import heapq
 import numpy as np
 from collections import defaultdict
 
@@ -71,7 +72,6 @@ class ProfiledTransducedState(TransducedState):
 
     def _compute_logp_next(self):
         """Instrumented version: times each phase of the computation."""
-        from arsenal.datastructures import LocatorMaxHeap
 
         t_start = time.perf_counter()
 
@@ -107,9 +107,8 @@ class ProfiledTransducedState(TransducedState):
 
         EOS = self.tlm.inner_lm.eos if hasattr(self.tlm.inner_lm, 'eos') else self.tlm.inner_lm.initial().eos
 
-        queue = LocatorMaxHeap()
-        for item in self._beam:
-            queue[item] = item.weight
+        queue = list(self._beam)
+        heapq.heapify(queue)
 
         t0 = time.perf_counter()
         steps = 0
@@ -121,7 +120,7 @@ class ProfiledTransducedState(TransducedState):
 
         while queue and steps < self.tlm.max_steps:
             steps += 1
-            item, _ = queue.pop()
+            item = heapq.heappop(queue)
             dfa_state = item.dfa_state
             lm_state = item.lm_state
             weight = item.weight
@@ -164,7 +163,7 @@ class ProfiledTransducedState(TransducedState):
                     lm_state=next_lm_state,
                     weight=next_weight,
                 )
-                queue[next_item] = next_weight
+                heapq.heappush(queue, next_item)
                 n_arcs_expanded += 1
 
         t_expand = time.perf_counter() - t0
@@ -174,7 +173,7 @@ class ProfiledTransducedState(TransducedState):
         n_drained = 0
         while queue:
             n_drained += 1
-            item, _ = queue.pop()
+            item = heapq.heappop(queue)
             dfa_state = item.dfa_state
             if dfa_state in preimage_lookup:
                 lm_logp_next_drain = item.lm_state.logp_next
