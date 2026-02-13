@@ -211,30 +211,30 @@ impl UniversalityFilter {
     }
 
     /// Is there a known-non-universal set nu such that nfa_set ⊆ nu?
-    /// Uses intersection of entry-ID sets: for each element of nfa_set,
-    /// look up which negative entries contain it. If the intersection across
-    /// all elements is non-empty, some negative entry is a superset.
+    /// Uses hit-counting (like `has_pos_subset`): for each element of nfa_set,
+    /// increment hit count for each negative entry containing it. If any
+    /// entry's count reaches |nfa_set|, that entry is a superset.
     fn has_neg_superset(&self, nfa_set: &[u64]) -> bool {
         if nfa_set.is_empty() {
             return self.neg_next > 0;
         }
-        let mut candidates: Option<FxHashSet<u32>> = None;
+        let target_count = nfa_set.len();
+        let mut hits: FxHashMap<u32, usize> = FxHashMap::default();
         for &e in nfa_set {
             match self.neg_index.get(&e) {
-                None => return false,
+                None => return false, // e not in any neg entry → no superset possible
                 Some(eids) => {
-                    let eid_set: FxHashSet<u32> = eids.iter().copied().collect();
-                    candidates = Some(match candidates {
-                        None => eid_set,
-                        Some(prev) => prev.intersection(&eid_set).copied().collect(),
-                    });
-                    if candidates.as_ref().unwrap().is_empty() {
-                        return false;
+                    for &eid in eids {
+                        let h = hits.entry(eid).or_insert(0);
+                        *h += 1;
+                        if *h == target_count {
+                            return true; // early exit
+                        }
                     }
                 }
             }
         }
-        candidates.map_or(false, |c| !c.is_empty())
+        false
     }
 
     /// BFS universality check: does the DFA state accept Σ*?
@@ -252,6 +252,7 @@ impl UniversalityFilter {
 
         let mut sub_visited: FxHashSet<u32> = FxHashSet::default();
         let mut sub_worklist: VecDeque<u32> = VecDeque::new();
+        let mut arcs_buf: FxHashMap<u32, Vec<u64>> = FxHashMap::default();
 
         sub_visited.insert(sid);
         sub_worklist.push_back(sid);
@@ -263,18 +264,16 @@ impl UniversalityFilter {
 
             stats.universal_sub_bfs_states += 1;
 
-            let cur_set = arena.sets[cur as usize].clone();
-
-            let all_arcs = nfa.compute_all_arcs(&cur_set);
+            let all_arcs = nfa.compute_all_arcs_into(&arena.sets[cur as usize], &mut arcs_buf);
             stats.universal_compute_arcs_calls += 1;
 
             if all_arcs.len() < num_source_symbols {
                 return false;
             }
 
-            for (_sym, successor) in &all_arcs {
+            for (_sym, successor) in all_arcs {
                 let any_final = successor.iter().any(|&s| nfa.is_final(s));
-                let dest_id = arena.intern(successor.clone(), any_final);
+                let dest_id = arena.intern(successor, any_final);
 
                 if sub_visited.insert(dest_id) {
                     sub_worklist.push_back(dest_id);
@@ -394,6 +393,7 @@ pub fn decompose_with_ip_univ(fst: &Fst, target: &[u32], ip_univ: &[bool]) -> De
 
     let bfs_start = Instant::now();
     let mut bfs_iterations: u64 = 0;
+    let mut arcs_buf: FxHashMap<u32, Vec<u64>> = FxHashMap::default();
 
     // 2. BFS
     while let Some(sid) = worklist.pop_front() {
@@ -431,16 +431,14 @@ pub fn decompose_with_ip_univ(fst: &Fst, target: &[u32], ip_univ: &[bool]) -> De
         }
 
         // 3. Expand arcs using batch computation
-        let nfa_set = arena.sets[sid as usize].clone();
-
         // Track powerset sizes
-        let pset_size = nfa_set.len();
+        let pset_size = arena.sets[sid as usize].len();
         if pset_size > stats.max_powerset_size {
             stats.max_powerset_size = pset_size;
         }
 
         let arcs_start = Instant::now();
-        let all_arcs = nfa.compute_all_arcs(&nfa_set);
+        let all_arcs = nfa.compute_all_arcs_into(&arena.sets[sid as usize], &mut arcs_buf);
         stats.compute_arcs_ms += arcs_start.elapsed().as_secs_f64() * 1000.0;
         stats.compute_arcs_calls += 1;
 

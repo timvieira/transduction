@@ -1,5 +1,5 @@
 use crate::fst::{Fst, EPSILON};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -205,23 +205,22 @@ impl<'a> PrecoverNFA<'a> {
         *self.eps_cache_misses.borrow_mut() += 1;
 
         // BFS: explore all reachable states via epsilon arcs
-        let mut all_reachable = Vec::new();
+        let mut visited = FxHashSet::default();
         let mut worklist: VecDeque<u64> = VecDeque::new();
 
-        all_reachable.push(state);
+        visited.insert(state);
         worklist.push_back(state);
 
         while let Some(s) = worklist.pop_front() {
             for dest in self.arcs_x(s, EPSILON) {
-                if !all_reachable.contains(&dest) {
-                    all_reachable.push(dest);
+                if visited.insert(dest) {
                     worklist.push_back(dest);
                 }
             }
         }
 
         // Filter to productive states only
-        let mut result: Vec<u64> = all_reachable
+        let mut result: Vec<u64> = visited
             .into_iter()
             .filter(|&s| self.is_productive(s))
             .collect();
@@ -263,13 +262,22 @@ impl<'a> PrecoverNFA<'a> {
         (*self.eps_cache_hits.borrow(), *self.eps_cache_misses.borrow())
     }
 
-    pub fn compute_all_arcs(&self, states: &[u64]) -> Vec<(u32, Vec<u64>)> {
-        let mut by_symbol: FxHashMap<u32, Vec<u64>> = FxHashMap::default();
+    /// Buffer-reuse variant of `compute_all_arcs`. The caller allocates
+    /// `by_symbol` once and passes it in; inner Vecs are cleared but their
+    /// allocations are kept across calls.
+    pub fn compute_all_arcs_into(
+        &self,
+        states: &[u64],
+        by_symbol: &mut FxHashMap<u32, Vec<u64>>,
+    ) -> Vec<(u32, Vec<u64>)> {
+        // Clear values but keep allocated buckets
+        for v in by_symbol.values_mut() {
+            v.clear();
+        }
 
         for &packed in states {
             for (x, dest) in self.arcs(packed) {
                 if x != EPSILON {
-                    // Use cached eps closure for each individual destination
                     let closure = self.eps_closure_single_cached(dest);
                     let bucket = by_symbol.entry(x).or_default();
                     bucket.extend_from_slice(&closure);
@@ -277,15 +285,22 @@ impl<'a> PrecoverNFA<'a> {
             }
         }
 
-        // Sort+dedup each bucket to get canonical form for interning
+        // Drain non-empty entries into result, sort+dedup each bucket
         let mut result: Vec<(u32, Vec<u64>)> = Vec::with_capacity(by_symbol.len());
-        for (sym, mut v) in by_symbol {
-            v.sort_unstable();
-            v.dedup();
-            result.push((sym, v));
+        for (&sym, v) in by_symbol.iter_mut() {
+            if !v.is_empty() {
+                v.sort_unstable();
+                v.dedup();
+                result.push((sym, std::mem::take(v)));
+            }
         }
 
         result
+    }
+
+    pub fn compute_all_arcs(&self, states: &[u64]) -> Vec<(u32, Vec<u64>)> {
+        let mut buf = FxHashMap::default();
+        self.compute_all_arcs_into(states, &mut buf)
     }
 }
 

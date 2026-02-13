@@ -23,6 +23,9 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Instant;
 
+// Re-import for arcs_buf type
+type ArcsBuf = FxHashMap<u32, Vec<u64>>;
+
 /// Evict stale eps_cache entries for a prefix extension.
 /// An entry is stale if:
 /// - Its key (NFA state) has buf_pos >= common_prefix_len (frontier state whose arcs change)
@@ -111,6 +114,10 @@ pub struct DirtyDecomp {
     last_r_stop: Vec<u32>,
     /// Whether materialize_bfs() has been called since the last decompose_dirty().
     materialized: bool,
+    /// Persistent visited buffer for materialize_bfs (avoids per-call allocation).
+    materialize_visited: Vec<bool>,
+    /// Track which entries were set in materialize_visited for sparse clearing.
+    materialize_visited_list: Vec<u32>,
 }
 
 impl DirtyDecomp {
@@ -136,6 +143,8 @@ impl DirtyDecomp {
             last_q_stop: Vec::new(),
             last_r_stop: Vec::new(),
             materialized: false,
+            materialize_visited: Vec::new(),
+            materialize_visited_list: Vec::new(),
         }
     }
 
@@ -315,6 +324,7 @@ impl DirtyDecomp {
         // Take filter out of self to satisfy borrow checker
         // (is_universal needs &mut arena which is self.arena)
         let mut filter = self.filter.take().unwrap();
+        let mut arcs_buf: ArcsBuf = FxHashMap::default();
 
         // Local worklist: only expand STATUS_NEW states
         while let Some(sid) = worklist.pop_front() {
@@ -379,14 +389,13 @@ impl DirtyDecomp {
                 }
             }
 
-            let nfa_set = self.arena.sets[sid as usize].clone();
-            let pset_size = nfa_set.len();
+            let pset_size = self.arena.sets[sid as usize].len();
             if pset_size > stats.max_powerset_size {
                 stats.max_powerset_size = pset_size;
             }
 
             let arcs_start = Instant::now();
-            let all_arcs = nfa.compute_all_arcs(&nfa_set);
+            let all_arcs = nfa.compute_all_arcs_into(&self.arena.sets[sid as usize], &mut arcs_buf);
             stats.compute_arcs_ms += arcs_start.elapsed().as_secs_f64() * 1000.0;
             stats.compute_arcs_calls += 1;
 
@@ -460,12 +469,22 @@ impl DirtyDecomp {
         self.materialized = true;
 
         let n = self.arena.len();
-        let mut visited = vec![false; n];
+
+        // Clear previous visited entries (sparse clear)
+        for &sid in &self.materialize_visited_list {
+            if (sid as usize) < self.materialize_visited.len() {
+                self.materialize_visited[sid as usize] = false;
+            }
+        }
+        self.materialize_visited_list.clear();
+        self.materialize_visited.resize(n, false);
+
         let mut bfs_queue: VecDeque<u32> = VecDeque::new();
         let mut new_reachable: Vec<u32> = Vec::new();
 
         if (self.last_start as usize) < n {
-            visited[self.last_start as usize] = true;
+            self.materialize_visited[self.last_start as usize] = true;
+            self.materialize_visited_list.push(self.last_start);
             bfs_queue.push_back(self.last_start);
             new_reachable.push(self.last_start);
         }
@@ -482,8 +501,9 @@ impl DirtyDecomp {
                     self.last_r_stop.push(sid);
                     for &(_lbl, dst) in &self.arcs_from[sid as usize] {
                         let dst_usize = dst as usize;
-                        if dst_usize < n && !visited[dst_usize] {
-                            visited[dst_usize] = true;
+                        if dst_usize < n && !self.materialize_visited[dst_usize] {
+                            self.materialize_visited[dst_usize] = true;
+                            self.materialize_visited_list.push(dst);
                             new_reachable.push(dst);
                             bfs_queue.push_back(dst);
                         }
@@ -492,8 +512,9 @@ impl DirtyDecomp {
                 STATUS_INTERIOR => {
                     for &(_lbl, dst) in &self.arcs_from[sid as usize] {
                         let dst_usize = dst as usize;
-                        if dst_usize < n && !visited[dst_usize] {
-                            visited[dst_usize] = true;
+                        if dst_usize < n && !self.materialize_visited[dst_usize] {
+                            self.materialize_visited[dst_usize] = true;
+                            self.materialize_visited_list.push(dst);
                             new_reachable.push(dst);
                             bfs_queue.push_back(dst);
                         }
