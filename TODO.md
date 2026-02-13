@@ -28,9 +28,6 @@
   `importance_sampling` lack algorithmic explanations. `Item.weight` units
   (log probability?) undocumented.
 
-- [ ] **Document `bpe_wfst()` (`fsts/bpe.py`).** Acronyms undefined (BPE WFST).
-  Parameters `tokenizer`, `readable` lack documentation.
-
 ## Bugs / Limitations
 
 ### precover_nfa.py — Multi-character symbol support

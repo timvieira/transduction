@@ -6,6 +6,26 @@ from transduction.lm.statelm import decode_hf_tokenizer
 
 
 def bpe_wfst(tokenizer, readable=False):
+    """Build an FST that maps BPE token-ID sequences to byte sequences.
+
+    For each non-special token in the vocabulary, the FST has a chain of
+    epsilon-input arcs that spell out the token's bytes one at a time, then
+    an arc that consumes the token ID (returning to the start state).  The
+    start state ``()`` is also the sole accept state, so the FST loops over
+    consecutive tokens.
+
+    Args:
+        tokenizer: A HuggingFace tokenizer instance.  Its vocabulary is
+            decoded via ``decode_hf_tokenizer``; special tokens are skipped.
+        readable: If ``True``, input-side labels are ``Token`` objects that
+            display both the integer ID and byte string (useful for
+            visualization).  If ``False`` (default), labels are raw ``int``
+            token IDs.
+
+    Returns:
+        FST: Input alphabet = token IDs (or ``Token``), output alphabet =
+        single bytes.
+    """
     m = FST()
     m.add_start(())
     drop = {x.encode() for x in tokenizer.all_special_tokens}
