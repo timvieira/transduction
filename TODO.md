@@ -16,10 +16,6 @@
 
 ## High — causes confusion
 
-- [ ] **Document `AbstractAlgorithm` / `LazyIncremental` constructor params
-  (`base.py`, `lazy_incremental.py`).** `empty_source`, `empty_target`,
-  `extend` — what are these for? The `extend` lambda especially needs
-  explanation.
 
 
 ## Medium — naming issues

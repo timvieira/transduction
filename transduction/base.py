@@ -97,7 +97,18 @@ class IncrementalDecomposition(DecompositionResult):
 
 class AbstractAlgorithm(DecompositionFunction):
 
-    def __init__(self, fst, empty_source = '', extend = lambda x,y: x + y, max_steps=float('inf')):
+    def __init__(self, fst, empty_source='', extend=lambda x, y: x + y, max_steps=float('inf')):
+        """
+        Args:
+            fst: The FST to decompose.
+            empty_source: Identity element for source strings (default ``''``).
+                Used as the seed for BFS over source language strings.
+            extend: Binary function to append a symbol to a string
+                (default ``x + y``, i.e., Python string concatenation).
+                Override both ``empty_source`` and ``extend`` to use a
+                non-string sequence type (e.g., tuples).
+            max_steps: Maximum BFS steps before stopping (default unlimited).
+        """
         self.fst = fst
         self.empty_source = empty_source
         self.source_alphabet = fst.A - {EPSILON}

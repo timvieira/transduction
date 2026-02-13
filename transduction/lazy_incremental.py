@@ -24,6 +24,18 @@ class LazyIncremental(IncrementalDecomposition):
     """
 
     def __init__(self, fst, target='', parent=None, *, empty_source='', empty_target='', extend=lambda x, y: x + y, max_steps=float('inf')):
+        """
+        Args:
+            fst: The FST to decompose.
+            target: Current target string (use ``>>`` to extend incrementally).
+            parent: Internal — previous state in the ``>>`` chain.
+            empty_source: Identity element for source strings (default ``''``).
+            empty_target: Identity element for target strings (default ``''``).
+                Used as the initial output buffer in frontier computation.
+            extend: Binary function to append a symbol to a string
+                (default ``x + y``).  Applied to both source and target strings.
+            max_steps: Maximum BFS steps per decomposition (default unlimited).
+        """
         self.fst = fst
         self.target = target
         self.source_alphabet = fst.A - {EPSILON}
