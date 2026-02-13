@@ -430,6 +430,42 @@ class FST:
             for x, y, j in self.arcs(i):
                 worklist.append((j, xs + x, ys + y))
 
+    def transduce(self, input_seq):
+        """Transduce input_seq through this FST via BFS NFA simulation.
+        Returns one accepting output tuple, or raises ValueError if no
+        accepting path exists.
+        """
+        queue = deque()
+        parent = {}
+        for s in self.start:
+            key = (s, 0)
+            parent[key] = None
+            queue.append(key)
+        while queue:
+            state, pos = queue.popleft()
+            if pos == len(input_seq) and state in self.stop:
+                output = []
+                k = (state, pos)
+                while parent[k] is not None:
+                    prev, out_sym = parent[k]
+                    if out_sym != EPSILON:
+                        output.append(out_sym)
+                    k = prev
+                output.reverse()
+                return tuple(output)
+            for a, b, j in self.arcs(state):
+                if a == EPSILON:
+                    new_pos = pos
+                elif pos < len(input_seq) and a == input_seq[pos]:
+                    new_pos = pos + 1
+                else:
+                    continue
+                key = (j, new_pos)
+                if key not in parent:
+                    parent[key] = ((state, pos), b)
+                    queue.append(key)
+        raise ValueError("No accepting path found")
+
     def trim(self):
         """
         Return a new FST containing only the states and arcs lying on
