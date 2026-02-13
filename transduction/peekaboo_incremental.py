@@ -475,11 +475,18 @@ class PeekabooState(IncrementalDecomposition):
 
 
 class TruncatedDFA(Lazy):
-    """Augments a determinized `PeekabooPrecover` semi-automaton with an `is_final` method,
-    producing a valid FSA that encodes `Precover(fst, target)`.
+    """Augments a determinized PeekabooPrecover semi-automaton with ``is_final``.
+
+    Used by ``PeekabooState`` (the incremental variant).  Like ``FilteredDFA``
+    in ``peekaboo_nonrecursive``, but additionally applies ``refine()`` to each
+    successor state: clips buffer strings to the target length and discards
+    NFA elements whose buffer is incompatible with the target prefix.  This
+    normalization ensures that equivalent DFA states are identified across
+    incremental ``>>`` steps, preventing powerset blowup from "passenger"
+    NFA elements committed to a different next symbol.
 
     Invariant: for all target strings,
-        `TruncatedDFA(dfa=dfa, fst=fst, target=target).materialize().equal(Precover(fst, target).dfa)`
+        ``TruncatedDFA(dfa=dfa, fst=fst, target=target).materialize().equal(Precover(fst, target).dfa)``
     """
 
     def __init__(self, *, dfa, fst, target):

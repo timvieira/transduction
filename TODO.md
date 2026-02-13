@@ -20,13 +20,6 @@
 
 ## Medium — naming issues
 
-- [ ] **Clarify `Relevance` wrapper (`precover_nfa.py`).** "Relevance" is
-  vague; the `startswith` pruning logic has no explanation.
-
-- [ ] **Clarify `FilteredDFA` vs `TruncatedDFA`.** Similar names in
-  `peekaboo_nonrecursive.py` and `peekaboo_incremental.py` respectively;
-  differences unclear.
-
 - [ ] **Document `extract_token_bytes()` and `ByteTrie`
   (`token_decompose.py`).** "Hub structure" comment is cryptic. What is a
   "hub"? When does this work vs fail?

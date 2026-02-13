@@ -152,9 +152,17 @@ class Peekaboo(DecompositionResult):
 
 
 class FilteredDFA(Lazy):
-    """NOTE: This class augments a determinized `PeekabooPrecover` semi-automaton by
-    adding an appropriate `is_final` method so that it is a valid finite-state
-    automaton that encodes `Precover(fst, target)`.
+    """Augments a determinized PeekabooPrecover semi-automaton with ``is_final``.
+
+    Used by ``PeekabooNonrecursive`` (the non-incremental variant).  DFA states
+    are frozensets of ``(fst_state, buffer)`` pairs from the underlying NFA.
+    A state is final iff any element has a buffer that starts with the target
+    and the FST state is accepting.
+
+    Arcs are passed through from the underlying DFA unchanged (no refinement
+    or truncation).  Compare with ``TruncatedDFA`` in ``peekaboo_incremental``,
+    which additionally clips and filters NFA elements in each DFA state to
+    normalize powerset representations across incremental ``>>`` steps.
     """
 
     def __init__(self, *, dfa, fst, target):
