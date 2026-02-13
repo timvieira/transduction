@@ -17,16 +17,46 @@ STATUS_QSTOP = 2     # universal final, no outgoing arcs
 STATUS_RSTOP = 3     # non-universal final, expanded (has cached arcs)
 
 
+def _check_universality(filt, fst_univ_cache, i, mbp, N):
+    """Check if a final DFA state is universal, with caching for pure-frontier states.
+
+    Pure-frontier states (where every NFA element has buffer length == N) are cached
+    by their FST state set, since universality depends only on the FST states.
+    """
+    if mbp == N and all(len(buf) == N for (_, buf) in i):
+        fst_key = frozenset(fst_state for (fst_state, _) in i)
+        is_uni = fst_univ_cache.get(fst_key)
+        if is_uni is None:
+            is_uni = filt.is_universal(i)
+            fst_univ_cache[fst_key] = is_uni
+        return is_uni
+    return filt.is_universal(i)
+
+
+def _consume(obj):
+    """Mark a decomposition state as consumed, raising if already consumed."""
+    if obj._consumed:
+        raise RuntimeError(
+            "This decomposition state has already been consumed by >> or decompose_next()."
+        )
+    obj._consumed = True
+
+
+def _make_filter(fst, target, dfa, source_alphabet, all_input_universal, ip_universal_states):
+    """Create a UniversalityFilter with witness states for the given target."""
+    witnesses = frozenset((q, target) for q in ip_universal_states)
+    return UniversalityFilter(
+        fst, target, dfa, source_alphabet,
+        all_input_universal=all_input_universal,
+        witnesses=witnesses,
+    )
+
+
 def _trimmed_fsa(start_states, stop_states, get_incoming):
     """Build a trimmed FSA by backward BFS from stop states through reverse arcs.
 
     All states in the incoming index are forward-reachable (built by BFS),
     so backward reachability from stops gives exactly the trim set.
-
-    Args:
-        start_states: iterable of start states
-        stop_states: set of stop states
-        get_incoming: callable(state) -> iterable of (label, predecessor) pairs
     """
     if not stop_states:
         return FSA()
@@ -106,63 +136,36 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
             self._fst_univ_cache = {}
             self._build_fresh()
 
-    def _make_filter(self, dfa):
-        witnesses = frozenset(
-            (q, self.target) for q in self._ip_universal_states
-        )
-        return UniversalityFilter(
-            self.fst, self.target, dfa, self.source_alphabet,
-            all_input_universal=self._all_input_universal,
-            witnesses=witnesses,
-        )
+    def _bfs_expand(self, dfa, filt, worklist, seen, N):
+        """BFS expansion of new DFA states.
 
-    def _build_fresh(self):
-        dfa = PrecoverNFA(self.fst, self.target).det()
-        filt = self._make_filter(dfa)
+        Expands all STATUS_NEW states reachable from the worklist, classifying
+        each as QSTOP (universal final), RSTOP (non-universal final), or
+        INTERIOR.  Updates _dfa_trans, _dfa_status, _incoming, _max_bufpos.
 
-        self._dfa_trans = {}
-        self._dfa_status = {}
-        self._incoming = {}   # dest -> {(label, src), ...}
-        self._max_bufpos = {}
-        self._filt = filt
-
-        N = len(self.target)
+        Returns:
+            (frontier, q_stops, r_stops, n_expanded, n_arcs)
+        """
         frontier = set()
         q_stops = set()
         r_stops = set()
-
-        worklist = deque()
-        visited = set()
-        start_states = []
-
-        for i in dfa.start():
-            worklist.append(i)
-            visited.add(i)
-            start_states.append(i)
-            self._incoming.setdefault(i, set())
+        n_expanded = 0
+        n_arcs = 0
 
         while worklist:
             i = worklist.popleft()
+            if self._dfa_status.get(i, STATUS_NEW) != STATUS_NEW:
+                continue
 
-            # Compute max_bufpos for O(1) frontier/dirty detection
+            n_expanded += 1
             mbp = max(len(buf) for (_, buf) in i)
             self._max_bufpos[i] = mbp
 
-            # Track frontier: states with any NFA element at buffer length == N
             if mbp >= N:
                 frontier.add(i)
 
             if dfa.is_final(i):
-                # Check fst_univ_cache for pure frontier states
-                if mbp == N and all(len(buf) == N for (_, buf) in i):
-                    fst_key = frozenset(fst_state for (fst_state, _) in i)
-                    is_uni = self._fst_univ_cache.get(fst_key)
-                    if is_uni is None:
-                        is_uni = filt.is_universal(i)
-                        self._fst_univ_cache[fst_key] = is_uni
-                else:
-                    is_uni = filt.is_universal(i)
-                if is_uni:
+                if _check_universality(filt, self._fst_univ_cache, i, mbp, N):
                     self._dfa_status[i] = STATUS_QSTOP
                     self._dfa_trans[i] = {}
                     q_stops.add(i)
@@ -171,18 +174,46 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
             arcs = {}
             for a, j in dfa.arcs(i):
                 arcs[a] = j
+                n_arcs += 1
                 self._incoming.setdefault(j, set()).add((a, i))
-                if j not in visited:
+                if j not in seen and self._dfa_status.get(j, STATUS_NEW) == STATUS_NEW:
                     worklist.append(j)
-                    visited.add(j)
+                    seen.add(j)
 
             self._dfa_trans[i] = arcs
-            if i not in self._dfa_status:
-                if dfa.is_final(i):
-                    self._dfa_status[i] = STATUS_RSTOP
-                    r_stops.add(i)
-                else:
-                    self._dfa_status[i] = STATUS_INTERIOR
+            if dfa.is_final(i):
+                self._dfa_status[i] = STATUS_RSTOP
+                r_stops.add(i)
+            else:
+                self._dfa_status[i] = STATUS_INTERIOR
+
+        return frontier, q_stops, r_stops, n_expanded, n_arcs
+
+    def _build_fresh(self):
+        dfa = PrecoverNFA(self.fst, self.target).det()
+        filt = _make_filter(self.fst, self.target, dfa, self.source_alphabet,
+                            self._all_input_universal, self._ip_universal_states)
+
+        self._dfa_trans = {}
+        self._dfa_status = {}
+        self._incoming = {}
+        self._max_bufpos = {}
+        self._filt = filt
+
+        N = len(self.target)
+        worklist = deque()
+        seen = set()
+        start_states = []
+
+        for i in dfa.start():
+            worklist.append(i)
+            seen.add(i)
+            start_states.append(i)
+            self._incoming.setdefault(i, set())
+
+        frontier, q_stops, r_stops, n_expanded, n_arcs = (
+            self._bfs_expand(dfa, filt, worklist, seen, N)
+        )
 
         # Persist eps closure cache for incremental reuse
         if self._has_eps and isinstance(dfa.fsa, EpsilonRemove):
@@ -194,8 +225,7 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
         self._r_stops = r_stops
         self._stats = dict(
             n_dirty=0, n_border=0,
-            n_expanded=len(visited),
-            n_arcs=sum(len(a) for a in self._dfa_trans.values()),
+            n_expanded=n_expanded, n_arcs=n_arcs,
             total_dfa_states=len(self._dfa_status),
             n_frontier=len(frontier),
         )
@@ -245,8 +275,8 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
             self._dfa_status[s] = STATUS_NEW
 
         # Start with parent's stops, minus invalidated states
-        q_stops = (parent._q_stops - invalidated)
-        r_stops = (parent._r_stops - invalidated)
+        q_stops_base = parent._q_stops - invalidated
+        r_stops_base = parent._r_stops - invalidated
 
         # Build new lazy DFA for extended target
         dfa = PrecoverNFA(self.fst, self.target).det()
@@ -255,8 +285,7 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
         if self._has_eps and isinstance(dfa.fsa, EpsilonRemove):
             dfa.fsa._closure_cache = self._eps_cache
 
-        # Recompute start states from the new DFA (they can change when the
-        # target grows, especially from empty to non-empty).
+        # Recompute start states from the new DFA
         self._start_states = list(dfa.start())
 
         # Evict stale universality cache entries and update witnesses
@@ -269,76 +298,27 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
         self._filt = filt
 
         N = len(self.target)
-        frontier = set()
-        n_expanded = 0
-        n_arcs = 0
 
         # BFS from dirty|border plus any new start states.
         worklist = deque(invalidated)
-        expanding = set(invalidated)
+        seen = set(invalidated)
         for s in self._start_states:
             self._incoming.setdefault(s, set())
-            if s not in expanding and self._dfa_status.get(s, STATUS_NEW) == STATUS_NEW:
+            if s not in seen and self._dfa_status.get(s, STATUS_NEW) == STATUS_NEW:
                 worklist.append(s)
-                expanding.add(s)
+                seen.add(s)
 
-        while worklist:
-            i = worklist.popleft()
-            status = self._dfa_status.get(i, STATUS_NEW)
-
-            if status != STATUS_NEW:
-                # Clean state reached as a successor — nothing to expand.
-                continue
-
-            n_expanded += 1
-
-            # Compute max_bufpos for O(1) frontier/dirty detection
-            mbp = max(len(buf) for (_, buf) in i)
-            self._max_bufpos[i] = mbp
-
-            # Track frontier
-            if mbp >= N:
-                frontier.add(i)
-
-            if dfa.is_final(i):
-                # Check fst_univ_cache for pure frontier states
-                if mbp == N and all(len(buf) == N for (_, buf) in i):
-                    fst_key = frozenset(fst_state for (fst_state, _) in i)
-                    is_uni = self._fst_univ_cache.get(fst_key)
-                    if is_uni is None:
-                        is_uni = filt.is_universal(i)
-                        self._fst_univ_cache[fst_key] = is_uni
-                else:
-                    is_uni = filt.is_universal(i)
-                if is_uni:
-                    self._dfa_status[i] = STATUS_QSTOP
-                    self._dfa_trans[i] = {}
-                    q_stops.add(i)
-                    continue
-
-            arcs = {}
-            for a, j in dfa.arcs(i):
-                arcs[a] = j
-                n_arcs += 1
-                self._incoming.setdefault(j, set()).add((a, i))
-                if j not in expanding and self._dfa_status.get(j, STATUS_NEW) == STATUS_NEW:
-                    worklist.append(j)
-                    expanding.add(j)
-
-            self._dfa_trans[i] = arcs
-            if dfa.is_final(i):
-                self._dfa_status[i] = STATUS_RSTOP
-                r_stops.add(i)
-            else:
-                self._dfa_status[i] = STATUS_INTERIOR
+        frontier, new_q, new_r, n_expanded, n_arcs = (
+            self._bfs_expand(dfa, filt, worklist, seen, N)
+        )
 
         # Persist eps closure cache for next incremental step
         if self._has_eps and isinstance(dfa.fsa, EpsilonRemove):
             self._eps_cache = dfa.fsa._closure_cache
 
         self._frontier = frontier
-        self._q_stops = q_stops
-        self._r_stops = r_stops
+        self._q_stops = q_stops_base | new_q
+        self._r_stops = r_stops_base | new_r
         self._stats = dict(
             n_dirty=len(dirty), n_border=len(border),
             n_expanded=n_expanded, n_arcs=n_arcs,
@@ -347,7 +327,7 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
         )
 
     def _get_incoming(self, state):
-        """Get incoming arcs for a state. Override in overlay subclass."""
+        """Get incoming arcs for a state."""
         return self._incoming.get(state, ())
 
     @cached_property
@@ -359,12 +339,7 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
         return _trimmed_fsa(self._start_states, self._r_stops, self._get_incoming)
 
     def __rshift__(self, y):
-        if self._consumed:
-            raise RuntimeError(
-                "This decomposition state has already been consumed by >> or decompose_next(). "
-                "Use decompose_next() to create multiple branches."
-            )
-        self._consumed = True
+        _consume(self)
         return TruncatedIncrementalDFADecomp(self.fst, self.target + y, parent=self)
 
     def decompose_next(self):
@@ -373,11 +348,7 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
         All branches share the parent's clean-state arcs.  Each branch stores
         only its dirty/border/new arc overrides in small dicts.
         """
-        if self._consumed:
-            raise RuntimeError(
-                "This decomposition state has already been consumed by >> or decompose_next()."
-            )
-        self._consumed = True
+        _consume(self)
 
         dirty = self._frontier
         border = set()
@@ -416,7 +387,7 @@ class _OverlayChild(IncrementalDecomposition):
         self._consumed = False
         self._all_input_universal = parent._all_input_universal
         self._ip_universal_states = parent._ip_universal_states
-        self._has_eps = EPSILON in parent.fst.A
+        self._has_eps = parent._has_eps
         self._fst_univ_cache = parent._fst_univ_cache
 
         # Shared base (read-only references to parent's clean state)
@@ -432,12 +403,14 @@ class _OverlayChild(IncrementalDecomposition):
         self._overlay_incoming_add = {}
         self._overlay_incoming_remove = {}
 
-        self._expand(parent, dirty, border, invalidated, old_arcs)
+        self._expand(parent, invalidated, old_arcs)
 
-    def _expand(self, parent, dirty, border, invalidated, old_arcs):
+    def _get_status(self, i):
+        """Get state status, checking overlay then base."""
+        return self._overlay_status.get(i, self._base_status.get(i, STATUS_NEW))
+
+    def _expand(self, parent, invalidated, old_arcs):
         """Run the expansion BFS for this branch's target extension."""
-        old_depth = len(parent.target)
-
         # Remove old outgoing arcs of invalidated states from incoming
         for s in invalidated:
             for label, dest in old_arcs.get(s, {}).items():
@@ -447,42 +420,29 @@ class _OverlayChild(IncrementalDecomposition):
 
         # Build lazy DFA for this branch's extended target
         dfa = PrecoverNFA(self.fst, self.target).det()
-
-        # Recompute start states from the new DFA
         self._start_states = list(dfa.start())
 
-        # Create a fresh lightweight filter for this branch
-        witnesses = frozenset(
-            (q, self.target) for q in self._ip_universal_states
-        )
-        filt = UniversalityFilter(
-            self.fst, self.target, dfa, self.source_alphabet,
-            all_input_universal=self._all_input_universal,
-            witnesses=witnesses,
-        )
+        filt = _make_filter(self.fst, self.target, dfa, self.source_alphabet,
+                            self._all_input_universal, self._ip_universal_states)
 
         N = len(self.target)
         frontier = set()
         q_stops = set(parent._q_stops - invalidated)
         r_stops = set(parent._r_stops - invalidated)
 
-        # BFS from dirty|border plus any new start states.
+        # BFS from invalidated plus any new start states.
         worklist = deque(invalidated)
-        expanding = set(invalidated)
+        seen = set(invalidated)
         for s in self._start_states:
-            s_status = self._overlay_status.get(s, self._base_status.get(s, STATUS_NEW))
-            if s not in expanding and s_status == STATUS_NEW:
+            if s not in seen and self._get_status(s) == STATUS_NEW:
                 worklist.append(s)
-                expanding.add(s)
+                seen.add(s)
 
         while worklist:
             i = worklist.popleft()
-            status = self._overlay_status.get(i, self._base_status.get(i, STATUS_NEW))
-
-            if status != STATUS_NEW:
+            if self._get_status(i) != STATUS_NEW:
                 continue
 
-            # Compute max_bufpos inline for overlay states
             mbp = max(len(buf) for (_, buf) in i)
             self._overlay_max_bufpos[i] = mbp
 
@@ -490,16 +450,7 @@ class _OverlayChild(IncrementalDecomposition):
                 frontier.add(i)
 
             if dfa.is_final(i):
-                # Check fst_univ_cache for pure frontier states
-                if mbp == N and all(len(buf) == N for (_, buf) in i):
-                    fst_key = frozenset(fst_state for (fst_state, _) in i)
-                    is_uni = self._fst_univ_cache.get(fst_key)
-                    if is_uni is None:
-                        is_uni = filt.is_universal(i)
-                        self._fst_univ_cache[fst_key] = is_uni
-                else:
-                    is_uni = filt.is_universal(i)
-                if is_uni:
+                if _check_universality(filt, self._fst_univ_cache, i, mbp, N):
                     self._overlay_status[i] = STATUS_QSTOP
                     self._overlay_trans[i] = {}
                     q_stops.add(i)
@@ -509,10 +460,9 @@ class _OverlayChild(IncrementalDecomposition):
             for a, j in dfa.arcs(i):
                 arcs[a] = j
                 self._overlay_incoming_add.setdefault(j, set()).add((a, i))
-                j_status = self._overlay_status.get(j, self._base_status.get(j, STATUS_NEW))
-                if j not in expanding and j_status == STATUS_NEW:
+                if j not in seen and self._get_status(j) == STATUS_NEW:
                     worklist.append(j)
-                    expanding.add(j)
+                    seen.add(j)
 
             self._overlay_trans[i] = arcs
             if dfa.is_final(i):
@@ -551,26 +501,17 @@ class _OverlayChild(IncrementalDecomposition):
     def __rshift__(self, y):
         """Advance by one target symbol. Flattens the overlay into a
         TruncatedIncrementalDFADecomp for further incremental use."""
-        if self._consumed:
-            raise RuntimeError(
-                "This decomposition state has already been consumed by >> or decompose_next()."
-            )
-        self._consumed = True
+        _consume(self)
         flat = self._flatten()
         return TruncatedIncrementalDFADecomp(flat.fst, flat.target + y, parent=flat)
 
     def decompose_next(self):
         """Flatten and delegate to TruncatedIncrementalDFADecomp.decompose_next()."""
-        if self._consumed:
-            raise RuntimeError(
-                "This decomposition state has already been consumed by >> or decompose_next()."
-            )
-        self._consumed = True
+        _consume(self)
         return self._flatten().decompose_next()
 
     def _flatten(self):
         """Merge overlay into flat dicts, returning a TruncatedIncrementalDFADecomp."""
-        # Build flat dicts by applying overlay on top of base
         dfa_trans = dict(self._base_trans)
         dfa_trans.update(self._overlay_trans)
 
@@ -578,18 +519,14 @@ class _OverlayChild(IncrementalDecomposition):
         dfa_status.update(self._overlay_status)
 
         incoming = {}
-        # Start from base incoming
         for state, arcs in self._base_incoming.items():
             incoming[state] = set(arcs)
-        # Apply removals
         for state, removals in self._overlay_incoming_remove.items():
             if state in incoming:
                 incoming[state] -= removals
-        # Apply additions
         for state, additions in self._overlay_incoming_add.items():
             incoming.setdefault(state, set()).update(additions)
 
-        # Merge max_bufpos: parent base + overlay
         max_bufpos = dict(self.parent._max_bufpos)
         max_bufpos.update(self._overlay_max_bufpos)
 
@@ -614,13 +551,7 @@ class _OverlayChild(IncrementalDecomposition):
         obj._frontier = self._frontier
         obj._q_stops = self._q_stops
         obj._r_stops = self._r_stops
-        # Create a fresh filter for the flat object
         dfa = PrecoverNFA(self.fst, self.target).det()
-        obj._filt = UniversalityFilter(
-            self.fst, self.target, dfa, self.source_alphabet,
-            all_input_universal=self._all_input_universal,
-            witnesses=frozenset(
-                (q, self.target) for q in self._ip_universal_states
-            ),
-        )
+        obj._filt = _make_filter(self.fst, self.target, dfa, self.source_alphabet,
+                                 self._all_input_universal, self._ip_universal_states)
         return obj
