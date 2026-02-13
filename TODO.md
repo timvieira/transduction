@@ -21,17 +21,9 @@
 
 ## High — causes confusion
 
-- [ ] **Document `FST.arcs()` dual return signature (`fst.py`).** With `x=None`
-  it yields `(a, b, j)`, with `x` provided it yields `(b, j)`. No docstring
-  explains this.
-
 - [ ] **Document minimization method tradeoffs (`fsa.py`).** Three methods
   `min_brzozowski()`, `min_fast()`, `min_faster()` with no guidance on which to
   use. `min` aliases `min_faster` but there's no explanation of tradeoffs.
-
-- [ ] **Document `ensure_arc_indexes()` (`fst.py`).** Creates 4 indexes with
-  cryptic names: `index_iy_xj`, `index_i_xj`, `index_ix_j`, `index_ixy_j` —
-  no explanation of the naming scheme or when each is needed.
 
 - [ ] **Document `AbstractAlgorithm` / `LazyIncremental` constructor params
   (`base.py`, `lazy_incremental.py`).** `empty_source`, `empty_target`,
@@ -47,25 +39,12 @@
 
 ## Medium — naming issues
 
-- [ ] **Rename `FSA.D(x)` (`fsa.py`).** Single-letter method name; "left
-  derivative" is the only comment. Consider `left_derivative(x)`.
-
-- [ ] **Rename `FSA.p()` (`fsa.py`).** Single-letter method for Kleene plus.
-  Consider `plus()` or `kleene_plus()`.
-
 - [ ] **Clarify `Relevance` wrapper (`precover_nfa.py`).** "Relevance" is
   vague; the `startswith` pruning logic has no explanation.
 
 - [ ] **Clarify `FilteredDFA` vs `TruncatedDFA`.** Similar names in
   `peekaboo_nonrecursive.py` and `peekaboo_incremental.py` respectively;
   differences unclear.
-
-- [ ] **Rename `spawn(keep_init=)` (`fst.py`).** `keep_init` is inconsistent
-  with the new `start`/`stop` naming. Should be `keep_start`.
-
-- [ ] **Document `to_rust_fst()` (`rust_bridge.py`).** Magic number
-  `RUST_EPSILON = 2**32 - 1` needs explanation. Return tuple
-  `(rust_fst, sym_map, state_map)` should document each element.
 
 - [ ] **Document `extract_token_bytes()` and `ByteTrie`
   (`token_decompose.py`).** "Hub structure" comment is cryptic. What is a

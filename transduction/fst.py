@@ -86,6 +86,13 @@ class FST:
     add_F = add_stop
 
     def ensure_arc_indexes(self):
+        """Build secondary arc indexes for O(1) lookup by various key combinations.
+
+        Naming scheme: ``index_{keys}_{values}`` where i=source state,
+        x=input label, y=output label, j=destination state.  For example,
+        ``index_iy_xj[(i, y)]`` returns ``{(x, j), ...}`` — all arcs from
+        state ``i`` with output label ``y``.
+        """
         if hasattr(self, 'index_iy_xj'):
             return
         index_iy_xj = {}
@@ -123,6 +130,11 @@ class FST:
         self._arcs_ix = arcs_ix
 
     def arcs(self, i, x=None):
+        """Iterate over arcs from state ``i``.
+
+        With ``x=None``, yields ``(a, b, j)`` triples for all arcs from ``i``.
+        With ``x`` provided, yields ``(b, j)`` pairs for arcs with input label ``x``.
+        """
         if self._arcs_i is None:
             self._build_arc_index()
         if x is None:

@@ -15,10 +15,14 @@ from functools import cached_property
 
 
 def to_rust_fst(fst):
-    """Convert a Python FST to a Rust RustFst. Call once per FST, cache the result.
+    """Convert a Python FST to a Rust RustFst.  Call once per FST, cache the result.
 
-    Returns (rust_fst, sym_map) where sym_map is an Integerizer mapping
-    Python symbols to u32 IDs.
+    Returns:
+        rust_fst: The Rust-side FST object (``transduction_core.RustFst``).
+        sym_map: Integerizer mapping Python symbols to u32 IDs (shared by
+            input and output labels).  EPSILON is mapped to ``u32::MAX``
+            (0xFFFFFFFF) to match the Rust convention.
+        state_map: Integerizer mapping Python state objects to contiguous u32 IDs.
     """
     import transduction_core
 
