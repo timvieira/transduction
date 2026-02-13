@@ -9,7 +9,7 @@ Usage:
 """
 
 from transduction.fsa import FSA, EPSILON
-from transduction.base import DecompositionResult
+from transduction.base import DecompositionResult, IncrementalDecomposition
 from arsenal import Integerizer
 from functools import cached_property
 
@@ -93,7 +93,7 @@ def to_python_fsa(rust_fsa, sym_map):
 class RustDecomp(DecompositionResult):
     """Drop-in replacement for NonrecursiveDFADecomp using the Rust backend."""
 
-    def __init__(self, fst, target):
+    def __init__(self, fst, target, minimize=False):
         import transduction_core
 
         self.fst = fst
@@ -109,7 +109,7 @@ class RustDecomp(DecompositionResult):
 
         target_u32 = [sym_map(y) for y in target]
 
-        result = transduction_core.rust_decompose(rust_fst, target_u32)
+        result = transduction_core.rust_decompose(rust_fst, target_u32, minimize=minimize)
 
         self.quotient = to_python_fsa(result.quotient, sym_map)
         self.remainder = to_python_fsa(result.remainder, sym_map)
@@ -118,10 +118,11 @@ class RustDecomp(DecompositionResult):
 class RustPeekaboo(DecompositionResult):
     """Drop-in replacement for peekaboo_nonrecursive.Peekaboo using the Rust backend."""
 
-    def __init__(self, fst, target='', *, _rust_cache=None, _parent=None, _symbol=None):
+    def __init__(self, fst, target='', *, minimize=False, _rust_cache=None, _parent=None, _symbol=None):
         self.fst = fst
         self.target = target
         self.target_alphabet = fst.B - {EPSILON}
+        self._minimize = minimize
         oov = set(target) - self.target_alphabet
         if oov:
             raise ValueError(f"Out of vocabulary target symbols: {oov}")
@@ -139,7 +140,7 @@ class RustPeekaboo(DecompositionResult):
 
         rust_fst, sym_map, state_map = self._rust_cache
         target_u32 = [sym_map(y) for y in self.target]
-        result = transduction_core.rust_peekaboo(rust_fst, target_u32)
+        result = transduction_core.rust_peekaboo(rust_fst, target_u32, minimize=self._minimize)
 
         output = {}
         for y in self.target_alphabet:
@@ -158,11 +159,12 @@ class RustPeekaboo(DecompositionResult):
 
     def __call__(self, target):
         """Backward-compat: RustPeekaboo(fst)(target) -> {y: DecompositionResult}."""
-        p = RustPeekaboo(self.fst, target, _rust_cache=self._rust_cache)
+        p = RustPeekaboo(self.fst, target, minimize=self._minimize, _rust_cache=self._rust_cache)
         return {y: DecompositionResult(*qr) for y, qr in p._results.items()}
 
     def decompose_next(self):
         return {y: RustPeekaboo(self.fst, self.target + y,
+                                minimize=self._minimize,
                                 _rust_cache=self._rust_cache, _parent=self, _symbol=y)
                 for y in self.target_alphabet}
 
@@ -179,3 +181,48 @@ class RustPeekaboo(DecompositionResult):
     @property
     def remainder(self):
         return self._qr[1]
+
+
+class RustDirtyState(IncrementalDecomposition):
+    """Rust-backed dirty-state incremental decomposition.
+
+    Persists everything and only re-BFS from dirty DFA states whose NFA sets
+    contain frontier elements.
+    """
+
+    def __init__(self, fst, target='', *, minimize=False, _rust_state=None):
+        self.fst = fst
+        self.target = target
+        self._minimize = minimize
+        if _rust_state is not None:
+            self._rust_state = _rust_state
+        else:
+            import transduction_core
+            rust_fst, sym_map, _ = to_rust_fst(fst)
+            self._rust_state = (transduction_core.RustDirtyStateDecomp(rust_fst),
+                                sym_map)
+
+    @cached_property
+    def _qr(self):
+        state, sym_map = self._rust_state
+        target_u32 = [sym_map(y) for y in self.target]
+        state.decompose(target_u32)
+        q_rust = state.quotient(self._minimize)
+        r_rust = state.remainder(self._minimize)
+        return (to_python_fsa(q_rust, sym_map),
+                to_python_fsa(r_rust, sym_map))
+
+    @property
+    def quotient(self):
+        return self._qr[0]
+
+    @property
+    def remainder(self):
+        return self._qr[1]
+
+    def __rshift__(self, y):
+        return RustDirtyState(
+            self.fst, self.target + y,
+            minimize=self._minimize,
+            _rust_state=self._rust_state,
+        )

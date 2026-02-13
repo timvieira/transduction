@@ -196,6 +196,52 @@ class UniversalityFilter:
         for e in s:
             self._neg_index[e].add(eid)
 
+    def evict_frontier(self, old_depth, new_target, new_witnesses):
+        """Evict stale cache entries and update witnesses for a new target.
+
+        An NFA state ``(fst_state, buffer)`` is "dirty" if
+        ``len(buffer) >= old_depth`` — it's a frontier state whose behavior
+        changes when the target grows.
+
+        Removes any positive/negative cache entry that was indexed by a dirty
+        NFA element, and replaces witnesses with *new_witnesses*.
+        """
+        self._witnesses = new_witnesses
+
+        def is_dirty(elem):
+            return len(elem[1]) >= old_depth
+
+        # --- Positive cache eviction ---
+        dirty_pos_eids = set()
+        dirty_pos_keys = []
+        for elem, eids in self._pos_index.items():
+            if is_dirty(elem):
+                dirty_pos_keys.append(elem)
+                dirty_pos_eids |= eids
+
+        if dirty_pos_eids:
+            for elem in list(self._pos_index):
+                self._pos_index[elem] -= dirty_pos_eids
+            for eid in dirty_pos_eids:
+                # Poison so has_pos_subset can never match this entry
+                self._pos_sizes[eid] = float('inf')
+        for key in dirty_pos_keys:
+            del self._pos_index[key]
+
+        # --- Negative cache eviction ---
+        dirty_neg_eids = set()
+        dirty_neg_keys = []
+        for elem, eids in self._neg_index.items():
+            if is_dirty(elem):
+                dirty_neg_keys.append(elem)
+                dirty_neg_eids |= eids
+
+        if dirty_neg_eids:
+            for elem in list(self._neg_index):
+                self._neg_index[elem] -= dirty_neg_eids
+        for key in dirty_neg_keys:
+            del self._neg_index[key]
+
     def _has_pos_subset(self, dfa_state):
         """Is there a known-universal set u such that u ⊆ dfa_state?"""
         hits = {}

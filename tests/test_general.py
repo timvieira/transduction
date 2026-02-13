@@ -17,13 +17,14 @@ import pytest
 from transduction import examples, EPSILON, Precover
 from transduction.dfa_decomp_nonrecursive import NonrecursiveDFADecomp
 from transduction.dfa_decomp_incremental import IncrementalDFADecomp
+from transduction.dfa_decomp_incremental_truncated import TruncatedIncrementalDFADecomp
 from transduction.token_decompose import TokenDecompose
 from transduction.universality import check_all_input_universal
 from transduction.peekaboo_nonrecursive import Peekaboo as PeekabooNonrecursive
 from transduction.peekaboo_incremental import PeekabooState
 
 try:
-    from transduction.rust_bridge import RustDecomp, RustPeekaboo
+    from transduction.rust_bridge import RustDecomp, RustPeekaboo, RustDirtyState
     HAS_RUST = True
 except ImportError:
     HAS_RUST = False
@@ -65,6 +66,7 @@ def assert_equal_decomp_map(have, want):
 
 IMPLEMENTATIONS = [
     pytest.param(IncrementalDFADecomp, id="recursive_dfa_decomp"),
+    pytest.param(TruncatedIncrementalDFADecomp, id="truncated_incremental_dfa_decomp"),
     pytest.param(NonrecursiveDFADecomp, id="nonrecursive_dfa_decomp"),
     pytest.param(PeekabooState, id="peekaboo_incremental"),
     pytest.param(PeekabooNonrecursive, id="peekaboo_nonrecursive"),
@@ -77,6 +79,9 @@ if HAS_RUST:
     )
     IMPLEMENTATIONS.append(
         pytest.param(RustPeekaboo, id="rust_peekaboo"),
+    )
+    IMPLEMENTATIONS.append(
+        pytest.param(RustDirtyState, id="rust_dirty_state"),
     )
 
 
@@ -156,28 +161,3 @@ def test_infinite_quotient(impl):
 def test_parity(impl):
     fst = examples.parity({'a', 'b'})
     run_test(impl, fst, '', depth=5, verbosity=0)
-
-
-if __name__ == '__main__':
-    from arsenal import testing_framework
-
-    impls = [
-        IncrementalDFADecomp,
-        NonrecursiveDFADecomp,
-        PeekabooState,
-        PeekabooNonrecursive,
-        _token_decompose_or_skip,
-    ]
-    if HAS_RUST:
-        impls.append(RustDecomp)
-        impls.append(RustPeekaboo)
-
-    options = {}
-    env = dict(globals())
-    for f in env:
-        if f.startswith('test_'):
-            for alg in impls:
-                name = getattr(alg, '__name__', str(alg))
-                options[f'{f}[{name}]'] = lambda f=f, alg=alg: env[f](alg)
-
-    testing_framework(options)

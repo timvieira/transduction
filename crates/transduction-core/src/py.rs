@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
-use crate::fst::Fst;
-use crate::decompose;
-use crate::peekaboo;
+use crate::fst::{Fst, compute_ip_universal_states};
+use crate::{decompose, peekaboo, incremental, minimize};
+use std::time::Instant;
 
 /// Python-visible FST wrapper. Constructed once from Python arrays, then
 /// passed to `decompose()` repeatedly.
@@ -113,6 +113,8 @@ pub struct RustProfileStats {
     pub eps_cache_hits: u64,
     #[pyo3(get)]
     pub eps_cache_misses: u64,
+    #[pyo3(get)]
+    pub minimize_ms: f64,
 }
 
 #[pymethods]
@@ -157,69 +159,146 @@ pub struct DecompResult {
     stats: Py<RustProfileStats>,
 }
 
+/// Helper to wrap a Rust DecompResult into PyO3 objects.
+fn wrap_decomp_result(py: Python<'_>, result: decompose::DecompResult, do_minimize: bool) -> PyResult<DecompResult> {
+    let mut minimize_ms = 0.0f64;
+
+    let q_fsa = if do_minimize {
+        let t = Instant::now();
+        let m = minimize::minimize(&result.quotient);
+        minimize_ms += t.elapsed().as_secs_f64() * 1000.0;
+        m
+    } else {
+        result.quotient
+    };
+
+    let r_fsa = if do_minimize {
+        let t = Instant::now();
+        let m = minimize::minimize(&result.remainder);
+        minimize_ms += t.elapsed().as_secs_f64() * 1000.0;
+        m
+    } else {
+        result.remainder
+    };
+
+    let q = Py::new(py, RustFsa {
+        num_states: q_fsa.num_states, start: q_fsa.start, stop: q_fsa.stop,
+        src: q_fsa.arc_src, lbl: q_fsa.arc_lbl, dst: q_fsa.arc_dst,
+    })?;
+    let r = Py::new(py, RustFsa {
+        num_states: r_fsa.num_states, start: r_fsa.start, stop: r_fsa.stop,
+        src: r_fsa.arc_src, lbl: r_fsa.arc_lbl, dst: r_fsa.arc_dst,
+    })?;
+
+    let s = &result.stats;
+    let stats = Py::new(py, RustProfileStats {
+        total_ms: s.total_ms, init_ms: s.init_ms, bfs_ms: s.bfs_ms,
+        compute_arcs_ms: s.compute_arcs_ms, compute_arcs_calls: s.compute_arcs_calls,
+        intern_ms: s.intern_ms, intern_calls: s.intern_calls,
+        universal_ms: s.universal_ms, universal_calls: s.universal_calls,
+        universal_true: s.universal_true, universal_false: s.universal_false,
+        universal_sub_bfs_states: s.universal_sub_bfs_states,
+        universal_compute_arcs_calls: s.universal_compute_arcs_calls,
+        dfa_states: s.dfa_states, total_arcs: s.total_arcs,
+        q_stops: s.q_stops, r_stops: s.r_stops,
+        max_powerset_size: s.max_powerset_size, avg_powerset_size: s.avg_powerset_size,
+        eps_cache_hits: s.eps_cache_hits, eps_cache_misses: s.eps_cache_misses,
+        minimize_ms,
+    })?;
+
+    Ok(DecompResult { quotient: q, remainder: r, stats })
+}
+
 /// Perform the fused decomposition: given a Rust FST and a target sequence,
 /// compute the quotient (Q) and remainder (R) automata.
 #[pyfunction]
-pub fn rust_decompose(py: Python<'_>, fst: &RustFst, target: Vec<u32>) -> PyResult<DecompResult> {
+#[pyo3(signature = (fst, target, minimize=false))]
+pub fn rust_decompose(py: Python<'_>, fst: &RustFst, target: Vec<u32>, minimize: bool) -> PyResult<DecompResult> {
     let result = decompose::decompose(&fst.inner, &target);
+    wrap_decomp_result(py, result, minimize)
+}
 
-    let q = Py::new(
-        py,
-        RustFsa {
-            num_states: result.quotient.num_states,
-            start: result.quotient.start,
-            stop: result.quotient.stop,
-            src: result.quotient.arc_src,
-            lbl: result.quotient.arc_lbl,
-            dst: result.quotient.arc_dst,
-        },
-    )?;
+// ---------------------------------------------------------------------------
+// Dirty-state incremental decomposition
+// ---------------------------------------------------------------------------
 
-    let r = Py::new(
-        py,
-        RustFsa {
-            num_states: result.remainder.num_states,
-            start: result.remainder.start,
-            stop: result.remainder.stop,
-            src: result.remainder.arc_src,
-            lbl: result.remainder.arc_lbl,
-            dst: result.remainder.arc_dst,
-        },
-    )?;
+/// Lightweight result from dirty-state decompose() — stats only, no arc arrays.
+/// Arc materialization happens on demand via quotient()/remainder() on the decomposer.
+#[pyclass]
+pub struct DirtyStepResult {
+    #[pyo3(get)]
+    stats: Py<RustProfileStats>,
+}
 
-    let s = &result.stats;
-    let stats = Py::new(
-        py,
-        RustProfileStats {
-            total_ms: s.total_ms,
-            init_ms: s.init_ms,
-            bfs_ms: s.bfs_ms,
-            compute_arcs_ms: s.compute_arcs_ms,
-            compute_arcs_calls: s.compute_arcs_calls,
-            intern_ms: s.intern_ms,
-            intern_calls: s.intern_calls,
-            universal_ms: s.universal_ms,
-            universal_calls: s.universal_calls,
-            universal_true: s.universal_true,
-            universal_false: s.universal_false,
+/// Python-visible dirty-state decomposition wrapper.
+/// Persists entire DFA structure and only re-expands dirty/border states.
+///
+/// `decompose()` returns a lightweight `DirtyStepResult` (stats only).
+/// Call `quotient()`/`remainder()` to materialize Q/R FSAs on demand.
+#[pyclass(unsendable)]
+pub struct RustDirtyStateDecomp {
+    fst: Py<RustFst>,
+    ip_univ: Vec<bool>,
+    persistent: incremental::DirtyDecomp,
+}
+
+#[pymethods]
+impl RustDirtyStateDecomp {
+    #[new]
+    #[pyo3(signature = (fst, stride=4096))]
+    fn new(py: Python<'_>, fst: Py<RustFst>, stride: u64) -> Self {
+        let ip_univ = compute_ip_universal_states(&fst.borrow(py).inner);
+        let persistent = incremental::DirtyDecomp::new(&ip_univ, stride);
+        RustDirtyStateDecomp { fst, ip_univ, persistent }
+    }
+
+    /// Run dirty-state DFS and return stats. Does NOT materialize arc arrays.
+    /// Call quotient()/remainder() afterward to get FSAs on demand.
+    #[pyo3(signature = (target, minimize=false))]
+    fn decompose(&mut self, py: Python<'_>, target: Vec<u32>, minimize: bool) -> PyResult<DirtyStepResult> {
+        let _ = minimize;
+        let update = self.persistent.decompose_dirty(
+            &self.fst.borrow(py).inner, &target, &self.ip_univ,
+        );
+        let s = update.stats;
+        let stats = Py::new(py, RustProfileStats {
+            total_ms: s.total_ms, init_ms: s.init_ms, bfs_ms: s.bfs_ms,
+            compute_arcs_ms: s.compute_arcs_ms, compute_arcs_calls: s.compute_arcs_calls,
+            intern_ms: s.intern_ms, intern_calls: s.intern_calls,
+            universal_ms: s.universal_ms, universal_calls: s.universal_calls,
+            universal_true: s.universal_true, universal_false: s.universal_false,
             universal_sub_bfs_states: s.universal_sub_bfs_states,
             universal_compute_arcs_calls: s.universal_compute_arcs_calls,
-            dfa_states: s.dfa_states,
-            total_arcs: s.total_arcs,
-            q_stops: s.q_stops,
-            r_stops: s.r_stops,
-            max_powerset_size: s.max_powerset_size,
-            avg_powerset_size: s.avg_powerset_size,
-            eps_cache_hits: s.eps_cache_hits,
-            eps_cache_misses: s.eps_cache_misses,
-        },
-    )?;
+            dfa_states: s.dfa_states, total_arcs: s.total_arcs,
+            q_stops: s.q_stops, r_stops: s.r_stops,
+            max_powerset_size: s.max_powerset_size, avg_powerset_size: s.avg_powerset_size,
+            eps_cache_hits: s.eps_cache_hits, eps_cache_misses: s.eps_cache_misses,
+            minimize_ms: 0.0,
+        })?;
+        Ok(DirtyStepResult { stats })
+    }
 
-    Ok(DecompResult {
-        quotient: q,
-        remainder: r,
-        stats,
-    })
+    /// Materialize the quotient FSA from the last decompose() call.
+    #[pyo3(signature = (minimize=false))]
+    fn quotient(&mut self, py: Python<'_>, minimize: bool) -> PyResult<Py<RustFsa>> {
+        let fsa = self.persistent.materialize_quotient();
+        let fsa = if minimize { minimize::minimize(&fsa) } else { fsa };
+        Py::new(py, RustFsa {
+            num_states: fsa.num_states, start: fsa.start, stop: fsa.stop,
+            src: fsa.arc_src, lbl: fsa.arc_lbl, dst: fsa.arc_dst,
+        })
+    }
+
+    /// Materialize the remainder FSA from the last decompose() call.
+    #[pyo3(signature = (minimize=false))]
+    fn remainder(&mut self, py: Python<'_>, minimize: bool) -> PyResult<Py<RustFsa>> {
+        let fsa = self.persistent.materialize_remainder();
+        let fsa = if minimize { minimize::minimize(&fsa) } else { fsa };
+        Py::new(py, RustFsa {
+            num_states: fsa.num_states, start: fsa.start, stop: fsa.stop,
+            src: fsa.arc_src, lbl: fsa.arc_lbl, dst: fsa.arc_dst,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -342,7 +421,8 @@ impl PeekabooDecompResult {
 /// Perform peekaboo decomposition: given a Rust FST and a target sequence,
 /// compute per-symbol quotient and remainder automata for the next target symbol.
 #[pyfunction]
-pub fn rust_peekaboo(py: Python<'_>, fst: &RustFst, target: Vec<u32>) -> PyResult<PeekabooDecompResult> {
+#[pyo3(signature = (fst, target, minimize=false))]
+pub fn rust_peekaboo(py: Python<'_>, fst: &RustFst, target: Vec<u32>, minimize: bool) -> PyResult<PeekabooDecompResult> {
     let result = peekaboo::peekaboo_decompose(&fst.inner, &target);
 
     let mut per_symbol = rustc_hash::FxHashMap::default();
@@ -350,6 +430,12 @@ pub fn rust_peekaboo(py: Python<'_>, fst: &RustFst, target: Vec<u32>) -> PyResul
     symbols.sort_unstable();
 
     for (sym, (q_fsa, r_fsa)) in result.per_symbol {
+        let (q_fsa, r_fsa) = if minimize {
+            (minimize::minimize(&q_fsa), minimize::minimize(&r_fsa))
+        } else {
+            (q_fsa, r_fsa)
+        };
+
         let q = Py::new(
             py,
             RustFsa {

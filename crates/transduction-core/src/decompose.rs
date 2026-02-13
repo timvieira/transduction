@@ -1,6 +1,6 @@
 use crate::fst::{compute_ip_universal_states, Fst};
 use crate::powerset::PowersetArena;
-use crate::precover::{pack, PrecoverNFA};
+use crate::precover::PrecoverNFA;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -70,33 +70,36 @@ pub struct DecompResult {
 ///    non-universal set, it's non-universal too.
 /// 5. BFS fallback: full sub-BFS. Results are added to the positive or
 ///    negative cache for future lookups.
-struct UniversalityFilter {
+pub struct UniversalityFilter {
     /// Packed NFA states `(q, target_len)` for ip-universal FST states q.
-    witnesses: FxHashSet<u64>,
+    pub witnesses: FxHashSet<u64>,
 
     /// Element-indexed positive cache (known universal NFA-state sets).
     /// pos_index[nfa_element] = list of entry IDs whose stored set contains that element.
-    pos_index: FxHashMap<u64, Vec<u32>>,
+    pub pos_index: FxHashMap<u64, Vec<u32>>,
     /// entry_id -> size of the stored set
-    pos_sizes: Vec<usize>,
+    pub pos_sizes: Vec<usize>,
 
     /// Element-indexed negative cache (known non-universal NFA-state sets).
-    neg_index: FxHashMap<u64, Vec<u32>>,
-    neg_next: u32,
+    pub neg_index: FxHashMap<u64, Vec<u32>>,
+    pub neg_next: u32,
 
 }
 
 impl UniversalityFilter {
     fn new(fst: &Fst, target_len: u32) -> Self {
-        let mut witnesses = FxHashSet::default();
-
         let ip_univ = compute_ip_universal_states(fst);
+        Self::with_ip_univ(&ip_univ, target_len, target_len as u64 + 1)
+    }
+
+    /// Create a UniversalityFilter with pre-computed ip_univ states for a fixed stride.
+    pub fn with_ip_univ(ip_univ: &[bool], target_len: u32, stride: u64) -> Self {
+        let mut witnesses = FxHashSet::default();
         for (q, &is_univ) in ip_univ.iter().enumerate() {
             if is_univ {
-                witnesses.insert(pack(q as u32, target_len, target_len));
+                witnesses.insert(q as u64 * stride + target_len as u64);
             }
         }
-
         UniversalityFilter {
             witnesses,
             pos_index: FxHashMap::default(),
@@ -106,8 +109,71 @@ impl UniversalityFilter {
         }
     }
 
+    /// Evict cache entries stale after a prefix extension.
+    pub fn evict_frontier(&mut self, ip_univ: &[bool], new_target_len: u32, stride: u64, prev_target_len: u32) {
+        // Rebuild witnesses for new target_len
+        self.witnesses.clear();
+        for (q, &is_univ) in ip_univ.iter().enumerate() {
+            if is_univ {
+                self.witnesses.insert(q as u64 * stride + new_target_len as u64);
+            }
+        }
+
+        let is_dirty = |elem: u64| -> bool {
+            (elem % stride) as u32 >= prev_target_len
+        };
+
+        // Collect dirty positive entry IDs by scanning pos_index keys
+        let mut dirty_pos_eids: FxHashSet<u32> = FxHashSet::default();
+        let mut dirty_pos_keys: Vec<u64> = Vec::new();
+        for (&elem, eids) in &self.pos_index {
+            if is_dirty(elem) {
+                dirty_pos_keys.push(elem);
+                for &eid in eids {
+                    dirty_pos_eids.insert(eid);
+                }
+            }
+        }
+
+        if !dirty_pos_eids.is_empty() {
+            for lists in self.pos_index.values_mut() {
+                lists.retain(|eid| !dirty_pos_eids.contains(eid));
+            }
+            for &eid in &dirty_pos_eids {
+                if (eid as usize) < self.pos_sizes.len() {
+                    // Use usize::MAX so this entry can never match in has_pos_subset
+                    self.pos_sizes[eid as usize] = usize::MAX;
+                }
+            }
+        }
+        for key in &dirty_pos_keys {
+            self.pos_index.remove(key);
+        }
+
+        // Collect dirty negative entry IDs by scanning neg_index keys
+        let mut dirty_neg_eids: FxHashSet<u32> = FxHashSet::default();
+        let mut dirty_neg_keys: Vec<u64> = Vec::new();
+        for (&elem, eids) in &self.neg_index {
+            if is_dirty(elem) {
+                dirty_neg_keys.push(elem);
+                for &eid in eids {
+                    dirty_neg_eids.insert(eid);
+                }
+            }
+        }
+
+        if !dirty_neg_eids.is_empty() {
+            for lists in self.neg_index.values_mut() {
+                lists.retain(|eid| !dirty_neg_eids.contains(eid));
+            }
+        }
+        for key in &dirty_neg_keys {
+            self.neg_index.remove(key);
+        }
+    }
+
     /// Add a set to the positive (known universal) cache.
-    fn add_pos(&mut self, nfa_set: &[u64]) {
+    pub(crate) fn add_pos(&mut self, nfa_set: &[u64]) {
         let eid = self.pos_sizes.len() as u32;
         self.pos_sizes.push(nfa_set.len());
         for &e in nfa_set {
@@ -116,7 +182,7 @@ impl UniversalityFilter {
     }
 
     /// Add a set to the negative (known non-universal) cache.
-    fn add_neg(&mut self, nfa_set: &[u64]) {
+    pub(crate) fn add_neg(&mut self, nfa_set: &[u64]) {
         let eid = self.neg_next;
         self.neg_next += 1;
         for &e in nfa_set {
@@ -172,7 +238,7 @@ impl UniversalityFilter {
     }
 
     /// BFS universality check: does the DFA state accept Σ*?
-    fn bfs_universal(
+    pub(crate) fn bfs_universal(
         &self,
         sid: u32,
         nfa: &PrecoverNFA,
@@ -220,7 +286,7 @@ impl UniversalityFilter {
     }
 
     /// Main entry point: determine if a DFA state is universal.
-    fn is_universal(
+    pub(crate) fn is_universal(
         &mut self,
         sid: u32,
         nfa: &PrecoverNFA,
@@ -260,7 +326,15 @@ impl UniversalityFilter {
 }
 
 /// Fused BFS that performs determinization + universality detection + Q/R partitioning.
+/// Convenience wrapper that computes ip_universal_states internally.
 pub fn decompose(fst: &Fst, target: &[u32]) -> DecompResult {
+    let ip_univ = compute_ip_universal_states(fst);
+    decompose_with_ip_univ(fst, target, &ip_univ)
+}
+
+/// Like `decompose`, but accepts pre-computed ip_universal_states to avoid
+/// redundant computation when decomposing the same FST with different targets.
+pub fn decompose_with_ip_univ(fst: &Fst, target: &[u32], ip_univ: &[bool]) -> DecompResult {
     let total_start = Instant::now();
 
     let mut stats = ProfileStats {
@@ -311,7 +385,7 @@ pub fn decompose(fst: &Fst, target: &[u32]) -> DecompResult {
     let mut q_stop: Vec<u32> = Vec::new();
     let mut r_stop: Vec<u32> = Vec::new();
 
-    let mut filter = UniversalityFilter::new(fst, target.len() as u32);
+    let mut filter = UniversalityFilter::with_ip_univ(ip_univ, target.len() as u32, nfa.stride);
 
     worklist.push_back(start_id);
     visited.insert(start_id);
