@@ -356,7 +356,12 @@ class FSA:
         return m
 
     def min_brzozowski(self):
-        "Brzozowski's minimization algorithm"
+        """Minimize via Brzozowski's algorithm (reverse-determinize-reverse-determinize).
+
+        Works on NFAs directly (no prior determinization needed).  Simple but
+        may be slow due to two subset constructions; can blow up if the
+        intermediate DFA is exponentially larger.
+        """
         # https://en.wikipedia.org/wiki/DFA_minimization#Brzozowski's_algorithm
 
         # Proof of correctness:
@@ -381,6 +386,11 @@ class FSA:
         return self.reverse().det().reverse().det().trim()
 
     def min_fast(self):
+        """Minimize via Hopcroft's partition-refinement algorithm.
+
+        Determinizes first, then iteratively splits equivalence classes.
+        O(n log n) in theory.  See ``min_faster`` for an optimized variant.
+        """
         self = self.det().renumber()
 
         # calculate inverse of transition function (i.e., reverse arcs)
@@ -420,6 +430,11 @@ class FSA:
         return self.rename(lambda i: minstates[i]).trim()
 
     def min_faster(self):
+        """Optimized Hopcroft minimization with a ``find`` index for O(1) block lookup.
+
+        Same algorithm as ``min_fast`` but avoids scanning all blocks on each
+        refinement step.  This is the default (aliased as ``min``).
+        """
         self = self.det().renumber()
 
         # calculate inverse of transition function (i.e., reverse arcs)

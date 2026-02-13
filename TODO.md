@@ -16,10 +16,6 @@
 
 ## High — causes confusion
 
-- [ ] **Document minimization method tradeoffs (`fsa.py`).** Three methods
-  `min_brzozowski()`, `min_fast()`, `min_faster()` with no guidance on which to
-  use. `min` aliases `min_faster` but there's no explanation of tradeoffs.
-
 - [ ] **Document `AbstractAlgorithm` / `LazyIncremental` constructor params
   (`base.py`, `lazy_incremental.py`).** `empty_source`, `empty_target`,
   `extend` — what are these for? The `extend` lambda especially needs
