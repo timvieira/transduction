@@ -70,7 +70,7 @@ print(result.remainder)  # FSA: source strings that terminate after producing 'a
 The **peekaboo** algorithm computes decompositions for *all* possible next symbols in a single pass — the key primitive for autoregressive constrained decoding:
 
 ```python
-from transduction.peekaboo_recursive import Peekaboo
+from transduction.peekaboo_incremental import Peekaboo
 
 peekaboo = Peekaboo(fst)
 
@@ -125,68 +125,91 @@ sample = sampler.sample(max_length=50)
 |-----------|--------|:-----------:|-------|
 | `Precover` | `eager_nonrecursive.py` | No | Reference implementation; full powerset determinization |
 | `NonrecursiveDFADecomp` | `dfa_decomp_nonrecursive.py` | No | Clean reference; rebuilds from scratch each call |
-| `RecursiveDFADecomp` | `dfa_decomp_recursive.py` | Yes | Supports `>>` but diverges on unbounded-buffer FSTs |
-| `Peekaboo` | `peekaboo_recursive.py` | Yes | **Recommended.** Batches all next-symbol decompositions; truncation ensures termination |
-| `PeekabooNonrecursive` | `peekaboo_nonrecursive.py` | No | Simpler peekaboo variant without `>>` |
+| `IncrementalDFADecomp` | `dfa_decomp_incremental.py` | Yes | Supports `>>` but diverges on some inputs (no truncation) |
+| `TruncatedIncrementalDFADecomp` | `dfa_decomp_incremental_truncated.py` | Yes | Incremental DFA decomp with target-buffer truncation |
+| `PeekabooState` | `peekaboo_incremental.py` | Yes | **Recommended.** Batches all next-symbol decompositions; truncation ensures termination |
+| `Peekaboo` | `peekaboo_nonrecursive.py` | No | Simpler peekaboo variant without `>>` |
 | `TokenDecompose` | `token_decompose.py` | No | BPE-optimized fast path (requires `all_input_universal` FST) |
 | `RustDecomp` | `rust_bridge.py` | No | Rust generic decomposition |
 | `RustPeekaboo` | `rust_bridge.py` | No | Rust peekaboo (3-25x speedup) |
+| `RustDirtyState` | `rust_bridge.py` | Yes | Rust incremental decomposition with dirty-state tracking |
 
 ### Choosing an algorithm
 
-- **Autoregressive decoding (token by token):** Use `RustPeekaboo` for best performance, or `Peekaboo` (Python) if the Rust extension is unavailable.
+- **Autoregressive decoding (token by token):** Use `RustPeekaboo` for best performance, or `PeekabooState` (Python) if the Rust extension is unavailable.
 - **BPE tokenizers:** Check `check_all_input_universal(fst)` first — if true, `TokenDecompose` gives massive speedups (5000x+).
 - **One-shot decomposition:** Use `RustDecomp` or `Precover`.
 
 ## Project structure
 
 ```
-transduction/              Python package
-  fst.py                   FST class, UniversalityFilter
-  fsa.py                   FSA class
-  base.py                  PrecoverDecomp, AbstractAlgorithm base classes
-  peekaboo_recursive.py    Peekaboo algorithm (recommended)
-  peekaboo_nonrecursive.py Non-incremental peekaboo
-  eager_nonrecursive.py    Reference Precover implementation
-  dfa_decomp_*.py          DFA-based decomposition variants
-  token_decompose.py       BPE-optimized fast path
-  enumeration.py           LM-weighted path enumeration
-  goo.py                   BPE WFST builder, LazyPrecoverNFA
-  lazy.py                  Lazy automaton framework (on-demand determinization)
-  rust_bridge.py           Python <-> Rust conversion layer
-  examples.py              Example FSTs for testing
-  lm/                      Language model integration
-    base.py                LMState ABC (logp_next, eos, <<, __call__, greedy/sample decode)
-    ngram.py               ByteNgramLM, CharNgramLM (lightweight n-gram LMs)
-    statelm.py             StateLM: incremental LM state with KV caching
-    transduced.py          TransducedLM: pushforward of an inner LM through an FST
+transduction/                Python package
+  fst.py                     FST class
+  fsa.py                     FSA class (includes DFA minimization)
+  base.py                    DecompositionResult, AbstractAlgorithm base classes
+  universality.py            UniversalityFilter, check_all_input_universal
+  precover_nfa.py            PrecoverNFA variants (PrecoverNFA, PeekabooLookaheadNFA, etc.)
+  peekaboo_incremental.py    Peekaboo algorithm (recommended for autoregressive decoding)
+  peekaboo_nonrecursive.py   Non-incremental peekaboo
+  eager_nonrecursive.py      Reference Precover implementation
+  dfa_decomp_nonrecursive.py Non-incremental DFA decomposition
+  dfa_decomp_incremental.py  Incremental DFA decomposition (diverges on some inputs)
+  dfa_decomp_incremental_truncated.py  Incremental DFA decomp with truncation
+  token_decompose.py         BPE-optimized fast path
+  enumeration.py             LM-weighted path enumeration
+  lazy.py                    Lazy automaton framework (on-demand determinization)
+  lazy_incremental.py        LazyIncremental decomposition (finite-language FSTs only)
+  lazy_nonrecursive.py       LazyNonrecursive decomposition
+  rust_bridge.py             Python <-> Rust conversion layer
+  examples.py                Example FSTs for testing
+  applications/              Application-specific FST builders
+    bpe.py                   BPE WFST builder (bpe_wfst)
+    ptb.py                   PTB tokenizer FST (pynini)
+    wikitext.py              WikiText data loading
+  lm/                        Language model integration
+    base.py                  LMState ABC (logp_next, eos, >>, __call__, greedy/sample decode)
+    ngram.py                 ByteNgramLM, CharNgramLM (lightweight n-gram LMs)
+    statelm.py               StateLM: incremental LM state with KV caching
+    transduced.py            TransducedLM: pushforward of an inner LM through an FST
 
-crates/transduction-core/  Rust acceleration (PyO3)
+crates/transduction-core/    Rust acceleration (PyO3)
   src/
-    fst.rs                 FST struct with CSR storage + auxiliary indexes
-    precover.rs            Precover NFA with epsilon closure caching
-    powerset.rs            PowersetArena (hash-consing DFA states)
-    decompose.rs           Generic decomposition
-    peekaboo.rs            Peekaboo recursive (Rust port)
-    py.rs                  PyO3 bindings
+    fst.rs                   FST struct with CSR storage + auxiliary indexes
+    precover.rs              Precover NFA with epsilon closure caching
+    powerset.rs              PowersetArena (hash-consing DFA states)
+    decompose.rs             Generic decomposition
+    peekaboo.rs              Peekaboo (Rust port)
+    incremental.rs           Incremental decomposition with dirty-state tracking
+    minimize.rs              DFA minimization
+    py.rs                    PyO3 bindings
 
-tests/                     Test suite
-  test_general.py          Decomposition correctness (90 tests, 7 implementations)
-  test_enumeration.py      Enumeration + BPE-scale integration tests (12 tests)
-reports/                   Algorithm analysis and benchmarks
+tests/                       Test suite
+  test_general.py            General-case decomposition correctness (9 implementations)
+  test_enumeration.py        Enumeration + BPE-scale integration tests
+  test_push_labels.py        Push-label tests
+  test_transduced.py         Transduced LM tests
+  test_finite.py             Finite-language-only algorithm tests
+  test_lazy.py               Lazy automaton tests
+  test_ngram.py              N-gram LM tests
+  test_ptb_nltk.py           PTB tokenizer tests
+  test_statelm_kv_cache.py   StateLM KV cache tests
+reports/                     Algorithm analysis and benchmarks
 ```
 
 ## Testing
 
 ```bash
-# Core decomposition tests (90 pass, 1 xfail across 7 implementations)
+# Core decomposition tests (9 implementations)
 python -m pytest tests/test_general.py -v
 
-# Enumeration + BPE-scale integration tests (12 pass)
+# Enumeration + BPE-scale integration tests
 python -m pytest tests/test_enumeration.py -v
+
+# All tests
+python -m pytest tests/ -v
 ```
 
-102/103 tests pass across 7 decomposition implementations. The single expected failure is a pre-existing timeout in `RecursiveDFADecomp` on an adversarial input (`triplets_of_doom`).
+The single expected failure is `IncrementalDFADecomp` on `triplets_of_doom` (diverges without target-buffer truncation).
 
 ### Dependencies for full test suite
 
