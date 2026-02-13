@@ -8,6 +8,7 @@ from transduction.universality import (
 )
 from collections import deque
 from functools import cached_property
+from transduction.lazy import EpsilonRemove
 
 # State status constants (matching Rust DirtyDecomp)
 STATUS_NEW = 0       # needs full expansion
@@ -87,11 +88,13 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
         self.target = target
         self.parent = parent
         self._consumed = False
+        self._has_eps = EPSILON in fst.A
 
         if parent is not None:
             assert fst is parent.fst
             self._all_input_universal = parent._all_input_universal
             self._ip_universal_states = parent._ip_universal_states
+            self._fst_univ_cache = parent._fst_univ_cache
             self._build_incremental(parent)
         else:
             self._all_input_universal = check_all_input_universal(fst)
@@ -99,6 +102,8 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
                 frozenset() if self._all_input_universal
                 else compute_ip_universal_states(fst)
             )
+            self._eps_cache = {}
+            self._fst_univ_cache = {}
             self._build_fresh()
 
     def _make_filter(self, dfa):
@@ -118,6 +123,7 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
         self._dfa_trans = {}
         self._dfa_status = {}
         self._incoming = {}   # dest -> {(label, src), ...}
+        self._max_bufpos = {}
         self._filt = filt
 
         N = len(self.target)
@@ -138,12 +144,25 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
         while worklist:
             i = worklist.popleft()
 
+            # Compute max_bufpos for O(1) frontier/dirty detection
+            mbp = max(len(buf) for (_, buf) in i)
+            self._max_bufpos[i] = mbp
+
             # Track frontier: states with any NFA element at buffer length == N
-            if any(len(buf) == N for (_, buf) in i):
+            if mbp >= N:
                 frontier.add(i)
 
             if dfa.is_final(i):
-                if filt.is_universal(i):
+                # Check fst_univ_cache for pure frontier states
+                if mbp == N and all(len(buf) == N for (_, buf) in i):
+                    fst_key = frozenset(fst_state for (fst_state, _) in i)
+                    is_uni = self._fst_univ_cache.get(fst_key)
+                    if is_uni is None:
+                        is_uni = filt.is_universal(i)
+                        self._fst_univ_cache[fst_key] = is_uni
+                else:
+                    is_uni = filt.is_universal(i)
+                if is_uni:
                     self._dfa_status[i] = STATUS_QSTOP
                     self._dfa_trans[i] = {}
                     q_stops.add(i)
@@ -165,6 +184,10 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
                 else:
                     self._dfa_status[i] = STATUS_INTERIOR
 
+        # Persist eps closure cache for incremental reuse
+        if self._has_eps and isinstance(dfa.fsa, EpsilonRemove):
+            self._eps_cache = dfa.fsa._closure_cache
+
         self._start_states = start_states
         self._frontier = frontier
         self._q_stops = q_stops
@@ -185,6 +208,19 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
         self._dfa_trans = parent._dfa_trans
         self._dfa_status = parent._dfa_status
         self._incoming = parent._incoming
+        self._max_bufpos = parent._max_bufpos
+
+        # Transfer and evict stale eps closure cache
+        if self._has_eps:
+            eps_cache = parent._eps_cache
+            stale = [k for k, v in eps_cache.items()
+                     if len(k[1]) >= old_depth
+                     or any(len(s[1]) >= old_depth for s in v)]
+            for k in stale:
+                del eps_cache[k]
+            self._eps_cache = eps_cache
+        else:
+            self._eps_cache = {}
 
         # Dirty = parent's frontier states (tracked, not scanned)
         dirty = parent._frontier
@@ -214,6 +250,10 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
 
         # Build new lazy DFA for extended target
         dfa = PrecoverNFA(self.fst, self.target).det()
+
+        # Inject persisted eps closure cache
+        if self._has_eps and isinstance(dfa.fsa, EpsilonRemove):
+            dfa.fsa._closure_cache = self._eps_cache
 
         # Recompute start states from the new DFA (they can change when the
         # target grows, especially from empty to non-empty).
@@ -252,12 +292,25 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
 
             n_expanded += 1
 
+            # Compute max_bufpos for O(1) frontier/dirty detection
+            mbp = max(len(buf) for (_, buf) in i)
+            self._max_bufpos[i] = mbp
+
             # Track frontier
-            if any(len(buf) == N for (_, buf) in i):
+            if mbp >= N:
                 frontier.add(i)
 
             if dfa.is_final(i):
-                if filt.is_universal(i):
+                # Check fst_univ_cache for pure frontier states
+                if mbp == N and all(len(buf) == N for (_, buf) in i):
+                    fst_key = frozenset(fst_state for (fst_state, _) in i)
+                    is_uni = self._fst_univ_cache.get(fst_key)
+                    if is_uni is None:
+                        is_uni = filt.is_universal(i)
+                        self._fst_univ_cache[fst_key] = is_uni
+                else:
+                    is_uni = filt.is_universal(i)
+                if is_uni:
                     self._dfa_status[i] = STATUS_QSTOP
                     self._dfa_trans[i] = {}
                     q_stops.add(i)
@@ -278,6 +331,10 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
                 r_stops.add(i)
             else:
                 self._dfa_status[i] = STATUS_INTERIOR
+
+        # Persist eps closure cache for next incremental step
+        if self._has_eps and isinstance(dfa.fsa, EpsilonRemove):
+            self._eps_cache = dfa.fsa._closure_cache
 
         self._frontier = frontier
         self._q_stops = q_stops
@@ -359,6 +416,8 @@ class _OverlayChild(IncrementalDecomposition):
         self._consumed = False
         self._all_input_universal = parent._all_input_universal
         self._ip_universal_states = parent._ip_universal_states
+        self._has_eps = EPSILON in parent.fst.A
+        self._fst_univ_cache = parent._fst_univ_cache
 
         # Shared base (read-only references to parent's clean state)
         self._base_trans = parent._dfa_trans
@@ -368,6 +427,7 @@ class _OverlayChild(IncrementalDecomposition):
         # Per-branch overlay: only dirty/border/new states
         self._overlay_trans = {}
         self._overlay_status = {}
+        self._overlay_max_bufpos = {}
         # incoming diffs: add/remove sets per dest state
         self._overlay_incoming_add = {}
         self._overlay_incoming_remove = {}
@@ -422,11 +482,24 @@ class _OverlayChild(IncrementalDecomposition):
             if status != STATUS_NEW:
                 continue
 
-            if any(len(buf) == N for (_, buf) in i):
+            # Compute max_bufpos inline for overlay states
+            mbp = max(len(buf) for (_, buf) in i)
+            self._overlay_max_bufpos[i] = mbp
+
+            if mbp >= N:
                 frontier.add(i)
 
             if dfa.is_final(i):
-                if filt.is_universal(i):
+                # Check fst_univ_cache for pure frontier states
+                if mbp == N and all(len(buf) == N for (_, buf) in i):
+                    fst_key = frozenset(fst_state for (fst_state, _) in i)
+                    is_uni = self._fst_univ_cache.get(fst_key)
+                    if is_uni is None:
+                        is_uni = filt.is_universal(i)
+                        self._fst_univ_cache[fst_key] = is_uni
+                else:
+                    is_uni = filt.is_universal(i)
+                if is_uni:
                     self._overlay_status[i] = STATUS_QSTOP
                     self._overlay_trans[i] = {}
                     q_stops.add(i)
@@ -447,6 +520,12 @@ class _OverlayChild(IncrementalDecomposition):
                 r_stops.add(i)
             else:
                 self._overlay_status[i] = STATUS_INTERIOR
+
+        # Save eps closure cache for _flatten
+        if self._has_eps and isinstance(dfa.fsa, EpsilonRemove):
+            self._expand_eps_cache = dfa.fsa._closure_cache
+        else:
+            self._expand_eps_cache = {}
 
         self._frontier = frontier
         self._q_stops = q_stops
@@ -510,6 +589,10 @@ class _OverlayChild(IncrementalDecomposition):
         for state, additions in self._overlay_incoming_add.items():
             incoming.setdefault(state, set()).update(additions)
 
+        # Merge max_bufpos: parent base + overlay
+        max_bufpos = dict(self.parent._max_bufpos)
+        max_bufpos.update(self._overlay_max_bufpos)
+
         # Build a shell object with flat dicts
         obj = object.__new__(TruncatedIncrementalDFADecomp)
         obj.fst = self.fst
@@ -518,11 +601,15 @@ class _OverlayChild(IncrementalDecomposition):
         obj.target = self.target
         obj.parent = self.parent
         obj._consumed = False
+        obj._has_eps = self._has_eps
         obj._all_input_universal = self._all_input_universal
         obj._ip_universal_states = self._ip_universal_states
+        obj._fst_univ_cache = self._fst_univ_cache
+        obj._eps_cache = self._expand_eps_cache
         obj._dfa_trans = dfa_trans
         obj._dfa_status = dfa_status
         obj._incoming = incoming
+        obj._max_bufpos = max_bufpos
         obj._start_states = self._start_states
         obj._frontier = self._frontier
         obj._q_stops = self._q_stops

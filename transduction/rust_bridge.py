@@ -208,6 +208,9 @@ class RustDirtyState(IncrementalDecomposition):
 
     @cached_property
     def _qr(self):
+        # Use precomputed Q/R from decompose_next() if available
+        if hasattr(self, '_precomputed_qr'):
+            return self._precomputed_qr
         state, sym_map = self._rust_state
         target_u32 = [sym_map(y) for y in self.target]
         state.decompose(target_u32)
@@ -230,3 +233,30 @@ class RustDirtyState(IncrementalDecomposition):
             minimize=self._minimize,
             _rust_state=self._rust_state,
         )
+
+    def decompose_next(self):
+        state, sym_map = self._rust_state
+        target_u32 = [sym_map(y) for y in self.target]
+        # Advance Rust state to current target first
+        state.decompose(target_u32)
+        output_u32 = [sym_map(y) for y in (self.fst.B - {EPSILON})]
+        result = state.decompose_next(target_u32, output_u32)
+        output = {}
+        for y in (self.fst.B - {EPSILON}):
+            y_u32 = sym_map(y)
+            pair = result.get(y_u32)
+            if pair is not None:
+                q_rust, r_rust = pair
+                q_fsa = to_python_fsa(q_rust, sym_map)
+                r_fsa = to_python_fsa(r_rust, sym_map)
+            else:
+                q_fsa = FSA()
+                r_fsa = FSA()
+            output[y] = RustDirtyState(
+                self.fst, self.target + y,
+                minimize=self._minimize,
+                _rust_state=self._rust_state,
+            )
+            # Inject pre-computed Q/R to avoid re-computation
+            output[y]._precomputed_qr = (q_fsa, r_fsa)
+        return output

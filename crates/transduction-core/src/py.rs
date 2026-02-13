@@ -299,6 +299,66 @@ impl RustDirtyStateDecomp {
             src: fsa.arc_src, lbl: fsa.arc_lbl, dst: fsa.arc_dst,
         })
     }
+
+    /// Per-symbol branching: decompose for every next output symbol.
+    /// Returns a DirtyNextResult with per-symbol (quotient, remainder) pairs.
+    #[pyo3(signature = (target, output_symbols))]
+    fn decompose_next(
+        &mut self, py: Python<'_>, target: Vec<u32>, output_symbols: Vec<u32>,
+    ) -> PyResult<DirtyNextResult> {
+        let result = self.persistent.decompose_next_all(
+            &self.fst.borrow(py).inner, &target, &self.ip_univ, &output_symbols,
+        );
+
+        let mut per_symbol = rustc_hash::FxHashMap::default();
+        let mut symbols: Vec<u32> = result.keys().copied().collect();
+        symbols.sort_unstable();
+
+        for (sym, (q_fsa, r_fsa)) in result {
+            let q = Py::new(py, RustFsa {
+                num_states: q_fsa.num_states, start: q_fsa.start, stop: q_fsa.stop,
+                src: q_fsa.arc_src, lbl: q_fsa.arc_lbl, dst: q_fsa.arc_dst,
+            })?;
+            let r = Py::new(py, RustFsa {
+                num_states: r_fsa.num_states, start: r_fsa.start, stop: r_fsa.stop,
+                src: r_fsa.arc_src, lbl: r_fsa.arc_lbl, dst: r_fsa.arc_dst,
+            })?;
+            per_symbol.insert(sym, (q, r));
+        }
+
+        Ok(DirtyNextResult { per_symbol, symbols })
+    }
+}
+
+/// Python-visible result from dirty-state decompose_next().
+/// Contains per-symbol (quotient, remainder) pairs.
+#[pyclass(unsendable)]
+pub struct DirtyNextResult {
+    per_symbol: rustc_hash::FxHashMap<u32, (Py<RustFsa>, Py<RustFsa>)>,
+    symbols: Vec<u32>,
+}
+
+#[pymethods]
+impl DirtyNextResult {
+    /// Get (quotient, remainder) for a specific output symbol.
+    fn get(&self, py: Python<'_>, symbol: u32) -> PyResult<Option<(Py<RustFsa>, Py<RustFsa>)>> {
+        Ok(self.per_symbol.get(&symbol).map(|(q, r)| (q.clone_ref(py), r.clone_ref(py))))
+    }
+
+    /// Get the quotient FSA for a specific output symbol.
+    fn quotient(&self, py: Python<'_>, symbol: u32) -> PyResult<Option<Py<RustFsa>>> {
+        Ok(self.per_symbol.get(&symbol).map(|(q, _)| q.clone_ref(py)))
+    }
+
+    /// Get the remainder FSA for a specific output symbol.
+    fn remainder(&self, py: Python<'_>, symbol: u32) -> PyResult<Option<Py<RustFsa>>> {
+        Ok(self.per_symbol.get(&symbol).map(|(_, r)| r.clone_ref(py)))
+    }
+
+    /// Get all output symbols.
+    fn symbols(&self) -> Vec<u32> {
+        self.symbols.clone()
+    }
 }
 
 // ---------------------------------------------------------------------------
