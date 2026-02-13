@@ -39,23 +39,39 @@ def is_universal(dfa, state, alphabet):
 
 
 class Lazy:
+    """Abstract base class for lazy (on-demand) automata.
+
+    Subclasses implement the four abstract methods below to define an
+    automaton whose states and arcs are computed on the fly rather than
+    stored in memory.  The concrete methods on this class (``materialize``,
+    ``det``, ``epsremove``, etc.) compose lazy automata without eagerly
+    expanding them.
+    """
 
     #____________________________________________________________
     # Abstract interface
 
     def arcs(self, state):
+        """Yield ``(label, dest)`` pairs for all outgoing arcs from ``state``."""
         raise NotImplementedError()
 
     def arcs_x(self, state, x):
+        """Yield destination states reachable from ``state`` on input ``x``.
+
+        Default implementation filters ``arcs()``; subclasses may override
+        for efficiency.
+        """
         import warnings; warnings.warn('using slow implementation of arcs_x')
         for X, j in self.arcs(state):
             if X == x:
                 yield j
 
     def start(self):
+        """Yield the start state(s) of this automaton."""
         raise NotImplementedError()
 
     def is_final(self, state):
+        """Return True if ``state`` is an accepting state."""
         raise NotImplementedError()
 
     #____________________________________________________________
@@ -115,6 +131,13 @@ class Lazy:
 
 
 class EpsilonRemove(Lazy):
+    """Lazy epsilon removal: wraps an NFA and presents an equivalent
+    epsilon-free automaton by expanding epsilon closures on demand.
+
+    For each state, non-epsilon arcs are followed and then the epsilon
+    closure of the destination is computed (and cached).  Start states
+    and finality are similarly lifted through epsilon closures.
+    """
 
     def __init__(self, fsa):
         self.fsa = fsa

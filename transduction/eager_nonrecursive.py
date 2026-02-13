@@ -36,6 +36,18 @@ class Precover(DecompositionResult):
         return lambda target: cls(fst, target, **kwargs)
 
     def __init__(self, fst, target, impl='push'):
+        """
+        Args:
+            fst: The FST to decompose.
+            target: The target string (sequence of output symbols).
+            impl: NFA construction strategy.  Options:
+                ``'push'`` (default) — standard PrecoverNFA that pushes output
+                    symbols onto the buffer and matches against the target.
+                ``'push-truncated'`` — like ``'push'`` but adds a truncation
+                    marker state for buffer overflow.
+                ``'pop'`` — alternative PopPrecoverNFA that pops matched
+                    symbols from the front of the target.
+        """
         self.fst = fst
         self.target = target
         self.source_alphabet = fst.A - {EPSILON}

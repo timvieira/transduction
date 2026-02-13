@@ -9,11 +9,6 @@
   assumes the reader already knows. Add a conceptual explanation (e.g., in
   `base.py` or a top-level docstring).
 
-- [ ] **Document `Lazy` ABC methods (`lazy.py`).** `arcs()`, `arcs_x()`,
-  `start()`, `is_final()` — the core interface for the lazy automaton
-  framework — are all undocumented. The difference between `arcs()` and
-  `arcs_x()` is particularly unclear.
-
 - [ ] **Document `PeekabooState` internals (`peekaboo_incremental.py`).** Has
   ~10 undocumented internal state variables (`decomp`, `resume_frontiers`,
   `incoming`, `_univ`, etc.). The incremental computation logic is complex and
@@ -30,12 +25,6 @@
   `extend` — what are these for? The `extend` lambda especially needs
   explanation.
 
-- [ ] **Document `Precover` class (`eager_nonrecursive.py`).** Constructor
-  parameter `impl='push'` is unexplained. What are the `impl` options and when
-  would you pick one over the other?
-
-- [ ] **Document `EpsilonRemove` (`lazy.py`).** No docstring at all. What does
-  it do? How does epsilon removal work in the lazy framework?
 
 ## Medium — naming issues
 
