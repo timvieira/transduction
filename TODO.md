@@ -76,13 +76,6 @@
 - [ ] Consider implementing `coreachable()` as `self.reverse().reachable()`
   (line 569)
 
-### dfa_decomp_incremental.py
-
-- [ ] Known issue: `IncrementalDFADecomp` diverges on some inputs (e.g.,
-  `triplets_of_doom`) because it doesn't truncate the target buffer (line 7)
-- [ ] DFA may have infinitely many states (line 20)
-- [ ] Optimize: copying parent state is slow (line 42)
-
 ### peekaboo_incremental.py
 
 - [ ] **Incremental `_merged_incoming`**: Build the merged incoming dict
