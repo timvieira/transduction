@@ -56,7 +56,7 @@ Terminology
 
 from abc import ABC, abstractmethod
 from transduction.fst import EPSILON
-from arsenal import colors
+from transduction.util import colors
 from collections import deque
 
 

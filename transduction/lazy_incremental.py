@@ -1,7 +1,7 @@
 from transduction.base import IncrementalDecomposition
 from transduction.fst import EPSILON
 from transduction.fsa import FSA
-from arsenal import colors
+from transduction.util import colors
 from collections import deque
 
 

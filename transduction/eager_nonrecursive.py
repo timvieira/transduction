@@ -9,8 +9,7 @@ from transduction.precover_nfa import (
     PopPrecoverNFA as PopPrecover,
 )
 
-from arsenal import colors
-from arsenal.cache import memoize
+from transduction.util import colors, memoize
 from functools import cached_property
 from collections import deque
 

@@ -59,12 +59,12 @@ Self-contained language model interface for use with enumeration/sampling:
 
 Library code depends only on:
 - `numpy`, `torch`, `transformers` — for LM integration (`transduction/lm/`)
-- `arsenal` — utility library (data structures, profiling, maths)
 
 Test-only deps:
 - `genparse` — EarleyLM grammar-based LM (used in `test_enumeration.py` small tests)
 
 Eliminated deps (previously external, now inlined):
+- `arsenal` — `Integerizer`, `colors`, `memoize`, `timelimit`, `timeit`, `sample` inlined into `util.py`
 - `genlm` — `get_byte_vocab` replaced with local `decode_hf_tokenizer`
 - `tokenization` — `StateLM`, `LazyProb`, `logsumexp` all copied/inlined
 

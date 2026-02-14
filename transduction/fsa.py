@@ -1,6 +1,6 @@
 import html
 
-from arsenal import Integerizer
+from transduction.util import Integerizer
 from collections import defaultdict, deque
 from functools import lru_cache
 from graphviz import Digraph

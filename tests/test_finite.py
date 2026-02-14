@@ -266,6 +266,3 @@ def test_prioritized_max_steps():
     assert have_limited.remainder <= have_full.remainder
 
 
-if __name__ == '__main__':
-    from arsenal import testing_framework
-    testing_framework(globals())

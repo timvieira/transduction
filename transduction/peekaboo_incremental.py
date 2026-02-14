@@ -166,7 +166,7 @@ class Peekaboo:
         return dot
 
     def check(self, target):
-        from arsenal import colors
+        from transduction.util import colors
         from transduction.eager_nonrecursive import Precover
         from transduction import display_table
         from IPython.display import HTML

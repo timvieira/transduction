@@ -144,7 +144,7 @@ def test_weird_copy(impl):
 
 
 def test_triplets_of_doom(impl):
-    from arsenal import timelimit
+    from transduction.util import timelimit
     fst = examples.triplets_of_doom()
     with timelimit(5):
         run_test(impl, fst, '', depth=13, verbosity=0)
@@ -191,7 +191,7 @@ def test_layered_witnesses(impl):
 
 
 def test_doom_k5(impl):
-    from arsenal import timelimit
+    from transduction.util import timelimit
     fst = examples.doom({'a', 'b'}, K=5)
     with timelimit(5):
         run_test(impl, fst, '', depth=10, verbosity=0)

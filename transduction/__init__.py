@@ -4,7 +4,7 @@ PrecoverDecomp = DecompositionResult   # backward compat alias for notebooks
 from transduction.eager_nonrecursive import Precover, EagerNonrecursive
 from transduction import examples
 
-from arsenal import colors
+from transduction.util import colors
 
 from transduction.fst import FST, EPSILON
 from transduction.fsa import FSA

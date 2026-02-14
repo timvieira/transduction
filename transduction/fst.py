@@ -4,7 +4,7 @@ from itertools import zip_longest
 
 from transduction.fsa import FSA, EPSILON, _render_graphviz
 
-from arsenal import Integerizer
+from transduction.util import Integerizer
 
 
 # TODO: technically, we need to ensure that these are unique objects.

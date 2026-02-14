@@ -1,6 +1,6 @@
 from collections import defaultdict, deque
 from transduction.fsa import FSA, EPSILON, frozenset
-from arsenal import Integerizer
+from transduction.util import Integerizer
 
 
 def is_universal(dfa, state, alphabet):

@@ -1,7 +1,7 @@
 from transduction.base import AbstractAlgorithm
 from transduction.precover_nfa import PrecoverNFA as LazyPrecoverNFA
 
-from arsenal.cache import memoize
+from transduction.util import memoize
 
 
 class LazyNonrecursive(AbstractAlgorithm):

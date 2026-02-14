@@ -4,8 +4,7 @@ import heapq
 import numpy as np
 from dataclasses import dataclass
 
-from arsenal import colors
-from arsenal.maths import sample
+from transduction.util import colors, sample
 
 
 def logsumexp(arr):

@@ -10,7 +10,7 @@ Usage:
 
 from transduction.fsa import FSA, EPSILON
 from transduction.base import DecompositionResult, IncrementalDecomposition
-from arsenal import Integerizer
+from transduction.util import Integerizer
 from functools import cached_property
 
 
