@@ -167,6 +167,13 @@ class DirtyPeekaboo(IncrementalDecomposition):
                     if ys[:N] == target and _fst_is_final(fst_state):
                         final_symbols.add(y)
 
+            # At most one relevant_symbol can be continuous (universal).
+            # NOTE: This assumes the FST is functional.  A productive
+            # input-epsilon cycle (eps-input arcs that produce non-epsilon
+            # output) makes an FST non-functional, since the cycle can be
+            # traversed any number of times yielding distinct outputs for
+            # the same input.  Non-functional FSTs may violate this
+            # uniqueness invariant.
             continuous = False
             for y in relevant_symbols:
                 ensure_filter(y)

@@ -3,6 +3,7 @@ from transduction import (
     DecompositionResult, LazyNonrecursive, LazyIncremental, LazyPrecoverNFA,
     EagerNonrecursive, examples, Precover, FSA, EPSILON, PrioritizedLazyIncremental
 )
+from transduction.fst import FST
 
 
 def assert_equal(have, want):
@@ -128,6 +129,58 @@ def test_backticks_to_quote(impl):
     assert_equal(tmp('`'), DecompositionResult({'`a'}, {'`'}))
     assert_equal(tmp('"'), DecompositionResult({'``'}, set()))
     assert_equal(tmp('`b'), DecompositionResult({'`a'}, set()))
+
+
+def run_test_finite(impl, fst, depth):
+    """Compare impl against Precover reference for all target prefixes up to depth."""
+    factory = impl(fst)
+    reference = Precover.factory(fst)
+    target_alphabet = fst.B - {EPSILON}
+
+    def recurse(target, depth):
+        if depth == 0:
+            return
+        assert_equal(factory(target), reference(target))
+        for y in target_alphabet:
+            ref_child = reference(target + y)
+            q, r = ref_child.quotient, ref_child.remainder
+            if isinstance(q, set): q = FSA.from_strings(q)
+            if isinstance(r, set): r = FSA.from_strings(r)
+            if q.trim().states or r.trim().states:
+                recurse(target + y, depth - 1)
+
+    recurse('', depth)
+
+
+def test_trivial_fst(impl):
+    """FST with start=stop, no arcs: accepts only empty string."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(0)
+    fst.B.update({'x', 'y'})
+    factory = impl(fst)
+    result = factory('')
+    assert_equal(result, DecompositionResult({''}, set()))
+    for y in fst.B - {EPSILON}:
+        assert_equal(factory(y), DecompositionResult(set(), set()))
+
+
+def test_unreachable_target_symbol(impl):
+    """Target symbol in alphabet but unreachable produces empty Q and R."""
+    fst = examples.replace([('1', 'a')])
+    fst.B.add('z')
+    factory = impl(fst)
+    assert_equal(factory('z'), DecompositionResult(set(), set()))
+
+
+def test_delayed_output_cycle(impl):
+    """Functional FST with a:eps followed by eps:b cycle — no net I/O delay."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(0)
+    fst.add_arc(0, 'a', '', 1)
+    fst.add_arc(1, '', 'b', 0)
+    run_test_finite(impl, fst, depth=5)
 
 
 # ── Standalone tests (algorithm-specific) ─────────────────────────────────────

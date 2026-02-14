@@ -315,6 +315,13 @@ class PeekabooState(IncrementalDecomposition):
             # `relevant_symbols` can be continuous; if we find one we can
             # stop expanding.
             #
+            # NOTE: This assumes the FST is functional.  A productive
+            # input-epsilon cycle (eps-input arcs that produce non-epsilon
+            # output) makes an FST non-functional, since the cycle can be
+            # traversed any number of times yielding distinct outputs for
+            # the same input.  Non-functional FSTs may violate the
+            # uniqueness invariant below.
+            #
             # Proof (functional FSTs): Suppose state S is universal for
             # both y and z (y != z).  TruncatedDFA(target+y) recognises
             # precover(target+y) (the buffer length N+1 = len(target+y)

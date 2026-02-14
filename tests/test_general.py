@@ -282,6 +282,43 @@ def test_parity_copy(impl):
     run_test(impl, fst, '', depth=5)
 
 
+def test_productive_eps_chain(impl):
+    """Functional FST with a long productive input-epsilon chain."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(0)
+    fst.add_arc(0, 'a', '', 1)     # consume 'a', no output yet
+    fst.add_arc(1, '', 'x', 2)     # eps chain: output 'x'
+    fst.add_arc(2, '', 'y', 3)     # eps chain: output 'y'
+    fst.add_arc(3, '', 'z', 4)     # eps chain: output 'z'
+    fst.add_arc(4, 'b', 'w', 0)    # consume 'b', output 'w'
+    # Functional: (ab)* -> (xyzw)*
+    run_test(impl, fst, '', depth=5, verbosity=0)
+
+
+def test_nonproductive_eps_cycle(impl):
+    """Functional FST with a nonproductive input-epsilon cycle (eps/eps self-loop)."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(0)
+    fst.add_arc(0, 'a', 'x', 1)
+    fst.add_arc(1, '', '', 1)      # nonproductive eps-input cycle (eps/eps)
+    fst.add_arc(1, 'b', 'y', 0)
+    # Functional: (ab)* -> (xy)*; the eps cycle doesn't change the output
+    run_test(impl, fst, '', depth=5, verbosity=0)
+
+
+def test_delayed_output_cycle(impl):
+    """Functional FST with a:eps followed by eps:b cycle — no net I/O delay."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(0)
+    fst.add_arc(0, 'a', '', 1)     # consume input, no output
+    fst.add_arc(1, '', 'b', 0)     # no input, produce output
+    # Functional: a* -> b*; each cycle consumes one 'a' and emits one 'b'
+    run_test(impl, fst, '', depth=5, verbosity=0)
+
+
 def test_consume_raises_on_double_use():
     """TruncatedIncrementalDFADecomp: double decompose_next() or >> raises RuntimeError."""
     fst = examples.replace([('1', 'a'), ('2', 'b')])

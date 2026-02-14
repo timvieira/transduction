@@ -486,6 +486,11 @@ class FST:
         ``(False, (x, y1, y2))`` with a witness input ``x`` that produces
         two distinct outputs ``y1 != y2``.
 
+        Note: a productive input-epsilon cycle (eps-input arcs that produce
+        non-epsilon output) is a sufficient condition for non-functionality,
+        since the cycle can be traversed any number of times yielding
+        distinct outputs for the same input.
+
         Uses a product construction: two copies of the trimmed FST run
         on the same input while tracking the output-buffer difference.
         Terminates on all finite-state transducers (no length bound
