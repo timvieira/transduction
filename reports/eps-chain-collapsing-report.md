@@ -7,7 +7,7 @@ both the Rust-accelerated and Python codepaths. The changes reduce the cost of
 universality detection (the main bottleneck in decomposition) and shrink powerset
 state sizes by eliminating transit-only NFA states from epsilon closures.
 
-All 77 Python tests pass (1 xfailed — pre-existing `recursive_dfa_decomp` timeout).
+All 77 Python tests pass.
 All 10 Rust unit tests pass.
 
 ---
@@ -226,8 +226,8 @@ hanging indefinitely to completing in ~0.7s.
 
 ## Optimization 5: `arcs_x` Methods (Python)
 
-**Files**: `dfa_decomp_recursive.py`, `eager_nonrecursive.py`,
-`peekaboo_nonrecursive.py`, `peekaboo_recursive.py`
+**Files**: `eager_nonrecursive.py`,
+`peekaboo_nonrecursive.py`, `peekaboo_incremental.py`
 
 ### Change
 
@@ -256,5 +256,5 @@ match its expected structure.
 
 ```
 Rust:  10 passed
-Python: 50 passed, 1 xfailed (pre-existing recursive_dfa_decomp timeout)
+Python: 50 passed
 ```

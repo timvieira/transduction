@@ -3,7 +3,7 @@
 This report documents the optimizations employed across Python and Rust implementations
 of the precover decomposition algorithm.
 
-## Current State (2026-02-04)
+## Current State (2026-02-13)
 
 ### Implementations
 
@@ -11,16 +11,19 @@ of the precover decomposition algorithm.
 |-----------|----------|------|----------|
 | `Precover` | Python | `eager_nonrecursive.py` | Reference implementation |
 | `NonrecursiveDFADecomp` | Python | `dfa_decomp_nonrecursive.py` | Single-target decomposition |
-| `Peekaboo` | Python | `peekaboo_recursive.py` | Batched next-symbol (recommended) |
+| `TruncatedIncrementalDFADecomp` | Python | `dfa_decomp_incremental_truncated.py` | Dirty-state incremental decomposition |
+| `PeekabooState` | Python | `peekaboo_incremental.py` | Batched next-symbol (recommended) |
+| `DirtyPeekaboo` | Python | `peekaboo_dirty.py` | Dirty-state incremental peekaboo |
 | `TokenDecompose` | Python | `token_decompose.py` | BPE fast path (5000x+ speedup) |
 | `RustDecomp` | Rust | `decompose.rs` | Single-target (3-10x faster) |
-| `RustPeekaboo` | Rust | `peekaboo.rs` | Batched next-symbol (3-25x faster) |
+| `RustDirtyState` | Rust | `rust_bridge.py` | Dirty-state incremental (Rust-backed) |
+| `RustDirtyPeekaboo` | Rust | `rust_bridge.py` | Dirty-state incremental peekaboo (Rust-backed) |
 
 ### Test Status
 
-- 102/103 tests pass (1 expected xfail: `RecursiveDFADecomp` timeout on adversarial input)
-- 7 implementations tested in `test_general.py`
-- 12 enumeration tests including BPE-scale GPT-2 integration
+- `test_general.py`: 148 passed, 14 skipped
+- `test_finite.py`: 40 passed
+- `test_enumeration.py`: 12 passed (including BPE-scale GPT-2 integration)
 
 ### Dependencies
 
@@ -150,18 +153,36 @@ Algorithm:
 
 **Impact:** 5000x+ speedup for BPE FSTs at long target lengths.
 
+### H: Dirty-State Persistence ✅
+
+**Key optimization for autoregressive (incremental) decoding.**
+
+When the target extends from **y** to **y**·z, most of the DFA is unchanged. The
+dirty-state algorithm identifies which DFA states are affected by the extension
+(dirty states at the frontier + border states with arcs into the dirty region)
+and only re-expands those, reusing cached arcs and classifications for all clean
+states.
+
+| | Python | Rust |
+|---|---|---|
+| DFA decomp | `TruncatedIncrementalDFADecomp` in `dfa_decomp_incremental_truncated.py` | `RustDirtyState` in `rust_bridge.py` |
+| Peekaboo | `DirtyPeekaboo` in `peekaboo_dirty.py` | `RustDirtyPeekaboo` in `rust_bridge.py` |
+| Status | Done | Done |
+
+**Impact:** After arena stabilization (~70 symbols on PTB), per-step cost drops
+to ~0.1ms. See `reports/dirty_state_algorithm.md` for full details.
+
 ---
 
 ## 3. Rust-Specific Optimizations
 
 ### Peekaboo (batched next-symbol)
 
-`RustPeekaboo` in `peekaboo.rs` implements the Peekaboo algorithm:
+`RustDirtyPeekaboo` in `peekaboo.rs` implements the dirty-state incremental Peekaboo algorithm:
 - Computes Q/R for all next symbols in one pass
-- 3-25x faster than Python `peekaboo_recursive.Peekaboo`
+- Persists DFA state across decoding steps, avoiding redundant recomputation
 - Uses same PowersetArena and eps-caching as generic decompose
 
-Benchmark (see `PEEKABOO_BENCHMARK.md`):
 | Example | Rust | Python | Speedup |
 |---------|------|--------|---------|
 | newspeak2 (depth=3) | 3.0 ms | 67.0 ms | 22x |
@@ -184,6 +205,7 @@ Epsilon closure cache returns `Rc::clone()` on hit (refcount bump, no data copy)
 | Optimization | Impact | Generality | Python | Rust |
 |--------------|--------|------------|--------|------|
 | F: `all_input_universal` | Critical | BPE + replace | ✅ | ✅ |
+| H: Dirty-state persistence | Major | Incremental decoding | ✅ | ✅ |
 | G: Token-level positions | Major | Hub FSTs | ✅ | Removed |
 | C: Arena interning | Moderate | All FSTs | Partial | ✅ |
 | B: FST indexes | Important | All FSTs | ✅ | ✅ |
@@ -197,7 +219,7 @@ Epsilon closure cache returns `Rc::clone()` on hit (refcount bump, no data copy)
 
 | Use Case | Recommendation |
 |----------|----------------|
-| Autoregressive decoding | `RustPeekaboo` (or Python `Peekaboo` if Rust unavailable) |
+| Autoregressive decoding | `RustDirtyPeekaboo` or `RustDirtyState` (Python: `PeekabooState` or `DirtyPeekaboo`) |
 | BPE tokenizer, long targets | `TokenDecompose` (Python) — check `check_all_input_universal` first |
 | One-shot decomposition | `RustDecomp` or `NonrecursiveDFADecomp` |
 | Reference/testing | `Precover` |

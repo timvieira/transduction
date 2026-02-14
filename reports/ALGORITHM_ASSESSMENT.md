@@ -15,20 +15,36 @@ have terminated. Both are represented as finite automata.
 
 ---
 
-## Current Implementations (2026-02-04)
+## Current Implementations (2026-02-13)
 
-### Decomposition Algorithms
+### General-Case Decomposition Algorithms
+
+These algorithms use target-buffer truncation to guarantee termination on all FSTs,
+including those with infinite quotient/remainder languages.
 
 | Algorithm | Language | File | Incremental | Notes |
 |-----------|----------|------|:-----------:|-------|
 | `Precover` | Python | `eager_nonrecursive.py` | No | Reference implementation |
 | `NonrecursiveDFADecomp` | Python | `dfa_decomp_nonrecursive.py` | No | Same algorithm, cleaner interface |
-| `RecursiveDFADecomp` | Python | `dfa_decomp_recursive.py` | Yes | Diverges on some inputs (xfail) |
-| `Peekaboo` (recursive) | Python | `peekaboo_recursive.py` | Yes | **Recommended.** Batched next-symbol |
-| `Peekaboo` (nonrecursive) | Python | `peekaboo_nonrecursive.py` | No | Simpler variant |
-| `TokenDecompose` | Python | `token_decompose.py` | No | BPE fast path (5000x+ speedup) |
-| `RustDecomp` | Rust | `decompose.rs` | No | 3-10x faster than Python |
-| `RustPeekaboo` | Rust | `peekaboo.rs` | No | **Recommended.** 3-25x faster |
+| `TruncatedIncrementalDFADecomp` | Python | `dfa_decomp_incremental_truncated.py` | Yes | Dirty-state incremental DFA decomp |
+| `PeekabooState` | Python | `peekaboo_incremental.py` | Yes | **Recommended.** Batched next-symbol |
+| `Peekaboo` | Python | `peekaboo_nonrecursive.py` | No | Non-incremental peekaboo |
+| `DirtyPeekaboo` | Python | `peekaboo_dirty.py` | Yes | Dirty-state incremental peekaboo |
+| `TokenDecompose` | Python | `token_decompose.py` | No | BPE fast path (`all_input_universal` FSTs only) |
+| `RustDecomp` | Rust | `rust_bridge.py` → `decompose.rs` | No | 3-10x faster than Python |
+| `RustDirtyState` | Rust | `rust_bridge.py` | Yes | Rust-backed dirty-state incremental |
+| `RustDirtyPeekaboo` | Rust | `rust_bridge.py` | Yes | Rust-backed dirty-state peekaboo |
+
+### Finite-Only Decomposition Algorithms
+
+These algorithms lack target-buffer truncation and may diverge on FSTs with infinite
+quotients. Tested separately in `test_finite.py`.
+
+| Algorithm | Language | File | Incremental | Notes |
+|-----------|----------|------|:-----------:|-------|
+| `LazyIncremental` | Python | `lazy_incremental.py` | Yes | Finite-language FSTs only |
+| `LazyNonrecursive` | Python | `lazy_nonrecursive.py` | No | Finite-language FSTs only |
+| `PrioritizedLazyIncremental` | Python | `prioritized_lazy_incremental.py` | Yes | Heuristic-guided BFS; finite only |
 
 ### Inference Algorithms
 
@@ -42,7 +58,7 @@ have terminated. Both are represented as finite automata.
 
 | Class | File | Description |
 |-------|------|-------------|
-| `LMState` | `lm/base.py` | ABC: `logp_next`, `eos`, `<<`, `__call__`, `greedy_decode`, `sample_decode` |
+| `LMState` | `lm/base.py` | ABC: `logp_next`, `eos`, `>>`, `__call__`, `greedy_decode`, `sample_decode` |
 | `ByteNgramLM` / `CharNgramLM` | `lm/ngram.py` | Lightweight n-gram LMs for testing |
 | `StateLM` | `lm/statelm.py` | Incremental LM state with KV-cache |
 | `TokenizedLLM` | `lm/statelm.py` | Wraps HuggingFace causal LMs |
@@ -63,22 +79,25 @@ pe = prioritized_enumeration(lm, fst, target, max_steps=20)
 
 ### For Autoregressive Decoding
 
-Use **`RustPeekaboo`** (or Python `Peekaboo` if Rust unavailable).
+Use **`RustDirtyPeekaboo`** or **`RustDirtyState`** (or Python `PeekabooState` if Rust unavailable).
 
 Peekaboo builds a *single* DFA for all next-symbol extensions and extracts all $|\mathcal{Y}|$
 decompositions from it. This amortizes DFA construction across all next symbols — an
 asymptotic win when the target alphabet is large (e.g., 256 bytes).
 
+The dirty-state variants (`RustDirtyPeekaboo`, `DirtyPeekaboo`) additionally persist
+DFA state across decoding steps, avoiding redundant recomputation as the target grows.
+
 ```python
-from transduction.rust_bridge import RustPeekaboo
+from transduction.rust_bridge import RustDirtyPeekaboo
 from transduction import examples
 
 fst = examples.newspeak2()
-peekaboo = RustPeekaboo(fst)
-decomps = peekaboo('ba')  # Q/R for all next symbols
+peekaboo = RustDirtyPeekaboo(fst)
+decomps = peekaboo.decompose_next()  # Q/R for all next symbols
 ```
 
-The Python recursive variant (`peekaboo_recursive.Peekaboo`) also supports incremental
+The Python incremental variant (`peekaboo_incremental.PeekabooState`) also supports incremental
 computation via the `>>` operator for step-by-step decoding.
 
 ### For BPE Tokenizers
@@ -98,6 +117,19 @@ else:
 ### For One-Shot Decomposition
 
 Use **`RustDecomp`** or **`NonrecursiveDFADecomp`**.
+
+---
+
+## General vs Finite-Only: The Truncation Distinction
+
+The key mechanism that separates general-case algorithms from finite-only ones is
+**target-buffer truncation**. Algorithms that truncate the target buffer
+(`NonrecursiveDFADecomp`, `TruncatedIncrementalDFADecomp`, Peekaboo variants, Rust
+backends) terminate on all inputs. Those that don't (`LazyIncremental`)
+may diverge on FSTs with infinite quotients.
+
+When adding new algorithms or test cases, classify them as general vs finite-only
+and put them in the appropriate test file (`test_general.py` vs `test_finite.py`).
 
 ---
 
@@ -128,17 +160,21 @@ Use **`RustDecomp`** or **`NonrecursiveDFADecomp`**.
 
 3. **Peekaboo batching** — Build one DFA for all next symbols, not $|\mathcal{Y}|$ separate decompositions
 
-4. **Rust acceleration** — Packed `u64` NFA states, interned `u32` DFA states, `Rc<Vec>` eps cache, single-element intern fast path
+4. **Dirty-state persistence** — Incremental algorithms (`TruncatedIncrementalDFADecomp`, `DirtyPeekaboo`, Rust dirty variants) persist DFA state across decoding steps, avoiding redundant recomputation as the target prefix grows.
 
-5. **UniversalityFilter cascade** — AUI fast path → witness check → monotonicity caches → BFS fallback
+5. **Rust acceleration** — Packed `u64` NFA states, interned `u32` DFA states, `Rc<Vec>` eps cache, single-element intern fast path
+
+6. **UniversalityFilter cascade** — AUI fast path → witness check → monotonicity caches → BFS fallback
 
 ---
 
 ## Test Status
 
-- **102/103 tests pass** (1 expected xfail: `RecursiveDFADecomp` timeout)
-- 7 implementations tested in `test_general.py`
-- 12 enumeration tests including BPE-scale GPT-2 integration
+- **`test_general.py`**: 148 passed, 14 skipped
+- **`test_finite.py`**: 40 passed
+- **`test_enumeration.py`**: 12 passed (including BPE-scale GPT-2 integration)
+- **`test_push_labels.py`**: 30 passed
+- **`test_transduced.py`**: 23 passed
 
 ---
 
