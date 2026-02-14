@@ -13,6 +13,7 @@ on infinite quotients):
 
 import pytest
 from transduction import examples, EPSILON, Precover
+from transduction.fst import FST
 from transduction.dfa_decomp_nonrecursive import NonrecursiveDFADecomp
 from transduction.dfa_decomp_incremental_truncated import TruncatedIncrementalDFADecomp
 from transduction.token_decompose import TokenDecompose
@@ -199,3 +200,88 @@ def test_mystery2(impl):
 def test_infinite_quotient2(impl):
     fst = examples.infinite_quotient2()
     run_test(impl, fst, '', depth=5, verbosity=0)
+
+
+def test_rshift_chain(impl):
+    """>> chain must produce same Q/R as decompose_next() chain."""
+    from transduction.base import IncrementalDecomposition
+    fst = examples.small()
+    state = impl(fst, '')
+    if not isinstance(state, IncrementalDecomposition):
+        pytest.skip("non-incremental implementation")
+    # >> path
+    via_rshift = state >> 'x'
+    # decompose_next path (fresh instance)
+    via_decompose = type(state)(fst, '')
+    via_dn = via_decompose.decompose_next()['x']
+    assert via_rshift.quotient.equal(via_dn.quotient)
+    assert via_rshift.remainder.equal(via_dn.remainder)
+
+
+def test_multiple_start_states(impl):
+    fst = FST()
+    fst.add_start(0)
+    fst.add_start(1)
+    fst.add_stop(0)
+    fst.add_stop(1)
+    fst.add_arc(0, 'a', 'x', 0)
+    fst.add_arc(1, 'b', 'x', 1)
+    run_test(impl, fst, '', depth=5, verbosity=0)
+
+
+def test_cross_validate_reference(impl):
+    """Cross-validate: Precover.check_decomposition confirms Q/R correctness."""
+    fst = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c')])
+    reference = Precover.factory(fst)
+    state = impl(fst, '')
+    children = state.decompose_next()
+    for y in (fst.B - {EPSILON}):
+        Q = children[y].quotient.trim()
+        R = children[y].remainder.trim()
+        if Q.states or R.states:
+            assert reference(y).check_decomposition(
+                set(Q.language()), set(R.language()), throw=True
+            )
+
+
+def test_unreachable_target_symbol(impl):
+    """Target symbol in alphabet but unreachable produces empty Q and R."""
+    fst = examples.replace([('1', 'a')])
+    fst.B.add('z')  # in alphabet but no arc produces it
+    state = impl(fst, '')
+    result = state.decompose_next()
+    assert result['z'].quotient.trim().states == set()
+    assert result['z'].remainder.trim().states == set()
+
+
+def test_trivial_fst(impl):
+    """FST with start=stop, no arcs: accepts only empty string."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(0)
+    fst.B.update({'x', 'y'})  # need target alphabet
+    state = impl(fst, '')
+    result = state.decompose_next()
+    for y in result:
+        assert result[y].quotient.trim().states == set()
+        assert result[y].remainder.trim().states == set()
+
+
+def test_consume_raises_on_double_use():
+    """TruncatedIncrementalDFADecomp: double decompose_next() or >> raises RuntimeError."""
+    fst = examples.replace([('1', 'a'), ('2', 'b')])
+    # decompose_next then decompose_next
+    s1 = TruncatedIncrementalDFADecomp(fst, '')
+    s1.decompose_next()
+    with pytest.raises(RuntimeError):
+        s1.decompose_next()
+    # >> then >>
+    s2 = TruncatedIncrementalDFADecomp(fst, '')
+    s2 >> 'a'
+    with pytest.raises(RuntimeError):
+        s2 >> 'b'
+    # decompose_next then >>
+    s3 = TruncatedIncrementalDFADecomp(fst, '')
+    s3.decompose_next()
+    with pytest.raises(RuntimeError):
+        s3 >> 'a'
