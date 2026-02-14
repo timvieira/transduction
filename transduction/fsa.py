@@ -751,7 +751,7 @@ class FSA:
         u.add_stop(0)
         return u
 
-    def language(self, tuple=False):
+    def language(self, tuple=False, max_length=None):
         "Enumerate strings in the language of this FSA."
         if tuple:
             worklist = deque()
@@ -760,6 +760,8 @@ class FSA:
                 (i, x) = worklist.popleft()
                 if i in self.stop:
                     yield x
+                if max_length is not None and len(x) >= max_length:
+                    continue
                 for a, j in self.arcs(i):
                     if a == EPSILON:
                         worklist.append((j, x))
@@ -772,6 +774,8 @@ class FSA:
                 (i, x) = worklist.popleft()
                 if i in self.stop:
                     yield x
+                if max_length is not None and len(x) >= max_length:
+                    continue
                 for a, j in self.arcs(i):
                     if a == EPSILON:
                         worklist.append((j, x))
