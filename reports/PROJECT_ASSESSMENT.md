@@ -114,29 +114,13 @@ for some target symbols.
 the product — the thing users call to get constrained generation. If it only
 works on trivial FSTs, the library doesn't deliver.
 
-### Critical: Wrong Algorithms Exported
+### Critical: Wrong Algorithms Exported — RESOLVED
 
-The top-level `__init__.py` exports:
-
-```python
-LazyIncremental          # finite-only, diverges on infinite quotients
-PrioritizedLazyIncremental  # finite-only
-LazyNonrecursive         # finite-only
-Precover                 # reference, not optimized
-```
-
-It does NOT export:
-
-```python
-PeekabooState            # recommended incremental algorithm
-DirtyPeekaboo            # recommended dirty-state variant
-TokenDecompose           # BPE fast path (5000x speedup)
-TransducedLM             # the actual product
-RustDirtyPeekaboo        # fastest backend
-```
-
-A user's first `from transduction import ...` gives them the algorithms most
-likely to diverge or run slowly, not the ones that work.
+`__init__.py` now exports `PeekabooState`, `Peekaboo`, `DirtyPeekaboo`,
+`TokenDecompose`, and `TransducedLM` as recommended algorithms. Finite-only
+algorithms (`LazyIncremental`, etc.) are still exported for backward compat
+but grouped separately. Rust backends remain at `transduction.rust_bridge`
+(optional dependency).
 
 ### Critical: No CI/CD
 
@@ -193,12 +177,12 @@ for neural LMs.
 | Item | Severity | Location | Effort |
 |------|----------|----------|--------|
 | TransducedLM carry-forward bug | Critical | `lm/transduced.py` | Medium |
-| Wrong exports in `__init__.py` | Critical | `__init__.py` | Small |
+| Wrong exports in `__init__.py` | Resolved | `__init__.py` | Done |
 | No CI | Critical | `.github/workflows/` | Small |
 | Undocumented "precover" concept | Resolved | `base.py` | Done |
 | Multi-char symbol handling | High | `precover_nfa.py` | Medium |
 | No end-to-end example | High | — | Small |
-| No `__all__` declarations | Medium | `__init__.py` | Small |
+| No `__all__` declarations | Declined | `__init__.py` | — |
 | No type annotations | Medium | All modules | Large |
 | Utility modules untested | Low | `util.py`, `vibes.py` | Small |
 | 27 inline TODOs | Low | Various | Ongoing |
@@ -219,9 +203,7 @@ correct next-symbol probabilities.
    during expansion, not just during the drain phase. Add test coverage for
    multi-state FSTs (duplicate, small, newspeak2) in `test_transduced.py`.
 
-2. **Fix `__init__.py` exports.** Export `TransducedLM`, `PeekabooState`,
-   `DirtyPeekaboo`, `TokenDecompose`. Keep backward-compat aliases but move
-   finite-only algorithms out of the default import path.
+2. **Fix `__init__.py` exports.** Done — recommended algorithms exported.
 
 3. **Add CI.** GitHub Actions: build Rust crate, install wheel, run full test
    suite. This is a one-time 30-minute setup that prevents silent breakage.
@@ -290,7 +272,7 @@ correct next-symbol probabilities.
 | **Architecture** | A- | Clean layering, no circular deps, optional Rust, self-contained LM module |
 | **Testing** | B+ | 253+ tests, parametrized cross-validation, but no CI and some gaps |
 | **End-to-End Product** | C | TransducedLM carry-forward bug blocks multi-state FSTs |
-| **API/Packaging** | C | Wrong exports, no `__all__`, no end-to-end example |
+| **API/Packaging** | C+ | Exports fixed; no end-to-end example yet |
 | **Documentation** | C+ | Core concepts now documented; function-level docs still sparse |
 
 **Bottom line:** The hard part — fast, correct FST decomposition — is done.
