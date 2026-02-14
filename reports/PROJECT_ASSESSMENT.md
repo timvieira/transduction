@@ -122,16 +122,12 @@ algorithms (`LazyIncremental`, etc.) are still exported for backward compat
 but grouped separately. Rust backends remain at `transduction.rust_bridge`
 (optional dependency).
 
-### Critical: No CI/CD
+### Critical: No CI/CD — RESOLVED
 
-- No GitHub Actions workflows
-- No Makefile
-- No pre-commit hooks
-- No automated Rust build verification
-
-The project has a Rust build step that can silently break. Tests only run when
-someone remembers. For a project with 10+ algorithm implementations that must
-agree, this is a significant risk.
+GitHub Actions workflow added (`.github/workflows/test.yml`): builds the Rust
+crate, installs the wheel, runs `test_general.py`, `test_finite.py`, and
+`test_push_labels.py` on Python 3.10. Also eliminated the `arsenal` external
+dependency by inlining needed utilities into `util.py`.
 
 ### High: Core Concepts Undocumented — RESOLVED
 
@@ -178,7 +174,7 @@ for neural LMs.
 |------|----------|----------|--------|
 | TransducedLM carry-forward bug | Critical | `lm/transduced.py` | Medium |
 | Wrong exports in `__init__.py` | Resolved | `__init__.py` | Done |
-| No CI | Critical | `.github/workflows/` | Small |
+| No CI | Resolved | `.github/workflows/` | Done |
 | Undocumented "precover" concept | Resolved | `base.py` | Done |
 | Multi-char symbol handling | High | `precover_nfa.py` | Medium |
 | No end-to-end example | High | — | Small |
@@ -205,8 +201,7 @@ correct next-symbol probabilities.
 
 2. **Fix `__init__.py` exports.** Done — recommended algorithms exported.
 
-3. **Add CI.** GitHub Actions: build Rust crate, install wheel, run full test
-   suite. This is a one-time 30-minute setup that prevents silent breakage.
+3. **Add CI.** Done — `.github/workflows/test.yml`.
 
 4. **Write a "hello world" example.** A single script showing: load n-gram LM,
    build FST, create TransducedLM, decode a sentence. Put it in `examples/`
@@ -270,7 +265,7 @@ correct next-symbol probabilities.
 | **Algorithms** | A | 12 implementations, well-tested, genuine innovations (Peekaboo, dirty-state) |
 | **Performance** | A- | 5000x BPE speedup, 25x Rust acceleration, 0.1ms per-step dirty-state |
 | **Architecture** | A- | Clean layering, no circular deps, optional Rust, self-contained LM module |
-| **Testing** | B+ | 253+ tests, parametrized cross-validation, but no CI and some gaps |
+| **Testing** | A- | 382+ tests, parametrized cross-validation, CI via GitHub Actions |
 | **End-to-End Product** | C | TransducedLM carry-forward bug blocks multi-state FSTs |
 | **API/Packaging** | C+ | Exports fixed; no end-to-end example yet |
 | **Documentation** | C+ | Core concepts now documented; function-level docs still sparse |

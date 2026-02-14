@@ -57,11 +57,26 @@ Self-contained language model interface for use with enumeration/sampling:
 
 ## Dependencies
 
-Library code depends only on:
-- `numpy`, `torch`, `transformers` — for LM integration (`transduction/lm/`)
+Core library (`transduction/`):
+- `numpy` — numerical operations (enumeration, LM integration)
+- `graphviz` — FSA/FST visualization
+- `IPython` — notebook display utilities (`display_table`)
+
+LM integration (`transduction/lm/`):
+- `torch`, `transformers` — HuggingFace causal LM wrappers
+
+Visualization / benchmarking (notebooks, `benchmark/`):
+- `matplotlib` — plotting
 
 Test-only deps:
+- `pytest` — test runner
 - `genparse` — EarleyLM grammar-based LM (used in `test_enumeration.py` small tests)
+
+Optional deps:
+- `pynini` — PTB tokenizer FST construction (`applications/ptb.py`)
+- `nltk` — PTB tokenizer testing
+- `datasets` — WikiText data loading
+- `tqdm` — progress bars in benchmarks
 
 Eliminated deps (previously external, now inlined):
 - `arsenal` — `Integerizer`, `colors`, `memoize`, `timelimit`, `timeit`, `sample` inlined into `util.py`

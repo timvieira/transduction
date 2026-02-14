@@ -1,13 +1,9 @@
 from setuptools import setup
 
 requirements = [
-#    'arsenal @ git+https://github.com/timvieira/arsenal',
-#    'graphviz',
-#    'numpy',
-#    'matplotlib',
-#    'IPython',
-#    'pandas',
-#    'seaborn'
+    'numpy',
+    'graphviz',
+    'IPython',
 ]
 
 
@@ -22,5 +18,5 @@ setup(
     ],
     readme='',
     scripts=[],
-    packages=['transduction', 'transduction.applications'],
+    packages=['transduction', 'transduction.applications', 'transduction.lm'],
 )
