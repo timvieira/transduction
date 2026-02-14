@@ -63,7 +63,11 @@ class PeekabooStrings:
                     continuous.add(y)
                 elif dfa_filtered.is_final(state):
                     precover[y].remainder.add(xs)
-            assert len(continuous) <= 1
+            if len(continuous) > 1:
+                raise ValueError(
+                    f"State is universal for multiple symbols {continuous} — "
+                    f"FST is likely non-functional (see FST.is_functional())"
+                )
             if continuous:
                 continue    # we have found a quotient and can skip
 
@@ -114,7 +118,11 @@ class Peekaboo(DecompositionResult):
                     continuous.add(y)
                 elif dfa_filtered.is_final(state):
                     precover[y].remainder.add(state)
-            assert len(continuous) <= 1
+            if len(continuous) > 1:
+                raise ValueError(
+                    f"State is universal for multiple symbols {continuous} — "
+                    f"FST is likely non-functional (see FST.is_functional())"
+                )
             if continuous:
                 continue
 

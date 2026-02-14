@@ -174,22 +174,26 @@ class DirtyPeekaboo(IncrementalDecomposition):
             # traversed any number of times yielding distinct outputs for
             # the same input.  Non-functional FSTs may violate this
             # uniqueness invariant.
-            continuous = False
+            continuous = None
             for y in relevant_symbols:
                 ensure_filter(y)
-                if not continuous:
-                    is_univ = (
-                        y in final_symbols if _all_input_universal
-                        else univ_filters[y].is_universal(i)
-                    )
-                    if is_univ:
-                        q_stops.setdefault(y, set()).add(i)
-                        continuous = True
-                        continue
+                is_univ = (
+                    y in final_symbols if _all_input_universal
+                    else univ_filters[y].is_universal(i)
+                )
+                if is_univ:
+                    if continuous is not None:
+                        raise ValueError(
+                            f"State is universal for both {continuous!r} and {y!r} — "
+                            f"FST is likely non-functional (see FST.is_functional())"
+                        )
+                    q_stops.setdefault(y, set()).add(i)
+                    continuous = y
+                    continue
                 if y in final_symbols:
                     r_stops.setdefault(y, set()).add(i)
 
-            if continuous:
+            if continuous is not None:
                 self._dfa_status[i] = STATUS_QSTOP
                 self._dfa_trans[i] = {}
                 continue

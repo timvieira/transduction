@@ -382,25 +382,29 @@ class PeekabooState(IncrementalDecomposition):
             # precover(target+y) ∩ precover(target+z) = ∅.  Therefore
             # Reach(S)·Σ* ⊆ ∅, but Reach(S) is non-empty (S is on the
             # worklist), giving a contradiction.
-            continuous = False
+            continuous = None
             for y in relevant_symbols:
                 ensure_symbol(y)
 
-                if not continuous:
-                    # For AUI (all-input-universal) FSTs, universality ↔ finality (no filter needed).
-                    is_univ = (
-                        y in final_symbols if _all_input_universal
-                        else univ_filters[y].is_universal(state)
-                    )
-                    if is_univ:
-                        decomp[y].quotient.add(state)
-                        continuous = True
-                        continue
+                # For AUI (all-input-universal) FSTs, universality ↔ finality (no filter needed).
+                is_univ = (
+                    y in final_symbols if _all_input_universal
+                    else univ_filters[y].is_universal(state)
+                )
+                if is_univ:
+                    if continuous is not None:
+                        raise ValueError(
+                            f"State is universal for both {continuous!r} and {y!r} — "
+                            f"FST is likely non-functional (see FST.is_functional())"
+                        )
+                    decomp[y].quotient.add(state)
+                    continuous = y
+                    continue
 
                 if y in final_symbols:
                     decomp[y].remainder.add(state)
 
-            if continuous:
+            if continuous is not None:
                 continue    # we have found a quotient and can skip
 
             for x, next_state in dfa.arcs(state):

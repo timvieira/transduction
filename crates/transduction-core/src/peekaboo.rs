@@ -1047,7 +1047,7 @@ impl DirtyPeekaboo {
                     );
                 }
 
-                if continuous.is_none() {
+                {
                     // Check fst_univ_cache for pure-frontier states
                     let projected = univ_filters.get(&y_idx).unwrap()
                         .project_and_refine(&nfa_set, y_idx, step_n);
@@ -1118,6 +1118,13 @@ impl DirtyPeekaboo {
                     };
 
                     if is_univ {
+                        if let Some(prev) = continuous {
+                            panic!(
+                                "State is universal for both symbol {} and {} — \
+                                 FST is likely non-functional",
+                                prev, y_idx
+                            );
+                        }
                         self.decomp_q.entry(y_idx).or_default().push(sid);
                         continuous = Some(y_idx);
                         continue;
