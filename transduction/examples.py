@@ -793,15 +793,24 @@ def shrinking_nonuniversal():
     return fst
 
 
-def scaled_newspeak(n_patterns=5, alpha_size=10):
-    """Multi-pattern replacement FST (all_input_universal=True). Function.
+def scaled_newspeak(n_patterns=5, alpha_size=10, n_partial=0):
+    """Multi-pattern replacement FST. Function.
 
     State 0 passes through non-trigger symbols with identity output. Trigger
     symbols deterministically enter a pattern mid-state (ε output). Each
     mid-state handles all symbols and routes back to state 0 on its completion
     symbol. Requires n_patterns <= alpha_size for unique triggers.
+
+    Note: all states are ip-universal (each individually accepts Σ*), but
+    check_all_input_universal returns False because trigger symbols break the
+    start-set containment invariant.
+
+    Setting n_partial>0 removes self-loop arcs from the first n_partial
+    mid-states so they only accept their completion symbol, creating dead
+    paths from those states.
     """
     assert n_patterns <= alpha_size, "need unique triggers"
+    assert n_partial <= n_patterns
     fst = FST()
     fst.add_start(0); fst.add_stop(0)
     symbols = [str(i) for i in range(alpha_size)]
@@ -821,9 +830,13 @@ def scaled_newspeak(n_patterns=5, alpha_size=10):
         fst.add_stop(mid_state)
         fst.add_arc(0, trigger, EPSILON, mid_state)
         fst.add_arc(mid_state, symbols[(i+1) % alpha_size], out_symbols[i], 0)
-        for x in symbols:
-            if x != symbols[(i+1) % alpha_size]:
-                fst.add_arc(mid_state, x, x, mid_state)
+        if i < n_partial:
+            # Partial mid-state: only accepts completion symbol (non-AUI)
+            pass
+        else:
+            for x in symbols:
+                if x != symbols[(i+1) % alpha_size]:
+                    fst.add_arc(mid_state, x, x, mid_state)
 
     return fst
 

@@ -180,6 +180,11 @@ def test_scaled_newspeak(impl):
     run_test(impl, fst, '', depth=3)
 
 
+def test_scaled_newspeak_non_aui(impl):
+    fst = examples.scaled_newspeak(n_patterns=3, alpha_size=6, n_partial=2)
+    run_test(impl, fst, '', depth=3)
+
+
 def test_layered_witnesses(impl):
     fst = examples.layered_witnesses()
     run_test(impl, fst, '', depth=5)
