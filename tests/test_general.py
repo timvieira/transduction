@@ -219,6 +219,7 @@ def test_rshift_chain(impl):
 
 
 def test_multiple_start_states(impl):
+    """Multiple start states with disjoint inputs (infinite remainders)."""
     fst = FST()
     fst.add_start(0)
     fst.add_start(1)
@@ -226,6 +227,19 @@ def test_multiple_start_states(impl):
     fst.add_stop(1)
     fst.add_arc(0, 'a', 'x', 0)
     fst.add_arc(1, 'b', 'x', 1)
+    run_test(impl, fst, '', depth=5, verbosity=0)
+
+
+def test_multiple_start_states_shared_sink(impl):
+    """Multiple start states merging into a shared sink (finite quotients)."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_start(1)
+    fst.add_stop(2)
+    fst.add_arc(0, 'a', 'x', 2)   # start 0: 'a' -> shared sink
+    fst.add_arc(1, 'b', 'x', 2)   # start 1: 'b' -> shared sink
+    fst.add_arc(2, 'a', 'y', 2)   # sink accepts full source alphabet
+    fst.add_arc(2, 'b', 'y', 2)
     run_test(impl, fst, '', depth=5, verbosity=0)
 
 

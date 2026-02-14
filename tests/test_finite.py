@@ -173,6 +173,19 @@ def test_unreachable_target_symbol(impl):
     assert_equal(factory('z'), DecompositionResult(set(), set()))
 
 
+def test_multiple_start_states_shared_sink(impl):
+    """Multiple start states merging into a shared sink (finite quotients)."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_start(1)
+    fst.add_stop(2)
+    fst.add_arc(0, 'a', 'x', 2)
+    fst.add_arc(1, 'b', 'x', 2)
+    fst.add_arc(2, 'a', 'y', 2)
+    fst.add_arc(2, 'b', 'y', 2)
+    run_test_finite(impl, fst, depth=5)
+
+
 def test_delayed_output_cycle(impl):
     """Functional FST with a:eps followed by eps:b cycle — no net I/O delay."""
     fst = FST()
