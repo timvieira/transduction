@@ -2,6 +2,7 @@ import pytest
 import numpy as np
 from collections import defaultdict
 
+genparse = pytest.importorskip('genparse')
 from genparse import EarleyLM, EOS
 
 from transduction import examples
