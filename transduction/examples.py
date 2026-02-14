@@ -689,3 +689,176 @@ def mystery8():
     fst.add_arc(3, 'b', 'x', 3)
 
     return fst
+
+
+# ---- UniversalityFilter test FSTs ----
+# These exercise specific levels of the UniversalityFilter optimization hierarchy.
+# See notes/UniversalityFilter-Tests.ipynb for detailed descriptions.
+
+
+def gated_universal():
+    """ip-universal witness check (level 2). Partial function.
+
+    State 0 is a non-universal gate (not final, arcs on {a,b,c}).
+    State 1 has complete self-loops on {a,b,c} (ip-universal).
+    State 2 only has 'a' arcs (not ip-universal).
+    After reading one symbol from state 0, the powerset DFA reaches states
+    containing state 1, so the witness check fires immediately.
+    """
+    fst = FST()
+    fst.add_start(0); fst.add_stop(1); fst.add_stop(2)
+    y = 'y'
+
+    # State 0: gate (not final — avoids ε output ambiguity)
+    fst.add_arc(0, 'a', y, 1); fst.add_arc(0, 'a', y, 2)
+    fst.add_arc(0, 'b', y, 1); fst.add_arc(0, 'b', y, 2)
+    fst.add_arc(0, 'c', y, 1)
+
+    # State 1: ip-universal (complete self-loops, single output per input)
+    for x in 'abc':
+        fst.add_arc(1, x, y, 1)
+
+    # State 2: NOT ip-universal (only 'a' arcs)
+    fst.add_arc(2, 'a', y, 2)
+
+    return fst
+
+
+def complementary_halves():
+    """BFS fallback and positive cache (levels 5 and 3). Partial function.
+
+    Alphabet {a,b,c,d} with 4 states each covering only half the alphabet.
+    No state is ip-universal, so universality must be discovered via BFS.
+    Complementary pairs ({1,2} and {3,4}) cover all symbols.
+    """
+    fst = FST()
+    fst.add_start(0)
+    for s in [1, 2, 3, 4]:
+        fst.add_stop(s)
+    y = 'y'
+    symbols = ['a', 'b', 'c', 'd']
+
+    # State 0: dispatcher (not final)
+    for x in symbols:
+        for dest in [1, 2, 3, 4]:
+            fst.add_arc(0, x, y, dest)
+
+    # State 1 ({a,b}) -> {1,2}
+    for x in ['a', 'b']:
+        fst.add_arc(1, x, y, 1); fst.add_arc(1, x, y, 2)
+
+    # State 2 ({c,d}) -> {1,2}
+    for x in ['c', 'd']:
+        fst.add_arc(2, x, y, 1); fst.add_arc(2, x, y, 2)
+
+    # State 3 ({a,c}) -> {3,4}
+    for x in ['a', 'c']:
+        fst.add_arc(3, x, y, 3); fst.add_arc(3, x, y, 4)
+
+    # State 4 ({b,d}) -> {3,4}
+    for x in ['b', 'd']:
+        fst.add_arc(4, x, y, 3); fst.add_arc(4, x, y, 4)
+
+    return fst
+
+
+def shrinking_nonuniversal():
+    """Negative cache / subset monotonicity (level 4). Partial function.
+
+    Alphabet {a,b,c}. Three states, none covering all symbols (missing 'c').
+    The set {1,2,3} is NOT universal. Subsets should be recognized as
+    non-universal via the negative cache without running BFS again.
+    """
+    fst = FST()
+    fst.add_start(0)
+    for s in [1, 2, 3]:
+        fst.add_stop(s)
+    y = 'y'
+
+    # State 0: dispatcher (not final, no ε self-loops)
+    for x in 'abc':
+        for dest in [1, 2, 3]:
+            fst.add_arc(0, x, y, dest)
+
+    # State 1: only 'a'
+    fst.add_arc(1, 'a', y, 1)
+
+    # State 2: only 'b'
+    fst.add_arc(2, 'b', y, 2)
+
+    # State 3: {a, b} -> splits on transitions
+    fst.add_arc(3, 'a', y, 1)
+    fst.add_arc(3, 'b', y, 2)
+
+    return fst
+
+
+def scaled_newspeak(n_patterns=5, alpha_size=10):
+    """Multi-pattern replacement FST (all_input_universal=True). Function.
+
+    State 0 passes through non-trigger symbols with identity output. Trigger
+    symbols deterministically enter a pattern mid-state (ε output). Each
+    mid-state handles all symbols and routes back to state 0 on its completion
+    symbol. Requires n_patterns <= alpha_size for unique triggers.
+    """
+    assert n_patterns <= alpha_size, "need unique triggers"
+    fst = FST()
+    fst.add_start(0); fst.add_stop(0)
+    symbols = [str(i) for i in range(alpha_size)]
+    out_symbols = [chr(ord('A') + i) for i in range(n_patterns)]
+
+    triggers = {symbols[i % alpha_size] for i in range(n_patterns)}
+
+    # State 0: passthrough for non-triggers only
+    for x in symbols:
+        if x not in triggers:
+            fst.add_arc(0, x, x, 0)
+
+    # Patterns: trigger enters mid-state with ε output (no passthrough overlap)
+    for i in range(n_patterns):
+        trigger = symbols[i % alpha_size]
+        mid_state = i + 1
+        fst.add_stop(mid_state)
+        fst.add_arc(0, trigger, EPSILON, mid_state)
+        fst.add_arc(mid_state, symbols[(i+1) % alpha_size], out_symbols[i], 0)
+        for x in symbols:
+            if x != symbols[(i+1) % alpha_size]:
+                fst.add_arc(mid_state, x, x, mid_state)
+
+    return fst
+
+
+def layered_witnesses(n_layers=3):
+    """Witness check at scale (level 2). Partial function.
+
+    A chain of n layers, each with 3 states: gate (non-final dispatcher),
+    univ (ip-universal with complete self-loops), and partial (only 'a' arcs).
+    Every universal conclusion should be resolved by the witness check with
+    zero BFS work.
+    """
+    fst = FST()
+    y = 'y'
+
+    for i in range(n_layers):
+        g = 3 * i       # gate
+        u = 3 * i + 1   # universal
+        p = 3 * i + 2   # partial
+
+        fst.add_stop(u); fst.add_stop(p)
+
+        # Universal state: complete self-loops (single output per input)
+        for x in 'ab':
+            fst.add_arc(u, x, y, u)
+
+        # Partial state: only 'a'
+        fst.add_arc(p, 'a', y, p)
+
+        # Gate: fans out (no ε self-loop)
+        for x in 'ab':
+            fst.add_arc(g, x, y, u)
+            fst.add_arc(g, x, y, p)
+            if i + 1 < n_layers:
+                fst.add_arc(g, x, y, 3 * (i + 1))  # next gate
+
+    fst.add_start(0)
+    return fst
