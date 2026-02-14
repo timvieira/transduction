@@ -478,6 +478,132 @@ class FST:
                     queue.append(key)
         raise ValueError("No accepting path found")
 
+    def is_functional(self):
+        """Check whether this FST defines a (partial) function.
+
+        An FST is functional if every input string maps to at most one
+        output string.  Returns ``(True, None)`` if functional, or
+        ``(False, (x, y1, y2))`` with a witness input ``x`` that produces
+        two distinct outputs ``y1 != y2``.
+
+        Uses a product construction: two copies of the trimmed FST run
+        on the same input while tracking the output-buffer difference.
+        Terminates on all finite-state transducers (no length bound
+        needed) by exploiting the twinning property: for a functional
+        transducer the delay is bounded, and for a non-functional one
+        we detect the pumping cycle.
+        """
+        t = self.trim()
+        if not t.states:
+            return (True, None)
+
+        # --- Phase 1: Build product automaton (q1, q2) sharing input ---
+        # Forward reachability from all start pairs.
+        product_arcs = {}    # (q1,q2) -> list of (a, b1, b2, j1, j2)
+        product_final = set()
+
+        fwd = set()
+        queue = deque()
+        for s1 in t.start:
+            for s2 in t.start:
+                pair = (s1, s2)
+                if pair not in fwd:
+                    fwd.add(pair)
+                    queue.append(pair)
+
+        while queue:
+            q1, q2 = pair = queue.popleft()
+            if q1 in t.stop and q2 in t.stop:
+                product_final.add(pair)
+            arcs = []
+            for a, b1, j1 in t.arcs(q1):
+                for a2, b2, j2 in t.arcs(q2):
+                    if a != a2:
+                        continue
+                    arcs.append((a, b1, b2, j1, j2))
+                    dest = (j1, j2)
+                    if dest not in fwd:
+                        fwd.add(dest)
+                        queue.append(dest)
+            product_arcs[pair] = arcs
+
+        if not product_final:
+            return (True, None)
+
+        # --- Phase 2: Backward reachability → co-accessible states ---
+        rev = defaultdict(set)
+        for pair, arcs in product_arcs.items():
+            for _, _, _, j1, j2 in arcs:
+                rev[(j1, j2)].add(pair)
+
+        co = set(product_final)
+        queue = deque(product_final)
+        while queue:
+            pair = queue.popleft()
+            for prev in rev[pair]:
+                if prev not in co:
+                    co.add(prev)
+                    queue.append(prev)
+
+        # Only explore states on a start→final path in the product.
+        trimmed_product = fwd & co
+
+        # --- Phase 3: BFS with output-delay tracking ---
+        # For a functional transducer the delay is bounded (twinning
+        # property).  Bound B: if the delay exceeds |trimmed_product|*M,
+        # some (q1,q2) pair was visited with strictly growing delay,
+        # meaning a cycle is pumping.  Since every state in
+        # trimmed_product is co-accessible, that cycle lies on a path
+        # to acceptance → non-functional.
+        M = max(
+            (len(b) for q in t.states for _, b, _ in t.arcs(q) if b != EPSILON),
+            default=1,
+        )
+        delay_bound = len(trimmed_product) * max(M, 1)
+
+        visited = set()
+        worklist = deque()
+        exceeded = False
+
+        for s1 in t.start:
+            for s2 in t.start:
+                if (s1, s2) not in trimmed_product:
+                    continue
+                key = (s1, s2, 0, '')
+                if key not in visited:
+                    visited.add(key)
+                    worklist.append((s1, s2, 0, '', '', '', ''))
+
+        while worklist:
+            q1, q2, side, buf, x, y1, y2 = worklist.popleft()
+
+            if (q1, q2) in product_final and (side != 0 or buf != ''):
+                return (False, (x, y1, y2))
+
+            if len(buf) > delay_bound:
+                exceeded = True
+                continue
+
+            for a, b1, b2, j1, j2 in product_arcs.get((q1, q2), ()):
+                if (j1, j2) not in trimmed_product:
+                    continue
+                new_side, new_buf = _advance_buf(side, buf, b1, b2)
+                key = (j1, j2, new_side, new_buf)
+                if key in visited:
+                    continue
+                visited.add(key)
+                worklist.append((j1, j2, new_side, new_buf,
+                                 x + a, y1 + b1, y2 + b2))
+
+        if exceeded:
+            # Delay exceeded bound on a co-accessible product state.
+            # A cycle is pumping the delay on a path to acceptance
+            # → non-functional, but the witness requires more pumping
+            # than the bound allows.
+            return (False, None)
+
+        return (True, None)
+
     def trim(self):
         """
         Return a new FST containing only the states and arcs lying on
@@ -702,6 +828,44 @@ class FST:
                 strongconnect(v)
 
         return sccs
+
+
+def _advance_buf(side, buf, b1, b2):
+    """Update the output-buffer difference after copy-1 emits b1 and copy-2 emits b2.
+
+    The buffer tracks what one copy has emitted beyond the other:
+      side=0, buf='' means the two copies are in sync.
+      side=1, buf=s   means copy-1 is ahead by suffix s.
+      side=2, buf=s   means copy-2 is ahead by suffix s.
+    """
+    # Build the full "ahead" string for each side
+    if side == 0:
+        ahead1, ahead2 = '', ''
+    elif side == 1:
+        ahead1, ahead2 = buf, ''
+    else:
+        ahead1, ahead2 = '', buf
+
+    ahead1 += b1
+    ahead2 += b2
+
+    # Cancel common prefix
+    n = min(len(ahead1), len(ahead2))
+    common = 0
+    for i in range(n):
+        if ahead1[i] != ahead2[i]:
+            break
+        common = i + 1
+
+    ahead1 = ahead1[common:]
+    ahead2 = ahead2[common:]
+
+    if ahead1:
+        return (1, ahead1)
+    elif ahead2:
+        return (2, ahead2)
+    else:
+        return (0, '')
 
 
 def _lcp_pair(a, b):
