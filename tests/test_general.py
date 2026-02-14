@@ -9,22 +9,20 @@ termination.
 Algorithms excluded (finite-language only — they lack truncation and diverge
 on infinite quotients):
   - LazyIncremental: enumerates source strings; universality check diverges.
-  - IncrementalDFADecomp: included but xfailed on triplets_of_doom where it
-    diverges (partially general; works on most inputs but not all).
 """
 
 import pytest
 from transduction import examples, EPSILON, Precover
 from transduction.dfa_decomp_nonrecursive import NonrecursiveDFADecomp
-from transduction.dfa_decomp_incremental import IncrementalDFADecomp
 from transduction.dfa_decomp_incremental_truncated import TruncatedIncrementalDFADecomp
 from transduction.token_decompose import TokenDecompose
 from transduction.universality import check_all_input_universal
 from transduction.peekaboo_nonrecursive import Peekaboo as PeekabooNonrecursive
 from transduction.peekaboo_incremental import PeekabooState
+from transduction.peekaboo_dirty import DirtyPeekaboo
 
 try:
-    from transduction.rust_bridge import RustDecomp, RustPeekaboo, RustDirtyState
+    from transduction.rust_bridge import RustDecomp, RustDirtyState, RustDirtyPeekaboo
     HAS_RUST = True
 except ImportError:
     HAS_RUST = False
@@ -65,12 +63,12 @@ def assert_equal_decomp_map(have, want):
 
 
 IMPLEMENTATIONS = [
-    pytest.param(IncrementalDFADecomp, id="recursive_dfa_decomp"),
     pytest.param(TruncatedIncrementalDFADecomp, id="truncated_incremental_dfa_decomp"),
     pytest.param(NonrecursiveDFADecomp, id="nonrecursive_dfa_decomp"),
     pytest.param(PeekabooState, id="peekaboo_incremental"),
     pytest.param(PeekabooNonrecursive, id="peekaboo_nonrecursive"),
     pytest.param(_token_decompose_or_skip, id="token_decompose"),
+    pytest.param(DirtyPeekaboo, id="dirty_peekaboo"),
 ]
 
 if HAS_RUST:
@@ -78,10 +76,10 @@ if HAS_RUST:
         pytest.param(RustDecomp, id="rust_decomp"),
     )
     IMPLEMENTATIONS.append(
-        pytest.param(RustPeekaboo, id="rust_peekaboo"),
+        pytest.param(RustDirtyState, id="rust_dirty_state"),
     )
     IMPLEMENTATIONS.append(
-        pytest.param(RustDirtyState, id="rust_dirty_state"),
+        pytest.param(RustDirtyPeekaboo, id="rust_dirty_peekaboo"),
     )
 
 
@@ -145,8 +143,6 @@ def test_weird_copy(impl):
 
 
 def test_triplets_of_doom(impl):
-    if impl is IncrementalDFADecomp:
-        pytest.xfail("recursive_dfa_decomp does not terminate on this input")
     from arsenal import timelimit
     fst = examples.triplets_of_doom()
     with timelimit(5):
@@ -161,3 +157,28 @@ def test_infinite_quotient(impl):
 def test_parity(impl):
     fst = examples.parity({'a', 'b'})
     run_test(impl, fst, '', depth=5, verbosity=0)
+
+
+def test_gated_universal(impl):
+    fst = examples.gated_universal()
+    run_test(impl, fst, '', depth=5)
+
+
+def test_complementary_halves(impl):
+    fst = examples.complementary_halves()
+    run_test(impl, fst, '', depth=5)
+
+
+def test_shrinking_nonuniversal(impl):
+    fst = examples.shrinking_nonuniversal()
+    run_test(impl, fst, '', depth=5)
+
+
+def test_scaled_newspeak(impl):
+    fst = examples.scaled_newspeak(n_patterns=3, alpha_size=6)
+    run_test(impl, fst, '', depth=3)
+
+
+def test_layered_witnesses(impl):
+    fst = examples.layered_witnesses()
+    run_test(impl, fst, '', depth=5)

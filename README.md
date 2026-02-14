@@ -126,8 +126,7 @@ sample = sampler.sample(max_length=50)
 |-----------|--------|:-----------:|-------|
 | `Precover` | `eager_nonrecursive.py` | No | Reference implementation; full powerset determinization |
 | `NonrecursiveDFADecomp` | `dfa_decomp_nonrecursive.py` | No | Clean reference; rebuilds from scratch each call |
-| `IncrementalDFADecomp` | `dfa_decomp_incremental.py` | Yes | Supports `>>` but diverges on some inputs (no truncation) |
-| `TruncatedIncrementalDFADecomp` | `dfa_decomp_incremental_truncated.py` | Yes | Incremental DFA decomp with target-buffer truncation |
+| `TruncatedIncrementalDFADecomp` | `dfa_decomp_incremental_truncated.py` | Yes | Incremental DFA decomp with target-buffer truncation and dirty-state tracking |
 | `PeekabooState` | `peekaboo_incremental.py` | Yes | **Recommended.** Batches all next-symbol decompositions; truncation ensures termination |
 | `Peekaboo` | `peekaboo_nonrecursive.py` | No | Simpler peekaboo variant without `>>` |
 | `TokenDecompose` | `token_decompose.py` | No | BPE-optimized fast path (requires `all_input_universal` FST) |
@@ -156,7 +155,6 @@ transduction/                Python package
   peekaboo_dirty.py          Dirty-state incremental peekaboo
   eager_nonrecursive.py      Reference Precover implementation
   dfa_decomp_nonrecursive.py Non-incremental DFA decomposition
-  dfa_decomp_incremental.py  Incremental DFA decomposition (diverges on some inputs)
   dfa_decomp_incremental_truncated.py  Incremental DFA decomp with truncation
   token_decompose.py         BPE-optimized fast path
   enumeration.py             LM-weighted path enumeration
@@ -214,7 +212,7 @@ python -m pytest tests/test_enumeration.py -v
 python -m pytest tests/ -v
 ```
 
-The single expected failure is `IncrementalDFADecomp` on `triplets_of_doom` (diverges without target-buffer truncation).
+All general-case algorithms terminate on all test inputs.
 
 ### Dependencies for full test suite
 

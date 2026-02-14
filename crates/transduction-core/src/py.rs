@@ -478,76 +478,82 @@ impl PeekabooDecompResult {
     }
 }
 
-/// Perform peekaboo decomposition: given a Rust FST and a target sequence,
-/// compute per-symbol quotient and remainder automata for the next target symbol.
-#[pyfunction]
-#[pyo3(signature = (fst, target, minimize=false))]
-pub fn rust_peekaboo(py: Python<'_>, fst: &RustFst, target: Vec<u32>, minimize: bool) -> PyResult<PeekabooDecompResult> {
-    let result = peekaboo::peekaboo_decompose(&fst.inner, &target);
+// ---------------------------------------------------------------------------
+// Dirty (incremental) peekaboo decomposition
+// ---------------------------------------------------------------------------
 
-    let mut per_symbol = rustc_hash::FxHashMap::default();
-    let mut symbols: Vec<u32> = result.per_symbol.keys().copied().collect();
-    symbols.sort_unstable();
+/// Python-visible incremental peekaboo decomposition wrapper.
+/// Persists peekaboo BFS state across calls; on prefix extension, only
+/// runs the new step(s) instead of rebuilding from scratch.
+#[pyclass(unsendable)]
+pub struct RustDirtyPeekabooDecomp {
+    fst: Py<RustFst>,
+    persistent: peekaboo::DirtyPeekaboo,
+}
 
-    for (sym, (q_fsa, r_fsa)) in result.per_symbol {
-        let (q_fsa, r_fsa) = if minimize {
-            (minimize::minimize(&q_fsa), minimize::minimize(&r_fsa))
-        } else {
-            (q_fsa, r_fsa)
-        };
-
-        let q = Py::new(
-            py,
-            RustFsa {
-                num_states: q_fsa.num_states,
-                start: q_fsa.start,
-                stop: q_fsa.stop,
-                src: q_fsa.arc_src,
-                lbl: q_fsa.arc_lbl,
-                dst: q_fsa.arc_dst,
-            },
-        )?;
-
-        let r = Py::new(
-            py,
-            RustFsa {
-                num_states: r_fsa.num_states,
-                start: r_fsa.start,
-                stop: r_fsa.stop,
-                src: r_fsa.arc_src,
-                lbl: r_fsa.arc_lbl,
-                dst: r_fsa.arc_dst,
-            },
-        )?;
-
-        per_symbol.insert(sym, (q, r));
+#[pymethods]
+impl RustDirtyPeekabooDecomp {
+    #[new]
+    fn new(py: Python<'_>, fst: Py<RustFst>) -> Self {
+        let persistent = peekaboo::DirtyPeekaboo::new(&fst.borrow(py).inner);
+        RustDirtyPeekabooDecomp { fst, persistent }
     }
 
-    let s = &result.stats;
-    let stats = Py::new(py, RustPeekabooStats {
-        total_ms: s.total_ms,
-        init_ms: s.init_ms,
-        bfs_ms: s.bfs_ms,
-        extract_ms: s.extract_ms,
-        num_steps: s.num_steps,
-        per_step_visited: s.per_step_visited.clone(),
-        per_step_frontier_size: s.per_step_frontier_size.clone(),
-        total_bfs_visited: s.total_bfs_visited,
-        compute_arcs_ms: s.compute_arcs_ms,
-        compute_arcs_calls: s.compute_arcs_calls,
-        intern_ms: s.intern_ms,
-        intern_calls: s.intern_calls,
-        universal_ms: s.universal_ms,
-        universal_calls: s.universal_calls,
-        universal_true: s.universal_true,
-        universal_false: s.universal_false,
-        arena_size: s.arena_size,
-        max_powerset_size: s.max_powerset_size,
-        avg_powerset_size: s.avg_powerset_size,
-        merged_incoming_states: s.merged_incoming_states,
-        merged_incoming_arcs: s.merged_incoming_arcs,
-        eps_cache_clears: s.eps_cache_clears,
-    })?;
+    /// Decompose the FST for the given target, returning per-symbol Q/R.
+    #[pyo3(signature = (target, minimize=false))]
+    fn decompose(&mut self, py: Python<'_>, target: Vec<u32>, minimize: bool) -> PyResult<PeekabooDecompResult> {
+        let result = self.persistent.decompose(&self.fst.borrow(py).inner, &target);
 
-    Ok(PeekabooDecompResult { per_symbol, symbols, stats })
+        let mut per_symbol = rustc_hash::FxHashMap::default();
+        let mut symbols: Vec<u32> = result.per_symbol.keys().copied().collect();
+        symbols.sort_unstable();
+
+        for (sym, (q_fsa, r_fsa)) in result.per_symbol {
+            let (q_fsa, r_fsa) = if minimize {
+                (minimize::minimize(&q_fsa), minimize::minimize(&r_fsa))
+            } else {
+                (q_fsa, r_fsa)
+            };
+
+            let q = Py::new(py, RustFsa {
+                num_states: q_fsa.num_states, start: q_fsa.start, stop: q_fsa.stop,
+                src: q_fsa.arc_src, lbl: q_fsa.arc_lbl, dst: q_fsa.arc_dst,
+            })?;
+            let r = Py::new(py, RustFsa {
+                num_states: r_fsa.num_states, start: r_fsa.start, stop: r_fsa.stop,
+                src: r_fsa.arc_src, lbl: r_fsa.arc_lbl, dst: r_fsa.arc_dst,
+            })?;
+
+            per_symbol.insert(sym, (q, r));
+        }
+
+        let s = &result.stats;
+        let stats = Py::new(py, RustPeekabooStats {
+            total_ms: s.total_ms,
+            init_ms: s.init_ms,
+            bfs_ms: s.bfs_ms,
+            extract_ms: s.extract_ms,
+            num_steps: s.num_steps,
+            per_step_visited: s.per_step_visited.clone(),
+            per_step_frontier_size: s.per_step_frontier_size.clone(),
+            total_bfs_visited: s.total_bfs_visited,
+            compute_arcs_ms: s.compute_arcs_ms,
+            compute_arcs_calls: s.compute_arcs_calls,
+            intern_ms: s.intern_ms,
+            intern_calls: s.intern_calls,
+            universal_ms: s.universal_ms,
+            universal_calls: s.universal_calls,
+            universal_true: s.universal_true,
+            universal_false: s.universal_false,
+            arena_size: s.arena_size,
+            max_powerset_size: s.max_powerset_size,
+            avg_powerset_size: s.avg_powerset_size,
+            merged_incoming_states: s.merged_incoming_states,
+            merged_incoming_arcs: s.merged_incoming_arcs,
+            eps_cache_clears: s.eps_cache_clears,
+        })?;
+
+        Ok(PeekabooDecompResult { per_symbol, symbols, stats })
+    }
 }
+

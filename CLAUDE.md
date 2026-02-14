@@ -70,7 +70,7 @@ Eliminated deps (previously external, now inlined):
 
 ## Test Status
 
-- `test_general.py`: 162 passed, 14 skipped
+- `test_general.py`: 148 passed, 14 skipped
 - `test_finite.py`: 40 pass
 - `test_enumeration.py`: 12/12 pass (9 small grammar tests + 3 BPE-scale GPT-2 integration tests)
 - `test_push_labels.py`: 30 pass
