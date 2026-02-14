@@ -194,12 +194,63 @@ class Peekaboo:
 class PeekabooState(IncrementalDecomposition):
     """Incremental peekaboo decomposition state.
 
+    Peekaboo computes the quotient/remainder decomposition for *all* next
+    target symbols simultaneously from a single truncated DFA.  The key
+    insight is that the DFA for P(y) already contains enough information
+    to determine Q(y·z) and R(y·z) for every z — we just need one extra
+    symbol of lookahead in the NFA buffer.
+
     Construction is O(1) — the expensive BFS runs lazily on first access
     to ``.decomp``, ``.dfa``, ``.incoming``, ``.resume_frontiers``, or
     ``.preimage_stops``.  This mirrors the transformer LM pattern where
     ``>> y`` is a cheap state advance and the heavy compute happens when
     the results are actually needed (e.g., by ``decompose_next()`` or by
     ``TransducedLM._compute_logp_next()``).
+
+    Lazy BFS Attributes
+    -------------------
+    These are computed on demand by ``_ensure_bfs()`` and cached:
+
+    decomp : dict[symbol, DecompositionResult]
+        Maps each next target symbol z to its Q/R stop states within the
+        DFA.  ``decomp[z].quotient`` is the set of DFA states that are
+        *universal* for z (every reachable source string belongs to Q(y·z)).
+        ``decomp[z].remainder`` contains DFA states where the FST is final
+        and the buffer matches y·z.
+
+    dfa : PeekabooLookaheadNFA.det()
+        The determinized precover NFA for the current target string.  DFA
+        states are frozensets of NFA triples ``(fst_state, buffer, truncated)``.
+        The buffer has at most ``N+K`` symbols (K=1 by default), giving a
+        one-symbol lookahead beyond the current target.
+
+    incoming : dict[state, set[(symbol, predecessor)]]
+        Reverse-arc graph built during BFS.  Maps each DFA state to the
+        set of ``(input_symbol, predecessor_state)`` pairs that reach it.
+        Used by ``_trimmed_fsa()`` to extract the Q/R automata via
+        backward reachability from stop states.
+
+    resume_frontiers : dict[symbol, set[state]]
+        Maps each next target symbol z to the set of non-truncated DFA
+        states on the truncation boundary.  When we later compute
+        ``self >> z``, the child's BFS starts from these states instead
+        of the DFA's start states — this is the incremental reuse.
+        States end up here in two ways: (1) they are non-truncated but
+        have a truncated successor, or (2) they are Q/R stop states
+        that are non-truncated (live endpoints of the current precover).
+
+    preimage_stops : set[state]
+        DFA states where the source string has produced exactly the
+        current target ``y`` (buffer length = N) and the FST is in a
+        final state.  These represent source strings whose transduction
+        is exactly ``y`` — needed for computing P(EOS | y).
+
+    Incremental Chain
+    -----------------
+    ``state >> z`` creates a child PeekabooState for target ``y·z``.  The
+    child's BFS picks up from ``parent.resume_frontiers[z]`` rather than
+    re-expanding from scratch.  The parent chain is walked to merge
+    ``incoming`` dicts for FSA extraction (see ``_merged_incoming()``).
     """
 
     # Attributes computed by _ensure_bfs(); accessed lazily via __getattr__.

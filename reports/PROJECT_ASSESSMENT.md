@@ -149,13 +149,13 @@ The project has a Rust build step that can silently break. Tests only run when
 someone remembers. For a project with 10+ algorithm implementations that must
 agree, this is a significant risk.
 
-### High: Core Concepts Undocumented
+### High: Core Concepts Undocumented — RESOLVED
 
-"Precover" appears in ~20 class/function names but is never explained in plain
-English. The `ALGORITHM_ASSESSMENT.md` report has a good 3-line definition,
-but it's in a report, not in the code. `PeekabooState` has ~10 undocumented
-internal variables. A new contributor would need to reverse-engineer the math
-from the code.
+`base.py` now has a module-level docstring defining precover, quotient,
+remainder, universality, truncation, and dirty state in plain English.
+`PeekabooState` has a comprehensive docstring documenting all five lazy BFS
+attributes (`decomp`, `dfa`, `incoming`, `resume_frontiers`, `preimage_stops`)
+and the incremental chain mechanism.
 
 ### High: Multi-Character Symbol Handling Broken
 
@@ -195,7 +195,7 @@ for neural LMs.
 | TransducedLM carry-forward bug | Critical | `lm/transduced.py` | Medium |
 | Wrong exports in `__init__.py` | Critical | `__init__.py` | Small |
 | No CI | Critical | `.github/workflows/` | Small |
-| Undocumented "precover" concept | High | `base.py` | Small |
+| Undocumented "precover" concept | Resolved | `base.py` | Done |
 | Multi-char symbol handling | High | `precover_nfa.py` | Medium |
 | No end-to-end example | High | — | Small |
 | No `__all__` declarations | Medium | `__init__.py` | Small |
@@ -254,15 +254,9 @@ correct next-symbol probabilities.
 
 **Goal:** A new contributor can understand and extend the library.
 
-9. **Document the precover concept.** Add a plain-English explanation to
-    `base.py`: given target prefix y, the precover P(y) is the set of source
-    strings whose transduction begins with y. The quotient Q(y) are those that
-    can continue; the remainder R(y) are those that have terminated. One
-    paragraph, three definitions.
+9. **Document the precover concept.** Done — `base.py` module docstring.
 
-10. **Document PeekabooState internals.** Add a docstring overview explaining
-    the relationship between `decomp`, `resume_frontiers`, `incoming`,
-    `preimage_stops`, and the incremental BFS.
+10. **Document PeekabooState internals.** Done — `PeekabooState` class docstring.
 
 11. **Fix multi-character symbol handling.** Switch PrecoverNFA buffers from
     string indexing to tuple-of-symbols. This unblocks PTB and other
@@ -297,7 +291,7 @@ correct next-symbol probabilities.
 | **Testing** | B+ | 253+ tests, parametrized cross-validation, but no CI and some gaps |
 | **End-to-End Product** | C | TransducedLM carry-forward bug blocks multi-state FSTs |
 | **API/Packaging** | C | Wrong exports, no `__all__`, no end-to-end example |
-| **Documentation** | C- | Core concepts unexplained, weak function-level docs |
+| **Documentation** | C+ | Core concepts now documented; function-level docs still sparse |
 
 **Bottom line:** The hard part — fast, correct FST decomposition — is done.
 The easy part — wiring it into a working TransducedLM that users can import

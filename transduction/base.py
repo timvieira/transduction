@@ -1,3 +1,59 @@
+"""
+Precover decomposition: core concepts and abstract interfaces.
+
+The Central Problem
+-------------------
+Given an FST ``f : X* -> Y*`` and a target prefix **y**, we want to know which
+source strings produce output that begins with **y**.  This set is called the
+**precover**:
+
+    P(y) = { x in X* : f(x) starts with y }
+
+The precover splits into two disjoint parts:
+
+    P(y) = Q(y) · X*  ⊔  R(y)
+
+- **Quotient** Q(y): source strings that have produced **y** so far and can
+  still continue (the FST has not yet reached a final state, or has reached
+  one but could keep going).  Every extension x·a for a in X is also in P(y).
+
+- **Remainder** R(y): source strings that have produced **y** and terminated
+  (the FST is in a final state and no further output is possible).  These are
+  complete — no extension of x is in P(y).
+
+Why This Matters
+~~~~~~~~~~~~~~~~
+To compute P(next_symbol | y) for a language model composed with an FST, we
+need Q(y·z) and R(y·z) for each candidate next symbol z.  The probability is:
+
+    P(z | y) ∝ Σ_{x ∈ Q(y·z)} P_LM(x) + Σ_{x ∈ R(y·z)} P_LM(x · EOS)
+
+The quotient strings contribute ongoing probability mass; the remainder strings
+contribute their EOS probability.  All decomposition algorithms in this library
+compute Q and R — they differ in how efficiently they do so (truncation
+strategy, incrementality, batching, language).
+
+Terminology
+~~~~~~~~~~~
+- **Precover NFA**: An NFA whose accepted language is P(y).  Each NFA state
+  pairs an FST state with a target-output buffer tracking how much of **y**
+  has been produced.  See ``precover_nfa.py`` for implementations.
+
+- **Universality**: A DFA state is *universal* for symbol z if every source
+  string reachable from it belongs to Q(y·z).  Detecting universality early
+  lets us stop expanding the DFA — the key insight behind the Peekaboo
+  algorithm.
+
+- **Truncation**: Bounding the target-output buffer to prevent infinite state
+  spaces.  Algorithms that truncate (Peekaboo, DFA decomp, Rust backends)
+  terminate on all FSTs; those that don't (Lazy variants) may diverge on FSTs
+  with infinite quotients.
+
+- **Dirty state**: Incremental algorithms that persist DFA states across
+  ``>>`` steps.  "Dirty" means the cached DFA may contain states from a
+  previous target prefix that need re-expansion.
+"""
+
 from abc import ABC, abstractmethod
 from transduction.fst import EPSILON
 from arsenal import colors
