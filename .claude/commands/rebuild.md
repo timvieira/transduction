@@ -28,7 +28,7 @@ Build the Rust transduction-core crate, install the wheel, and run the test suit
 
 - System Python is 3.10 — always use `--interpreter python3.10` (NOT conda's 3.12)
 - The wheel filename includes the version; if it changes, glob for `target/wheels/*.whl`
-- Expected: 90/91 pass, 1 xfail (`test_triplets_of_doom[recursive_dfa_decomp]`)
+- Expected: 148 passed, 14 skipped
 
 ## Arguments
 
