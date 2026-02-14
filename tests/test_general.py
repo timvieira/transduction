@@ -182,3 +182,20 @@ def test_scaled_newspeak(impl):
 def test_layered_witnesses(impl):
     fst = examples.layered_witnesses()
     run_test(impl, fst, '', depth=5)
+
+
+def test_doom_k5(impl):
+    from arsenal import timelimit
+    fst = examples.doom({'a', 'b'}, K=5)
+    with timelimit(5):
+        run_test(impl, fst, '', depth=10, verbosity=0)
+
+
+def test_mystery2(impl):
+    fst = examples.mystery2()
+    run_test(impl, fst, '', depth=7, verbosity=0)
+
+
+def test_infinite_quotient2(impl):
+    fst = examples.infinite_quotient2()
+    run_test(impl, fst, '', depth=5, verbosity=0)
