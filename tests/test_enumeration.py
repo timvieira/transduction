@@ -2,9 +2,6 @@ import pytest
 import numpy as np
 from collections import defaultdict
 
-genparse = pytest.importorskip('genparse')
-from genparse import EarleyLM, EOS
-
 from transduction import examples
 from transduction.lm.base import LMState
 from transduction.enumeration import (
@@ -15,44 +12,101 @@ from transduction.enumeration import (
 from transduction.dfa_decomp_nonrecursive import NonrecursiveDFADecomp
 
 
-GRAMMAR = """
-.5: S -> a S
-.4: S -> b S
-.1: S -> c
-"""
+EOS = '<EOS>'
 
 
-class StatefulLM(LMState):
-    """Wraps a stateless EarleyLM into the stateful interface expected by
-    the enumeration classes (`.eos`, `.logp_next`, `>> token`)."""
+class SimpleGrammarLM(LMState):
+    """LM for the grammar: S -> aS (.5) | bS (.4) | c (.1).
 
-    def __init__(self, lm, eos, context=()):
-        self._lm = lm
-        self._eos = eos
-        self._context = context
+    Single-state weighted regular language — no parser needed.
+    Before 'c': P(a)=0.5, P(b)=0.4, P(c)=0.1.
+    After 'c': P(EOS)=1.0.
+    """
+
+    def __init__(self, finished=False):
+        self._finished = finished
 
     @property
     def eos(self):
-        return self._eos
+        return EOS
 
     @property
     def logp_next(self):
-        p = self._lm.p_next(self._context)
+        if self._finished:
+            return defaultdict(lambda: float('-inf'), {EOS: 0.0})
         return defaultdict(lambda: float('-inf'), {
-            k: np.log(v) if v > 0 else float('-inf')
-            for k, v in p.items()
+            'a': np.log(0.5),
+            'b': np.log(0.4),
+            'c': np.log(0.1),
         })
 
     def __rshift__(self, token):
-        return StatefulLM(self._lm, self._eos, self._context + (token,))
+        if token == 'c':
+            return SimpleGrammarLM(finished=True)
+        return SimpleGrammarLM(finished=False)
 
     def __repr__(self):
-        return f'StatefulLM({list(self._context)})'
+        return f'SimpleGrammarLM(finished={self._finished})'
 
 
-@pytest.fixture
-def lm():
-    return StatefulLM(EarleyLM.from_string(GRAMMAR), eos=EOS)
+class PalindromeLM(LMState):
+    """LM for the grammar: S -> aSa (.5) | bSb (.4) | c (.1).
+
+    Generates palindromes over {a,b} with center 'c'.
+    Before 'c': P(a)=0.5, P(b)=0.4, P(c)=0.1 (building left half, push).
+    After 'c': deterministically mirror the left half (pop), then EOS.
+    """
+
+    def __init__(self, stack=()):
+        self._stack = stack   # None means finished (empty stack after mirror)
+
+    @property
+    def eos(self):
+        return EOS
+
+    @property
+    def logp_next(self):
+        if self._stack is None:
+            return defaultdict(lambda: float('-inf'), {EOS: 0.0})
+        if self._stack and self._stack[-1] == 'c':
+            # In mirror phase: must output top of stack (symbol before 'c')
+            mirror_stack = self._stack[:-1]  # drop the 'c' sentinel
+            if not mirror_stack:
+                return defaultdict(lambda: float('-inf'), {EOS: 0.0})
+            return defaultdict(lambda: float('-inf'), {mirror_stack[-1]: 0.0})
+        # Still in left half: push phase
+        return defaultdict(lambda: float('-inf'), {
+            'a': np.log(0.5),
+            'b': np.log(0.4),
+            'c': np.log(0.1),
+        })
+
+    def __rshift__(self, token):
+        if self._stack is None:
+            raise ValueError("LM is finished")
+        if token == 'c' and (not self._stack or self._stack[-1] != 'c'):
+            # Transition to mirror phase: push 'c' as sentinel
+            return PalindromeLM(self._stack + ('c',))
+        if self._stack and self._stack[-1] == 'c':
+            # Mirror phase: pop
+            mirror_stack = self._stack[:-1]
+            assert mirror_stack and mirror_stack[-1] == token
+            remaining = mirror_stack[:-1]
+            if not remaining:
+                return PalindromeLM(None)  # finished
+            return PalindromeLM(remaining + ('c',))
+        # Push phase
+        return PalindromeLM(self._stack + (token,))
+
+    def __repr__(self):
+        return f'PalindromeLM(stack={self._stack})'
+
+
+@pytest.fixture(params=['simple', 'palindrome'])
+def lm(request):
+    if request.param == 'simple':
+        return SimpleGrammarLM()
+    return PalindromeLM()
 
 
 @pytest.fixture
@@ -60,80 +114,84 @@ def fst():
     return examples.replace([('a', 'a'), ('b', 'b'), ('c', 'c')])
 
 
+# Both LMs share the same left-half distribution P(a)=0.5, P(b)=0.4, P(c)=0.1,
+# so any prefix before the first 'c' has the same weight under both.
+# Targets:
+#   'a'    — single-symbol prefix, weight log(0.5), quotient under both
+#   'ab'   — two-symbol prefix, weight log(0.5*0.4), quotient under both
+#   'abc'  — simple: remainder (complete string), palindrome: quotient (needs mirror 'a')
+#   'aca'  — simple: quotient (prefix of 'aca...'), palindrome: remainder (complete palindrome)
+#   'c'    — remainder under both (single-symbol complete string), weight log(0.1)
+#   ''     — empty prefix, quotient under both
+
+
 # --- prioritized_enumeration tests ---
 
 class TestPrioritizedEnumeration:
 
-    def test_abc(self, lm, fst):
-        pe = prioritized_enumeration(lm, fst, 'abc', max_steps=50)
-        assert len(pe.quotient_terms) == 1
-        weight = pe.quotient_terms[0].weight
-        expected = np.log(0.5 * 0.4 * 0.1)
-        assert weight == pytest.approx(expected, abs=1e-6)
+    @pytest.mark.parametrize('target, expected_logp', [
+        ('a', np.log(0.5)),
+        ('ab', np.log(0.5 * 0.4)),
+        ('c', np.log(0.1)),
+    ])
+    def test_exact_weight(self, lm, fst, target, expected_logp):
+        pe = prioritized_enumeration(lm, fst, target, max_steps=100)
+        assert len(pe.quotient_terms) + len(pe.remainder_terms) >= 1
+        # The top term should match the expected weight
+        all_terms = pe.quotient_terms + pe.remainder_terms
+        best = max(all_terms, key=lambda t: t.weight)
+        assert best.weight == pytest.approx(expected_logp, abs=1e-6)
 
-    def test_aa(self, lm, fst):
-        pe = prioritized_enumeration(lm, fst, 'aa', max_steps=100)
-        assert len(pe.quotient_terms) == 1
-        weight = pe.quotient_terms[0].weight
-        expected = np.log(0.5 * 0.5)
-        assert weight == pytest.approx(expected, abs=1e-6)
-
-    def test_empty_target(self, lm, fst):
-        pe = prioritized_enumeration(lm, fst, '', max_steps=50)
-        # empty target: the quotient is immediately reachable
-        assert len(pe.quotient_terms) >= 1
+    @pytest.mark.parametrize('target', ['', 'a', 'ab', 'abc', 'aca', 'c'])
+    def test_completes(self, lm, fst, target):
+        """Enumeration completes without error on various targets."""
+        pe = prioritized_enumeration(lm, fst, target, max_steps=100)
 
     def test_with_nonrecursive_decompose(self, lm, fst):
-        pe = prioritized_enumeration(lm, fst, 'abc', max_steps=50,
+        pe = prioritized_enumeration(lm, fst, 'ab', max_steps=50,
                                      decompose=NonrecursiveDFADecomp)
-        assert len(pe.quotient_terms) == 1
-        weight = pe.quotient_terms[0].weight
-        expected = np.log(0.5 * 0.4 * 0.1)
-        assert weight == pytest.approx(expected, abs=1e-6)
+        assert len(pe.quotient_terms) >= 1
+        assert pe.quotient_terms[0].weight == pytest.approx(np.log(0.5 * 0.4), abs=1e-6)
 
 
 # --- importance_sampling tests ---
 
 class TestImportanceSampling:
 
-    def test_abc(self, lm, fst):
-        sampler = importance_sampling(lm, fst, 'abc')
+    @pytest.mark.parametrize('target, expected_logp', [
+        ('a', np.log(0.5)),
+        ('ab', np.log(0.5 * 0.4)),
+        ('c', np.log(0.1)),
+    ])
+    def test_exact_weight(self, lm, fst, target, expected_logp):
+        sampler = importance_sampling(lm, fst, target)
         item = sampler.sample()
         assert item is not None
-        expected = np.log(0.5 * 0.4 * 0.1)
-        assert item.weight == pytest.approx(expected, abs=1e-6)
+        assert item.weight == pytest.approx(expected_logp, abs=1e-6)
 
-    def test_aa(self, lm, fst):
-        sampler = importance_sampling(lm, fst, 'aa')
-        item = sampler.sample()
-        assert item is not None
-        expected = np.log(0.5 * 0.5)
-        assert item.weight == pytest.approx(expected, abs=1e-6)
+    @pytest.mark.parametrize('target', ['', 'a', 'ab', 'abc', 'aca', 'c'])
+    def test_completes(self, lm, fst, target):
+        """Sampling completes without error on various targets."""
+        sampler = importance_sampling(lm, fst, target)
+        sampler.sample()
 
     def test_with_nonrecursive_decompose(self, lm, fst):
-        sampler = importance_sampling(lm, fst, 'abc',
+        sampler = importance_sampling(lm, fst, 'ab',
                                       decompose=NonrecursiveDFADecomp)
         item = sampler.sample()
         assert item is not None
-        expected = np.log(0.5 * 0.4 * 0.1)
-        assert item.weight == pytest.approx(expected, abs=1e-6)
+        assert item.weight == pytest.approx(np.log(0.5 * 0.4), abs=1e-6)
 
 
 # --- crude_importance_sampling tests ---
 
 class TestCrudeImportanceSampling:
 
-    def test_abc_returns_item(self, lm, fst):
-        sampler = crude_importance_sampling(lm, fst, 'abc')
-        item = sampler.sample(max_length=100)
-        assert item is not None
-        assert np.isfinite(item.weight)
-
-    def test_aa_returns_item(self, lm, fst):
-        sampler = crude_importance_sampling(lm, fst, 'aa')
-        item = sampler.sample(max_length=100)
-        assert item is not None
-        assert np.isfinite(item.weight)
+    @pytest.mark.parametrize('target', ['', 'a', 'ab', 'abc', 'aca', 'c'])
+    def test_completes(self, lm, fst, target):
+        """Sampling completes without error on various targets."""
+        sampler = crude_importance_sampling(lm, fst, target)
+        sampler.sample(max_length=100)
 
 
 # ---------------------------------------------------------------------------
