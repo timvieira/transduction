@@ -862,3 +862,80 @@ def layered_witnesses(n_layers=3):
 
     fst.add_start(0)
     return fst
+
+
+def anbn():
+    """Ambiguous a^n b^n FST from the paper.
+
+    Maps: a→b, aa→c, aaa→bbb, aaaa→bbbb, ...
+    Exercises ambiguity in decomposition: reading target symbol 'b' requires
+    lookahead to determine which source path is active.
+    """
+    fst = FST()
+    fst.add_start("START")
+    for final in ["2ea", "4ec", "7ab"]:
+        fst.add_stop(final)
+    fst.add_arc("START", "a", EPSILON, "1ae")
+    fst.add_arc("1ae", EPSILON, "b", "2ea")
+    fst.add_arc("1ae", "a", EPSILON, "3ae")
+    fst.add_arc("3ae", EPSILON, "c", "4ec")
+    fst.add_arc("3ae", "a", "b", "5eb")
+    fst.add_arc("5eb", EPSILON, "b", "6eb")
+    fst.add_arc("6eb", EPSILON, "b", "7ab")
+    fst.add_arc("7ab", "a", "b", "7ab")
+    return fst
+
+
+def backticks_to_quote():
+    """Backtick-to-quote transducer: single ` passes through, `` collapses to ".
+
+    Also maps a→b as passthrough. Exercises lookahead and epsilon-output
+    buffering: after reading one backtick, the decomposition must wait to see
+    whether a second backtick follows before committing output.
+    """
+    fst = FST()
+    fst.add_start("START")
+    fst.add_stop("START")
+
+    # a → b passthrough
+    fst.add_arc("START", "a", EPSILON, "CHAR_a")
+    fst.add_arc("CHAR_a", EPSILON, "b", "START")
+
+    # backtick logic
+    fst.add_arc("START", "`", EPSILON, "Quote")
+    fst.add_arc("Quote", EPSILON, "`", "1_Quote")
+    fst.add_stop("1_Quote")
+
+    fst.add_arc("Quote", "`", '"', "2_quotes")
+    fst.add_arc("2_quotes", EPSILON, EPSILON, "START")
+    fst.add_stop("2_quotes")
+
+    # continue from single-backtick state
+    fst.add_arc("1_Quote", "a", EPSILON, "CHAR_a")
+
+    return fst
+
+
+def parity_copy():
+    """Parity-dependent copy: even-length inputs produce b^n, odd produce c^n.
+
+    Unlike `parity()` which outputs a single bit, this transducer's output
+    length grows with input length, creating interesting decomposition behavior.
+    """
+    fst = FST()
+    fst.add_start("START")
+    fst.add_stop("END")
+
+    # Even branch
+    fst.add_arc("START", EPSILON, EPSILON, "E0")
+    fst.add_arc("E0", "a", "b", "E1")
+    fst.add_arc("E1", "a", "b", "E0")
+    fst.add_arc("E0", EPSILON, EPSILON, "END")
+
+    # Odd branch
+    fst.add_arc("START", EPSILON, EPSILON, "O0")
+    fst.add_arc("O0", "a", "c", "O1")
+    fst.add_arc("O1", "a", "c", "O0")
+    fst.add_arc("O1", EPSILON, EPSILON, "END")
+
+    return fst

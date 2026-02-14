@@ -113,6 +113,23 @@ def test_number_comma_separator(impl):
     assert_equal(have, want)
 
 
+def test_anbn(impl):
+    fst = examples.anbn()
+    tmp = impl(fst)
+    assert_equal(tmp('b'), DecompositionResult({'aaa'}, {'a'}))
+    assert_equal(tmp('c'), DecompositionResult(set(), {'aa'}))
+    assert_equal(tmp('bb'), DecompositionResult({'aaa'}, set()))
+
+
+def test_backticks_to_quote(impl):
+    fst = examples.backticks_to_quote()
+    tmp = impl(fst)
+    assert_equal(tmp('b'), DecompositionResult({'a'}, set()))
+    assert_equal(tmp('`'), DecompositionResult({'`a'}, {'`'}))
+    assert_equal(tmp('"'), DecompositionResult({'``'}, set()))
+    assert_equal(tmp('`b'), DecompositionResult({'`a'}, set()))
+
+
 # ── Standalone tests (algorithm-specific) ─────────────────────────────────────
 
 def test_lazy_precover_nfa():

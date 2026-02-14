@@ -267,6 +267,21 @@ def test_trivial_fst(impl):
         assert result[y].remainder.trim().states == set()
 
 
+def test_anbn(impl):
+    fst = examples.anbn()
+    run_test(impl, fst, '', depth=5)
+
+
+def test_backticks_to_quote(impl):
+    fst = examples.backticks_to_quote()
+    run_test(impl, fst, '', depth=5)
+
+
+def test_parity_copy(impl):
+    fst = examples.parity_copy()
+    run_test(impl, fst, '', depth=5)
+
+
 def test_consume_raises_on_double_use():
     """TruncatedIncrementalDFADecomp: double decompose_next() or >> raises RuntimeError."""
     fst = examples.replace([('1', 'a'), ('2', 'b')])
