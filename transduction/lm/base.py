@@ -48,8 +48,58 @@ class LogpNext:
         return toks[np.random.choice(len(toks), p=probs)]
 
 
+class LM(ABC):
+    """Abstract base for language models; delegates to self.initial().
+
+    The LM / LMState design mirrors Python's Iterable / Iterator pattern.
+    An LM holds model parameters and acts as a factory for LMState objects
+    (via ``initial()``), just as a list holds data and produces iterators
+    (via ``__iter__()``).  LMStates are lightweight, immutable decode
+    positions — like iterators, many can exist for a single LM.
+
+    This mixin provides convenience methods so the LM can be used directly
+    where an LMState would be expected::
+
+        lm('abc')          # same as lm.initial()('abc')
+        lm >> 'a'          # same as lm.initial() >> 'a'
+        lm.logp_next['a']  # same as lm.initial().logp_next['a']
+
+    Subclasses must implement ``initial()`` returning an ``LMState``.
+    """
+
+    @abstractmethod
+    def initial(self):
+        """Return the initial LMState (conditioned on the empty context)."""
+        ...
+
+    def __call__(self, xs):
+        return self.initial()(xs)
+
+    def __rshift__(self, token):
+        return self.initial() >> token
+
+    @property
+    def logp_next(self):
+        return self.initial().logp_next
+
+    def greedy_decode(self, max_len=100):
+        return self.initial().greedy_decode(max_len)
+
+    def sample(self):
+        return self.initial().sample()
+
+    def sample_decode(self, max_len=100):
+        return self.initial().sample_decode(max_len)
+
+
 class LMState(ABC):
-    """Abstract base class for LM state objects.
+    """An immutable position in an autoregressive decode — a conditional
+    distribution P(next_token | tokens_so_far).
+
+    Analogous to an Iterator: lightweight, many can coexist for one LM,
+    and ``state >> token`` produces a new state (like ``next()`` advances
+    an iterator).  The parent LM (analogous to Iterable) holds the shared
+    model parameters; see :class:`LM`.
 
     Subclasses must provide:
         logp_next  — dict-like with items() → (token, logp) pairs

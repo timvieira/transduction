@@ -39,11 +39,11 @@ class TestByteNgramInterface:
         assert state.logp == pytest.approx(-2.718, abs=0.01)
 
     def test_call_shorthand(self, lm):
-        """lm.initial()(prompt) advances through each byte."""
+        """lm(prompt) advances through each byte."""
         state = lm.initial()
         for ch in b'the ':
             state = state >> bytes([ch])
-        state2 = lm.initial()([bytes([ch]) for ch in b'the '])
+        state2 = lm([bytes([ch]) for ch in b'the '])
         assert state.logp == pytest.approx(state2.logp, abs=1e-10)
 
     def test_top_predictions_after_the_space(self, lm):
@@ -81,11 +81,11 @@ class TestByteNgramGreedyDecode:
         assert b'the' in decoded
 
     def test_greedy_a_space(self, lm):
-        decoded = b''.join(lm.initial()([bytes([ch]) for ch in b'a ']).greedy_decode())
+        decoded = b''.join(lm([bytes([ch]) for ch in b'a ']).greedy_decode())
         assert decoded.startswith(b'bird')
 
     def test_greedy_the_d(self, lm):
-        decoded = b''.join(lm.initial()([bytes([ch]) for ch in b'the d']).greedy_decode())
+        decoded = b''.join(lm([bytes([ch]) for ch in b'the d']).greedy_decode())
         assert decoded.startswith(b'og')
 
 

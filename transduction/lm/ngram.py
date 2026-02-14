@@ -8,14 +8,12 @@ Provides two variants:
 Usage:
     # Byte-level
     lm = ByteNgramLM.train(b"Hello world.", n=3)
-    state = lm.initial()
-    state = state >> b'H'
+    state = lm >> b'H'
     print(state.logp_next[b'e'])   # log P(e | H)
 
     # Character-level
     lm = CharNgramLM.train("abcabc", n=2)
-    state = lm.initial()
-    state = state >> 'a'
+    state = lm >> 'a'
     print(state.logp_next['b'])    # log P(b | a)
 """
 
@@ -23,7 +21,7 @@ import numpy as np
 from collections import Counter
 from functools import cached_property
 
-from transduction.lm.base import LMState, LogpNext
+from transduction.lm.base import LM, LMState, LogpNext
 
 
 # ===========================================================================
@@ -97,7 +95,7 @@ class NgramState(LMState):
         return f'NgramState({ctx_bytes!r})'
 
 
-class ByteNgramLM:
+class ByteNgramLM(LM):
     """Byte-level n-gram language model with Laplace smoothing.
 
     Compatible with the StateLM/TokenizedLLM interface used by
@@ -230,7 +228,7 @@ class CharNgramState(LMState):
         return f'CharNgramState({self._context!r})'
 
 
-class CharNgramLM:
+class CharNgramLM(LM):
     """Character-level n-gram language model with Laplace smoothing.
 
     Works with arbitrary symbol alphabets (strings, characters, etc.).
@@ -239,8 +237,7 @@ class CharNgramLM:
 
     Usage:
         lm = CharNgramLM.train("abcabc", n=2)
-        state = lm.initial()
-        state = state >> 'a'
+        state = lm >> 'a'
         print(state.logp_next['b'])
     """
 

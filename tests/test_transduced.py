@@ -5,7 +5,7 @@ import numpy as np
 from collections import defaultdict
 
 from transduction import examples, FST
-from transduction.lm.base import LMState
+from transduction.lm.base import LM, LMState
 from transduction.lm.base import LogpNext
 from transduction.lm.ngram import ByteNgramLM, CharNgramLM, NgramState
 from transduction.lm.transduced import TransducedLM, TransducedState, logsumexp
@@ -45,7 +45,7 @@ class TinyState(LMState):
         return TinyState(self._probs, self.logp + lp)
 
 
-class TinyLM:
+class TinyLM(LM):
     def __init__(self):
         self.eos = '<EOS>'
     def initial(self):
@@ -65,7 +65,7 @@ def brute_force_pushforward(inner_lm, fst, target, max_source_len=8):
 
     def source_logp(source):
         """Compute log P_inner(source) including EOS."""
-        state = inner_lm.initial()(source)
+        state = inner_lm(source)
         return state.logp + state.logp_next[state.eos]
 
     # Group by source to deduplicate outputs (relation() may yield
@@ -135,9 +135,9 @@ class TestTransducedLM:
         fst = copy_fst(fst_alpha)
 
         tlm = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
-        state = tlm.initial() >> 'a'
+        state = tlm >> 'a'
 
-        inner_state = char_ngram_lm.initial() >> 'a'
+        inner_state = char_ngram_lm >> 'a'
         tlm_lp = state.logp_next
 
         for y in fst_alpha:
@@ -226,7 +226,7 @@ class TestTransducedLM:
         fst = copy_fst(fst_alpha)
         tlm = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
 
-        state = tlm.initial() >> 'a' >> 'b' >> 'a'
+        state = tlm >> 'a' >> 'b' >> 'a'
         assert state.path() == ['a', 'b', 'a']
 
     def test_logp_starts_at_zero(self, char_ngram_lm):
@@ -265,7 +265,7 @@ class TestTransducedLM:
                 return TinyState(self._probs, self.logp + lp,
                                  history=(self.history, token))
 
-        class TinyLM:
+        class TinyLM(LM):
             def __init__(self):
                 self.eos = '<EOS>'
             def initial(self):
@@ -446,8 +446,8 @@ class TestFusedTransducedLM:
         orig = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
         fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
 
-        orig_state = orig.initial() >> 'a'
-        fused_state = fused.initial() >> 'a'
+        orig_state = orig >> 'a'
+        fused_state = fused >> 'a'
 
         for y in fst_alpha:
             o = orig_state.logp_next[y]
@@ -565,7 +565,7 @@ class TestFusedTransducedLM:
         fst = copy_fst(fst_alpha)
         fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
 
-        state = fused.initial() >> 'a' >> 'b' >> 'a'
+        state = fused >> 'a' >> 'b' >> 'a'
         assert state.path() == ['a', 'b', 'a']
 
     def test_repr(self, char_ngram_lm):

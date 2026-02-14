@@ -5,6 +5,8 @@ from transformers.cache_utils import DynamicCache
 
 from functools import cached_property
 
+from transduction.lm.base import LM, LMState
+
 
 # ---------------------------------------------------------------------------
 # Vocabulary decoding (ported from tokenization.vocab.decode)
@@ -161,7 +163,7 @@ class LazyProb:
 
 # TODO: This class will encounter issues when its token vocabulary has multiple
 # token_ids that map to the same string of bytes.
-class TokenizedLLM:
+class TokenizedLLM(LM):
 
     def __init__(self, tokenizer, model, byte_level=True):
         self.tokenizer = tokenizer
@@ -196,9 +198,6 @@ def load_model_by_name(model_name, device=None, **kwargs):
         ),
         **kwargs,
     )
-
-
-from transduction.lm.base import LMState
 
 
 class StateLM(LMState):

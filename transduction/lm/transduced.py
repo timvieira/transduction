@@ -15,8 +15,7 @@ Usage:
     fst = examples.lowercase()
     tlm = TransducedLM(inner, fst)
 
-    state = tlm.initial()
-    state = state >> 'h'
+    state = tlm >> 'h'
     print(state.logp_next['e'])
     print(state.logp)
 """
@@ -25,7 +24,7 @@ import heapq
 
 import numpy as np
 
-from transduction.lm.base import LMState, LogpNext
+from transduction.lm.base import LM, LMState, LogpNext
 
 # Default incremental decomposition; can be overridden via TransducedLM constructor.
 from transduction.peekaboo_incremental import PeekabooState as _DefaultDecompState
@@ -283,7 +282,7 @@ class TransducedState(LMState):
         return f'TransducedState(target={self._peekaboo_state.target!r})'
 
 
-class TransducedLM:
+class TransducedLM(LM):
     """Incremental transduced language model.
 
     Computes the pushforward of an inner LM through an FST, providing

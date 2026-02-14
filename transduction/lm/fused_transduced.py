@@ -30,8 +30,7 @@ Usage:
     fst = examples.lowercase()
     tlm = FusedTransducedLM(inner, fst)
 
-    state = tlm.initial()
-    state = state >> 'h'
+    state = tlm >> 'h'
     print(state.logp_next['e'])
 """
 
@@ -39,7 +38,7 @@ import heapq
 import numpy as np
 from dataclasses import dataclass
 
-from transduction.lm.base import LMState, LogpNext
+from transduction.lm.base import LM, LMState, LogpNext
 from transduction.lm.transduced import logsumexp, _to_key, BeamItem
 from transduction.fst import EPSILON
 from transduction.precover_nfa import PeekabooLookaheadNFA as PeekabooPrecover
@@ -353,7 +352,7 @@ class FusedTransducedState(LMState):
         return f'FusedTransducedState(target={self._target!r})'
 
 
-class FusedTransducedLM:
+class FusedTransducedLM(LM):
     """Fused transduced language model.
 
     Combines decomposition and LM-weighted search into a single best-first
