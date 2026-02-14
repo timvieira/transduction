@@ -13,7 +13,6 @@ Usage:
 
 Available methods:
     rust            - Rust-accelerated decomposition (fastest)
-    rust_peekaboo   - Rust peekaboo algorithm
     nonrecursive_dfa - Python NonrecursiveDFADecomp
     peekaboo        - Python Peekaboo algorithm
     precover        - Python Precover (reference implementation)
@@ -46,7 +45,7 @@ from transduction.fsa import EPSILON
 from transduction.fst import FST
 
 # Decomposition methods
-from transduction.rust_bridge import RustDecomp, RustPeekaboo
+from transduction.rust_bridge import RustDecomp
 from transduction.dfa_decomp_nonrecursive import NonrecursiveDFADecomp
 from transduction.peekaboo_incremental import Peekaboo
 from transduction.eager_nonrecursive import Precover
@@ -60,7 +59,6 @@ DIRECT_METHODS = {
 
 # Methods that take (fst) then are called with (target) -> per-symbol results
 PEEKABOO_METHODS = {
-    'rust_peekaboo': RustPeekaboo,
     'peekaboo': Peekaboo,
 }
 
