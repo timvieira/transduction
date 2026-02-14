@@ -77,7 +77,7 @@ class IncrementalDecomposition(DecompositionResult):
         state.quotient           # FSA for target 'ab'
         state.remainder          # FSA for target 'ab'
 
-    Implementations: PeekabooState, IncrementalDFADecomp, LazyIncremental
+    Implementations: PeekabooState, TruncatedIncrementalDFADecomp, LazyIncremental
     """
     @abstractmethod
     def __rshift__(self, y) -> 'IncrementalDecomposition': ...
