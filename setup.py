@@ -4,6 +4,13 @@ requirements = [
     'numpy',
     'graphviz',
     'IPython',
+    'torch',
+    'transformers',
+    'matplotlib',
+    'datasets',
+    'tqdm',
+    'pandas',
+    'nltk',
 ]
 
 
