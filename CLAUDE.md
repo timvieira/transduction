@@ -11,11 +11,15 @@
 - `transduction/precover_nfa.py` — All PrecoverNFA variants (PrecoverNFA, TruncationMarkerPrecoverNFA, PopPrecoverNFA, TargetSideBuffer, Relevance, PeekabooLookaheadNFA, PeekabooFixedNFA)
 - `transduction/peekaboo_incremental.py` — Peekaboo algorithm (recommended for autoregressive decoding)
 - `transduction/peekaboo_nonrecursive.py` — Non-incremental peekaboo
+- `transduction/peekaboo_dirty.py` — DirtyPeekaboo (dirty-state incremental peekaboo)
 - `transduction/eager_nonrecursive.py` — Reference Precover implementation
 - `transduction/dfa_decomp_nonrecursive.py` — NonrecursiveDFADecomp
-- `transduction/dfa_decomp_incremental.py` — IncrementalDFADecomp (diverges on some inputs)
+- `transduction/dfa_decomp_incremental_truncated.py` — TruncatedIncrementalDFADecomp (dirty-state incremental with truncation)
 - `transduction/lazy_incremental.py` — LazyIncremental decomposition (finite-language FSTs only; diverges on infinite quotients)
+- `transduction/lazy_nonrecursive.py` — LazyNonrecursive decomposition (finite-language FSTs only)
+- `transduction/prioritized_lazy_incremental.py` — PrioritizedLazyIncremental (finite-language, heuristic BFS)
 - `transduction/token_decompose.py` — BPE-optimized fast path
+- `transduction/vibes.py` — Visualization/display utilities for automata (used in notebooks)
 - `transduction/enumeration.py` — LM-weighted path enumeration (prioritized_enumeration, importance_sampling)
 - `transduction/lazy.py` — Lazy automaton framework (LazyDeterminize, EpsilonRemove)
 - `transduction/applications/bpe.py` — BPE WFST builder (`bpe_wfst`)
@@ -43,10 +47,12 @@ Self-contained language model interface for use with enumeration/sampling:
 ### Rust Acceleration (`crates/transduction-core/`)
 
 - `decompose.rs` — Generic FST decomposition (powerset det + universality)
-- `peekaboo.rs` — Peekaboo recursive decomposition (per-symbol Q/R via step-wise BFS)
+- `peekaboo.rs` — DirtyPeekaboo (dirty-state incremental per-symbol Q/R via single-pass BFS)
+- `incremental.rs` — DirtyDecomp (dirty-state incremental decomposition)
 - `fst.rs` — FST struct, indexes, universality checks
 - `precover.rs` — PrecoverNFA with eps closure caching (Rc<Vec<u64>> avoids cloning)
 - `powerset.rs` — PowersetArena (hash-consing DFA states; single-element fast path for 99% of BPE cases)
+- `minimize.rs` — DFA minimization
 - `py.rs` — PyO3 bindings (RustFst, RustFsa, DecompResult, PeekabooDecompResult)
 
 ## Dependencies
@@ -64,20 +70,23 @@ Eliminated deps (previously external, now inlined):
 
 ## Test Status
 
-- `test_general.py`: 90/91 pass, 1 xfail (`test_triplets_of_doom[recursive_dfa_decomp]` — pre-existing Python timeout)
+- `test_general.py`: 162 passed, 14 skipped
+- `test_finite.py`: 40 pass
 - `test_enumeration.py`: 12/12 pass (9 small grammar tests + 3 BPE-scale GPT-2 integration tests)
 - `test_push_labels.py`: 30 pass
 - `test_transduced.py`: 23 pass
 - `test_general.py` tests the **general-case** algorithms (handle infinite quotients/remainders):
-  NonrecursiveDFADecomp, PeekabooState, PeekabooNonrecursive, TokenDecompose, RustDecomp, RustPeekaboo.
-  IncrementalDFADecomp is also included but xfailed on triplets_of_doom (diverges without target-buffer truncation).
-- **Finite-only algorithms are excluded from test_general.py.** These diverge on
-  FSTs with infinite quotients because they don't truncate the target buffer:
-  - `LazyIncremental` — enumerates source *strings* (not states); universality check is PSPACE-complete and diverges in practice on infinite quotients.
-  - `IncrementalDFADecomp` — partially general but diverges on some inputs (triplets_of_doom) for the same reason (no truncation).
+  NonrecursiveDFADecomp, TruncatedIncrementalDFADecomp, PeekabooState, PeekabooNonrecursive,
+  DirtyPeekaboo, TokenDecompose, RustDecomp, RustDirtyState, RustDirtyPeekaboo.
+- **Finite-only algorithms are excluded from test_general.py** and tested in
+  `test_finite.py`. These diverge on FSTs with infinite quotients because they
+  don't truncate the target buffer:
+  - `LazyIncremental` — enumerates source *strings* (not states); diverges on infinite quotients.
+  - `LazyNonrecursive` — same limitation.
+  - `PrioritizedLazyIncremental` — heuristic-guided BFS; finite-only.
   - The distinguishing mechanism is **target-buffer truncation**: algorithms that
-    truncate (NonrecursiveDFADecomp, Peekaboo variants, Rust backends) terminate
-    on all inputs; those that don't (IncrementalDFADecomp, LazyIncremental) may diverge.
+    truncate (NonrecursiveDFADecomp, TruncatedIncrementalDFADecomp, Peekaboo
+    variants, Rust backends) terminate on all inputs; those that don't may diverge.
   - When adding new algorithms or test cases, classify them as general vs finite-only
     and put them in the appropriate test file.
 
@@ -111,3 +120,9 @@ See `TODO.md` in the project root for documentation and naming improvements.
 
 Generated reports go in `reports/` at the project root.
 Generated data goes in `output/` at the project root (gitignored).
+
+## Important: Notebooks
+
+Jupyter notebooks (`*.ipynb`) in this project are actively used and important.
+When searching for usage of modules, functions, or code, ALWAYS include
+notebooks in the search — not just `.py` files.

@@ -88,14 +88,15 @@ Peekaboo supports incremental extension via the `>>` operator, reusing computati
 Drop-in replacements for the Python algorithms:
 
 ```python
-from transduction.rust_bridge import RustDecomp, RustPeekaboo
+from transduction.rust_bridge import RustDecomp, RustDirtyPeekaboo
 
 # Generic decomposition (Rust)
 result = RustDecomp(fst, target='ab')
 
-# Peekaboo (Rust) — 3-25x faster than Python
-rust_peekaboo = RustPeekaboo(fst)
-decomps = rust_peekaboo('ab')
+# Dirty-state peekaboo (Rust) — persists DFA state across decoding steps
+dirty = RustDirtyPeekaboo(fst)
+decomps = dirty.decompose_next()  # first call builds DFA
+# extend target incrementally — only re-expands dirty states
 ```
 
 ### LM-weighted enumeration
@@ -131,12 +132,13 @@ sample = sampler.sample(max_length=50)
 | `Peekaboo` | `peekaboo_nonrecursive.py` | No | Simpler peekaboo variant without `>>` |
 | `TokenDecompose` | `token_decompose.py` | No | BPE-optimized fast path (requires `all_input_universal` FST) |
 | `RustDecomp` | `rust_bridge.py` | No | Rust generic decomposition |
-| `RustPeekaboo` | `rust_bridge.py` | No | Rust peekaboo (3-25x speedup) |
+| `DirtyPeekaboo` | `peekaboo_dirty.py` | Yes | Dirty-state incremental peekaboo |
 | `RustDirtyState` | `rust_bridge.py` | Yes | Rust incremental decomposition with dirty-state tracking |
+| `RustDirtyPeekaboo` | `rust_bridge.py` | Yes | Rust dirty-state incremental peekaboo |
 
 ### Choosing an algorithm
 
-- **Autoregressive decoding (token by token):** Use `RustPeekaboo` for best performance, or `PeekabooState` (Python) if the Rust extension is unavailable.
+- **Autoregressive decoding (token by token):** Use `RustDirtyPeekaboo` or `RustDirtyState` for best performance, or `PeekabooState` / `DirtyPeekaboo` (Python) if the Rust extension is unavailable. The dirty-state variants persist DFA state across decoding steps, avoiding redundant recomputation.
 - **BPE tokenizers:** Check `check_all_input_universal(fst)` first — if true, `TokenDecompose` gives massive speedups (5000x+).
 - **One-shot decomposition:** Use `RustDecomp` or `Precover`.
 
@@ -151,6 +153,7 @@ transduction/                Python package
   precover_nfa.py            PrecoverNFA variants (PrecoverNFA, PeekabooLookaheadNFA, etc.)
   peekaboo_incremental.py    Peekaboo algorithm (recommended for autoregressive decoding)
   peekaboo_nonrecursive.py   Non-incremental peekaboo
+  peekaboo_dirty.py          Dirty-state incremental peekaboo
   eager_nonrecursive.py      Reference Precover implementation
   dfa_decomp_nonrecursive.py Non-incremental DFA decomposition
   dfa_decomp_incremental.py  Incremental DFA decomposition (diverges on some inputs)
@@ -160,6 +163,8 @@ transduction/                Python package
   lazy.py                    Lazy automaton framework (on-demand determinization)
   lazy_incremental.py        LazyIncremental decomposition (finite-language FSTs only)
   lazy_nonrecursive.py       LazyNonrecursive decomposition
+  prioritized_lazy_incremental.py  PrioritizedLazyIncremental (finite-language, heuristic BFS)
+  vibes.py                   Visualization/display utilities for automata
   rust_bridge.py             Python <-> Rust conversion layer
   examples.py                Example FSTs for testing
   applications/              Application-specific FST builders
