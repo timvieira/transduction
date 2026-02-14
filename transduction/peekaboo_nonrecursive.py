@@ -180,4 +180,5 @@ class FilteredDFA(Lazy):
         return self.dfa.arcs_x(state, x)
 
     def is_final(self, state):
-        return any(ys.startswith(self.target) and self.fst.is_final(i) for (i, ys) in state)
+        N = len(self.target)
+        return any(ys[:N] == self.target and self.fst.is_final(i) for (i, ys) in state)
