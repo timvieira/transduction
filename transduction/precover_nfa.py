@@ -15,9 +15,7 @@ Summary
 - PopPrecoverNFA: Pop/suffix-oriented variant — buffer shrinks from the target.
   Used by: Precover (impl='pop'). Experimental.
 - TargetSideBuffer: Simplest unbounded buffer accumulation; needs Relevance wrapper.
-  Used by: IncrementalDFADecomp.
-- Relevance: Filter wrapper that prunes irrelevant buffer states.
-  Used by: IncrementalDFADecomp (wraps TargetSideBuffer).
+- Relevance: Filter wrapper that prunes irrelevant buffer states (wraps TargetSideBuffer).
 - PeekabooLookaheadNFA: K-lookahead truncation with truncation bit.
   Used by: PeekabooState (peekaboo_incremental).
 - PeekabooFixedNFA: Fixed N+1 truncation, no truncation bit.
@@ -251,7 +249,7 @@ class TargetSideBuffer(Lazy):
 
     State format: ``(i, ys)`` where ``ys`` accumulates all FST output.
 
-    Used by: IncrementalDFADecomp (wrapped with Relevance).
+    See also: Relevance (filter wrapper).
     """
 
     def __init__(self, f):
@@ -282,7 +280,7 @@ class Relevance(Lazy):
     Wraps another Lazy automaton and only keeps states where the buffer
     ``ys`` is a prefix of the target or vice versa.
 
-    Used by: IncrementalDFADecomp (wraps TargetSideBuffer).
+    Wraps TargetSideBuffer.
     """
 
     def __init__(self, base, target):
