@@ -11,6 +11,7 @@ requirements = [
     'tqdm',
     'pandas',
     'nltk',
+    'pynini',
 ]
 
 
