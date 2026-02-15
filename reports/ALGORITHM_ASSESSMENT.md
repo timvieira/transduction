@@ -15,7 +15,7 @@ have terminated. Both are represented as finite automata.
 
 ---
 
-## Current Implementations (2026-02-13)
+## Implementations
 
 ### General-Case Decomposition Algorithms
 
@@ -28,12 +28,17 @@ including those with infinite quotient/remainder languages.
 | `NonrecursiveDFADecomp` | Python | `dfa_decomp_nonrecursive.py` | No | Same algorithm, cleaner interface |
 | `TruncatedIncrementalDFADecomp` | Python | `dfa_decomp_incremental_truncated.py` | Yes | Dirty-state incremental DFA decomp |
 | `PeekabooState` | Python | `peekaboo_incremental.py` | Yes | **Recommended.** Batched next-symbol |
-| `Peekaboo` | Python | `peekaboo_nonrecursive.py` | No | Non-incremental peekaboo |
+| `Peekaboo` (nonrecursive) | Python | `peekaboo_nonrecursive.py` | No | Non-incremental peekaboo |
+| `Peekaboo` (incremental helper) | Python | `peekaboo_incremental.py` | — | Internal helper used by `PeekabooState` |
 | `DirtyPeekaboo` | Python | `peekaboo_dirty.py` | Yes | Dirty-state incremental peekaboo |
 | `TokenDecompose` | Python | `token_decompose.py` | No | BPE fast path (`all_input_universal` FSTs only) |
 | `RustDecomp` | Rust | `rust_bridge.py` → `decompose.rs` | No | 3-10x faster than Python |
-| `RustDirtyState` | Rust | `rust_bridge.py` | Yes | Rust-backed dirty-state incremental |
-| `RustDirtyPeekaboo` | Rust | `rust_bridge.py` | Yes | Rust-backed dirty-state peekaboo |
+| `RustDirtyState` | Rust | `rust_bridge.py` → `incremental.rs` | Yes | Rust-backed dirty-state incremental |
+| `RustDirtyPeekaboo` | Rust | `rust_bridge.py` → `peekaboo.rs` | Yes | Rust-backed dirty-state peekaboo |
+
+Note: `Peekaboo` exists in two files. The nonrecursive variant in `peekaboo_nonrecursive.py`
+extends `DecompositionResult`. The helper class in `peekaboo_incremental.py` is used
+internally by `PeekabooState`. The `__init__.py` exports the latter.
 
 ### Finite-Only Decomposition Algorithms
 
@@ -58,12 +63,12 @@ quotients. Tested separately in `test_finite.py`.
 
 | Class | File | Description |
 |-------|------|-------------|
-| `LMState` | `lm/base.py` | ABC: `logp_next`, `eos`, `>>`, `__call__`, `greedy_decode`, `sample_decode` |
+| `LM` / `LMState` / `LogpNext` | `lm/base.py` | ABCs: `logp_next`, `eos`, `>>`, `__call__`, `greedy_decode`, `sample_decode` |
 | `ByteNgramLM` / `CharNgramLM` | `lm/ngram.py` | Lightweight n-gram LMs for testing |
-| `StateLM` | `lm/statelm.py` | Incremental LM state with KV-cache |
-| `TokenizedLLM` | `lm/statelm.py` | Wraps HuggingFace causal LMs |
+| `StateLM` / `TokenizedLLM` | `lm/statelm.py` | Incremental LM state with KV-cache; wraps HuggingFace causal LMs |
 | `load_model_by_name` | `lm/statelm.py` | Load `'gpt2'`, `'meta-llama/...'`, etc. |
-| `TransducedLM` | `lm/transduced.py` | Pushforward of an inner LM through an FST |
+| `TransducedLM` | `lm/transduced.py` | Pushforward of an inner LM through an FST (beam-sum or SIR inference) |
+| `FusedTransducedLM` | `lm/fused_transduced.py` | Single-pass interleaved decomposition + LM search |
 
 Self-contained (no external tokenization deps). Example:
 ```python
@@ -122,14 +127,15 @@ Use **`RustDecomp`** or **`NonrecursiveDFADecomp`**.
 
 ## General vs Finite-Only: The Truncation Distinction
 
-The key mechanism that separates general-case algorithms from finite-only ones is
+The key mechanism separating general-case algorithms from finite-only ones is
 **target-buffer truncation**. Algorithms that truncate the target buffer
 (`NonrecursiveDFADecomp`, `TruncatedIncrementalDFADecomp`, Peekaboo variants, Rust
-backends) terminate on all inputs. Those that don't (`LazyIncremental`)
-may diverge on FSTs with infinite quotients.
+backends) terminate on all inputs. Those that don't (`LazyIncremental`,
+`LazyNonrecursive`, `PrioritizedLazyIncremental`) may diverge on FSTs with
+infinite quotients.
 
 When adding new algorithms or test cases, classify them as general vs finite-only
-and put them in the appropriate test file (`test_general.py` vs `test_finite.py`).
+and place them in the appropriate test file (`test_general.py` vs `test_finite.py`).
 
 ---
 
@@ -140,8 +146,8 @@ and put them in the appropriate test file (`test_general.py` vs `test_finite.py`
 | Example | Rust | Python | Speedup |
 |---------|------|--------|---------|
 | newspeak2 (depth=3) | 3.0 ms | 67.0 ms | 22x |
-| triplets_of_doom (depth=13) | 27 µs | 278 µs | 10x |
-| parity (depth=5) | 13 µs | 318 µs | 25x |
+| triplets_of_doom (depth=13) | 27 us | 278 us | 10x |
+| parity (depth=5) | 13 us | 318 us | 25x |
 
 ### TokenDecompose (BPE FSTs)
 
@@ -152,36 +158,41 @@ and put them in the appropriate test file (`test_general.py` vs `test_finite.py`
 
 ---
 
-## Key Optimizations Applied
+## Key Optimizations
 
-1. **`all_input_universal` precomputation** — O(|arcs|) check; skips universality BFS entirely for BPE/replace FSTs
+1. **`all_input_universal` precomputation** — O(|arcs|) check; skips universality BFS entirely for BPE/replace FSTs.
 
-2. **Token-level position tracking** — For hub-structured FSTs, NFA states are just positions `{0..N}` instead of `(fst_state, position)`. Collapses 7000 intermediate states per token to 1.
+2. **Token-level position tracking** — For hub-structured FSTs, NFA states are just positions `{0..N}` instead of `(fst_state, position)`. Collapses thousands of intermediate states per token to 1.
 
-3. **Peekaboo batching** — Build one DFA for all next symbols, not $|\mathcal{Y}|$ separate decompositions
+3. **Peekaboo batching** — Build one DFA for all next symbols, not $|\mathcal{Y}|$ separate decompositions.
 
-4. **Dirty-state persistence** — Incremental algorithms (`TruncatedIncrementalDFADecomp`, `DirtyPeekaboo`, Rust dirty variants) persist DFA state across decoding steps, avoiding redundant recomputation as the target prefix grows.
+4. **Dirty-state persistence** — Incremental algorithms persist DFA state across decoding steps, re-expanding only dirty/border states affected by the target extension.
 
-5. **Rust acceleration** — Packed `u64` NFA states, interned `u32` DFA states, `Rc<Vec>` eps cache, single-element intern fast path
+5. **Rust acceleration** — Packed `u64` NFA states, interned `u32` DFA states, `Rc<Vec>` eps cache, single-element intern fast path.
 
-6. **UniversalityFilter cascade** — AUI fast path → witness check → monotonicity caches → BFS fallback
+6. **UniversalityFilter cascade** — AUI fast path -> witness check -> monotonicity caches -> BFS fallback.
 
 ---
 
 ## Test Status
 
-- **`test_general.py`**: 148 passed, 14 skipped
-- **`test_finite.py`**: 40 passed
-- **`test_enumeration.py`**: 12 passed (including BPE-scale GPT-2 integration)
-- **`test_push_labels.py`**: 30 passed
-- **`test_transduced.py`**: 23 passed
+- **`test_general.py`**: 307 tests collected
+- **`test_finite.py`**: 70 tests collected
+- **`test_enumeration.py`**: 55 tests collected
+- **`test_push_labels.py`**: 35 tests collected
+- **`test_transduced.py`**: 47 tests collected
+- **Total**: 663 tests across 10 test files
 
 ---
 
 ## Dependencies
 
-**Library:** `numpy`, `torch`, `transformers`, `arsenal`
+**Core library:** `numpy`, `graphviz`, `IPython`
 
-**Test-only:** `genparse`
+**LM integration:** `torch`, `transformers`
 
-**Eliminated:** `genlm`, `tokenization` (inlined into `transduction/lm/statelm.py`)
+**Test-only:** `pytest`, `genparse`
+
+**Optional:** `pynini` (PTB FST construction), `nltk` (PTB testing), `datasets` (WikiText), `matplotlib` (notebooks/benchmarks)
+
+**Eliminated:** `arsenal` (inlined into `util.py`), `genlm` (replaced with local `decode_hf_tokenizer`), `tokenization` (inlined into `lm/statelm.py`)

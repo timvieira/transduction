@@ -2,12 +2,12 @@
 
 ## Feature Matrix
 
-| | Incremental (`>>`) | Batched next-sym | Dirty-state | Buffer truncation | State-based | UnivFilter | General (∞ quotients) | Rust | Special req |
+| | Incremental (`>>`) | Batched next-sym | Dirty-state | Buffer truncation | State-based | UnivFilter | General (inf quotients) | Rust | Special req |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|---|
 | **Reference** | | | | | | | | | |
-| `Precover` | | | | | ✓ | ✓ | ✓ | | |
+| `Precover` | | | | N | ✓ | ✓ | ✓ | | |
 | **DFA Decomposition** | | | | | | | | | |
-| `NonrecursiveDFADecomp` | | | | | ✓ | ✓ | ✓ | | |
+| `NonrecursiveDFADecomp` | | | | N | ✓ | ✓ | ✓ | | |
 | `TruncatedIncrementalDFADecomp` | ✓ | ✓† | ✓ | N | ✓ | ✓ | ✓ | | |
 | **Peekaboo** | | | | | | | | | |
 | `PeekabooState` | ✓ | ✓ | resume-frontiers | N+K | ✓ | ✓ | ✓ | | |
@@ -30,11 +30,11 @@
 
 - **Incremental (`>>`)** — Extends by one target symbol, reusing prior computation (vs rebuilding from scratch).
 - **Batched next-sym** — Computes Q/R for *all* possible next symbols in one pass (the peekaboo idea).
-- **Dirty-state** — On `>>`, only re-expands DFA states affected by the extension (frontier/border states). Resume-frontiers is the peekaboo variant of this idea.
+- **Dirty-state** — On `>>`, only re-expands DFA states affected by the extension (frontier/border states). "Resume-frontiers" is the peekaboo variant; "skip-steps" means the DirtyPeekaboo approach of skipping already-completed peekaboo steps.
 - **Buffer truncation** — Truncates the target-side buffer at depth N, N+1, or N+K to bound the state space. This is *the* mechanism that separates algorithms that terminate on general FSTs from those that don't.
 - **State-based** — Explores automaton states (finite) vs source strings (potentially infinite).
-- **UnivFilter** — Uses the cascading `UniversalityFilter` (all-input-universal fast path → ip-universal witnesses → monotonicity caches → BFS fallback) vs a simpler bare BFS.
-- **General (∞ quotients)** — Terminates on FSTs where the quotient language is infinite (e.g., `triplets_of_doom`).
+- **UnivFilter** — Uses the cascading `UniversalityFilter` (all-input-universal fast path -> ip-universal witnesses -> monotonicity caches -> BFS fallback) vs a simpler bare BFS.
+- **General (inf quotients)** — Terminates on FSTs where the quotient language is infinite (e.g., `triplets_of_doom`).
 
 ## Natural groupings
 
@@ -43,18 +43,18 @@ The two most important axes are **buffer truncation** and **state-based explorat
 Within the general-case algorithms, the key design choices are:
 1. **Incremental vs non-incremental** — amortizes work across decoding steps
 2. **Batched vs per-symbol** — the peekaboo insight that one BFS can classify all next symbols
-3. **Dirty-state vs full rebuild** — the newest optimization, avoids re-expanding the stable interior of the DFA
+3. **Dirty-state vs full rebuild** — avoids re-expanding the stable interior of the DFA
 
 ## Precover NFA variants
 
-Each algorithm is parameterized by which NFA it builds over the FST:
+Each algorithm builds over a specific NFA variant defined in `precover_nfa.py`. The NFA variant determines the buffer structure, truncation behavior, and state format.
 
-| NFA Variant | Buffer | Truncation | State format | Used by |
-|---|---|---|---|---|
-| `PrecoverNFA` | push, grows to target prefix | none (bounded at N) | `(i, ys)` | Precover, NonrecursiveDFADecomp, LazyNonrecursive |
-| `TruncationMarkerPrecoverNFA` | push, tracks info loss | at N; `truncated` distinguishes eps vs non-eps overflow | `(i, ys, truncated)` | Precover (push-truncated mode) |
-| `TargetSideBuffer` | unconditional accumulation | none (unbounded) | `(i, ys)` | (archived) |
-| `PeekabooLookaheadNFA` | push, K-lookahead | at N+K with truncation bit | `(i, ys, truncated)` | PeekabooState |
-| `PeekabooFixedNFA` | push, fixed N+1 | at N+1, no truncation bit | `(i, ys)` | Peekaboo (nonrecursive) |
-| `PeekabooLookaheadNFA` | push, K-lookahead | at N+K with truncation bit | `(i, ys, truncated)` | PeekabooState, DirtyPeekaboo, RustDirtyPeekaboo |
-| `FrontierMarkerPrecoverNFA` | push, tracks position | at N; `at_frontier` = (len(ys)==N), enables dirty-state detection without cache eviction | `(i, ys, at_frontier)` | TruncatedIncrementalDFADecomp, RustDirtyState |
+| NFA Variant | Class in `precover_nfa.py` | Buffer | Truncation | State format | Used by |
+|---|---|---|---|---|---|
+| `PrecoverNFA` | ✓ | push, grows to target prefix | at N (bounded) | `(i, ys)` | Precover, NonrecursiveDFADecomp, LazyNonrecursive |
+| `TruncationMarkerPrecoverNFA` | ✓ | push, tracks info loss | at N; `truncated` flag distinguishes eps vs non-eps overflow | `(i, ys, truncated)` | Precover (push-truncated mode) |
+| `TargetSideBuffer` | ✓ | unconditional accumulation | none (unbounded) | `(i, ys)` | (archived) |
+| `PeekabooLookaheadNFA` | ✓ | push, K-lookahead | at N+K with truncation bit | `(i, ys, truncated)` | PeekabooState, DirtyPeekaboo |
+| `PeekabooFixedNFA` | ✓ | push, fixed N+1 | at N+1, no truncation bit | `(i, ys)` | Peekaboo (nonrecursive) |
+
+Note: `TruncatedIncrementalDFADecomp` and `RustDirtyState` use a frontier-marker approach conceptually similar to `TruncationMarkerPrecoverNFA` — tracking whether each NFA state is at the frontier (`|ys| == N`) to enable dirty-state detection. In the Rust implementation, this is handled directly in `incremental.rs` via `max_bufpos` tracking rather than a separate NFA class.

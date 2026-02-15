@@ -1,14 +1,13 @@
-# Branch `eps-chain-collapsing`: Optimization Report
+# Epsilon-Chain Collapsing: Optimization Report
 
 ## Overview
 
-This branch introduces four optimizations to the decomposition pipeline, targeting
-both the Rust-accelerated and Python codepaths. The changes reduce the cost of
-universality detection (the main bottleneck in decomposition) and shrink powerset
-state sizes by eliminating transit-only NFA states from epsilon closures.
+This report documents four optimizations introduced to the decomposition pipeline,
+targeting both Rust and Python codepaths. The changes reduce the cost of universality
+detection (the main bottleneck in decomposition) and shrink powerset state sizes by
+eliminating transit-only NFA states from epsilon closures.
 
-All 77 Python tests pass.
-All 10 Rust unit tests pass.
+These optimizations are now merged into `main` and reflected in the current codebase.
 
 ---
 
@@ -20,21 +19,17 @@ All 10 Rust unit tests pass.
 
 In the precover NFA, epsilon closures can include many "transit-only" states —
 NFA states whose FST state has only epsilon-input arcs and that aren't NFA-final.
-These states:
-- Generate no non-epsilon NFA arcs (don't affect DFA transitions in `compute_all_arcs`)
-- Don't affect DFA finality
-- Only serve as intermediaries in epsilon chains
-
-Including them inflates powerset state sizes, which makes interning slower (larger
-vectors to hash), universality checks slower (more states to explore), and the
-overall DFA larger.
+These states generate no non-epsilon NFA arcs (don't affect DFA transitions),
+don't affect DFA finality, and only serve as intermediaries in epsilon chains.
+Including them inflates powerset state sizes, slowing interning, universality
+checks, and overall DFA construction.
 
 ### Solution
 
-**`fst.rs`**: Add a per-FST-state flag `has_non_eps_input: Vec<bool>`, computed once
+**`fst.rs`**: A per-FST-state flag `has_non_eps_input: Vec<bool>`, computed once
 during FST construction. True if the state has at least one arc with non-epsilon input.
 
-**`precover.rs`**: Add an `is_productive()` predicate on NFA states:
+**`precover.rs`**: An `is_productive()` predicate on NFA states:
 
 ```rust
 fn is_productive(&self, packed: u64) -> bool {
@@ -48,8 +43,8 @@ A state is productive if it can generate non-epsilon arcs OR if it's NFA-final.
 Transit-only states (epsilon-only, non-final) are filtered out.
 
 **`eps_closure_single_cached`**: The BFS still follows all epsilon arcs to find all
-reachable states (unchanged), but then filters the result to keep only productive
-states before caching:
+reachable states, but then filters the result to keep only productive states before
+caching:
 
 ```rust
 let mut result: Vec<u64> = all_reachable
@@ -71,53 +66,47 @@ For any powerset state S, let S' = {s in S : is_productive(s)}. Then:
 
 ### Impact
 
-For FSTs with long epsilon chains (e.g., BPE trie structures), this can
-significantly reduce average powerset state sizes. For FSTs without epsilon
-chains, the filter is a no-op — every state is productive.
+For FSTs with long epsilon chains (e.g., BPE trie structures), this significantly
+reduces average powerset state sizes. For FSTs without epsilon chains, the filter
+is a no-op — every state is productive.
 
 ---
 
 ## Optimization 2: UniversalityFilter (Multi-Strategy Optimizer)
 
-**Files**: `decompose.rs` (Rust), `fst.py` (Python)
+**Files**: `decompose.rs` (Rust), `universality.py` (Python)
 
 ### Problem
 
-The old `is_universal()` function in `decompose.rs` had two strategies:
+The old `is_universal()` function had two strategies: a fast path
+(`all_input_universal`) and a BFS fallback with a flat cache of known-universal
+DFA state IDs. The flat cache only helped when the *exact same* DFA state was
+re-encountered. It missed two common patterns:
 
-1. A fast path: if `all_input_universal`, skip the check entirely.
-2. A BFS fallback with a flat `FxHashSet<u32>` cache of known-universal DFA state IDs.
-
-The flat cache only helped when the *exact same* DFA state was re-encountered.
-It missed two common patterns:
-
-- **Supersets**: If state S is universal, any S' ⊇ S is also universal (monotonicity).
-- **Subsets**: If state S is non-universal, any S' ⊆ S is also non-universal.
+- **Supersets**: If state S is universal, any S' where S is a subset is also universal (monotonicity).
+- **Subsets**: If state S is non-universal, any S' where S' is a subset of S is also non-universal.
 
 ### Solution
 
-Replace the flat cache with a `UniversalityFilter` struct implementing five
-strategies in priority order:
+Replace the flat cache with a `UniversalityFilter` implementing five strategies
+in priority order:
 
 1. **Fast path**: If `all_input_universal`, return true immediately.
 2. **Witness check**: If any NFA element in the powerset state is a known
-   ip-universal witness (see Optimization 3), the state is universal. This is an
-   O(|S|) set-intersection check.
+   ip-universal witness (see Optimization 3), the state is universal. O(|S|) check.
 3. **Superset monotonicity**: If a known-universal set u is a subset of the
-   current set (u ⊆ S), then S is universal. Uses hit-counting: for each
+   current set (u is a subset of S), then S is universal. Uses hit-counting: for each
    element of S, increment hit counts for cached entries containing that element.
    If any entry's count reaches its stored size, it's a subset match.
-4. **Subset monotonicity**: If S is a subset of a known-non-universal set (S ⊆ nu),
-   then S is non-universal. Uses set-intersection of entry-ID lists: for each
-   element of S, intersect the set of negative cache entries containing it. If
-   the intersection is non-empty, some negative entry is a superset.
+4. **Subset monotonicity**: If S is a subset of a known-non-universal set (S is a subset of nu),
+   then S is non-universal. Uses set-intersection of entry-ID lists.
 5. **BFS fallback**: Full sub-BFS determinization. Results are added to the
    positive or negative cache for future lookups.
 
 ### Element-Indexed Caches
 
-Both the positive and negative caches use element-indexed data structures
-(inverted indexes) rather than linear scans over stored sets:
+Both positive and negative caches use element-indexed data structures (inverted
+indexes) rather than linear scans over stored sets:
 
 ```rust
 // Positive cache: element -> list of entry IDs containing it
@@ -128,32 +117,26 @@ pos_sizes: Vec<usize>,  // entry_id -> stored set size
 neg_index: FxHashMap<u64, Vec<u32>>,
 ```
 
-The Python implementation mirrors this structure using `defaultdict(set)`.
-
-### Impact
-
-Monotonicity caching avoids redundant BFS for states that are strict
-supersets/subsets of previously-seen states. The element-indexed lookup avoids
-O(n * m) linear scans over cached sets, replacing them with hash lookups.
+The Python implementation (`UniversalityFilter` in `universality.py`) mirrors
+this structure using `defaultdict(set)`.
 
 ---
 
 ## Optimization 3: Per-State IP-Universal Witnesses
 
-**Files**: `fst.rs`
+**Files**: `fst.rs`, `universality.py`
 
 ### Problem
 
 The `all_input_universal` flag is all-or-nothing: either the *entire* FST's input
 projection is universal from the start state, or the flag is false. For FSTs where
-only some sub-machines are universal (e.g., a composition of a universal and a
-non-universal transducer), this provides no benefit.
+only some sub-machines are universal, this provides no benefit.
 
 ### Solution
 
-Add `compute_ip_universal_states()`: a greatest-fixpoint computation that
-determines, for each individual FST state q, whether the input projection of the
-FST started from ip_eps_close({q}) accepts Sigma*.
+`compute_ip_universal_states()`: a greatest-fixpoint computation that determines,
+for each individual FST state q, whether the input projection of the FST started
+from ip_eps_close({q}) accepts Sigma*.
 
 **Algorithm**: Start by assuming all states are candidates. Iteratively remove
 states that fail any of three conditions:
@@ -165,40 +148,32 @@ states that fail any of three conditions:
 
 Iterate until no more states are removed (greatest fixpoint).
 
-**Integration with UniversalityFilter**: During initialization, pack each
-ip-universal FST state q as the NFA state `(q, target_len)` — this is the NFA
-state representing "FST state q, having consumed the entire target." These packed
-states form the witness set. During universality checking, if any NFA element in
-a powerset state matches a witness, the state is immediately known to be universal.
-
-### Impact
-
-For FSTs where some sub-machines are universal but not all, this provides a
-fast-path that avoids BFS for those sub-machine states. For fully-universal FSTs,
-`all_input_universal` already short-circuits before witnesses are checked.
+**Integration**: During `UniversalityFilter` initialization, pack each ip-universal
+FST state q as the NFA state `(q, target_len)`. These form the witness set. During
+universality checking, if any NFA element in a powerset state matches a witness,
+the state is immediately known to be universal.
 
 ---
 
 ## Optimization 4: `check_all_input_universal` Closure Caching
 
-**Files**: `fst.rs`
+**Files**: `fst.rs`, `universality.py`
 
 ### Problem
 
-The pre-existing `check_all_input_universal` function called `ip_eps_close()` once
-per source alphabet symbol to compute each symbol's successor closure. For GPT-2
-BPE (~50K symbols, ~98K states), this meant ~50K BFS traversals over ~98K states,
-causing FST construction to hang.
+`check_all_input_universal` called `ip_eps_close()` once per source alphabet symbol
+to compute each symbol's successor closure. For GPT-2 BPE (~50K symbols, ~98K states),
+this meant ~50K BFS traversals — causing FST construction to hang.
 
 ### Root Cause
 
 In BPE FSTs, all ~50K token symbols route to the same hub state. Their successor
 sets are identical, producing identical closures. But the old code computed each
-one independently.
+independently.
 
 ### Solution
 
-Cache closure results keyed by the (sorted, deduped) destination state set:
+Cache closure results keyed by the sorted, deduplicated destination state set:
 
 ```rust
 let mut closure_cache: FxHashMap<Vec<u32>, bool> = FxHashMap::default();
@@ -219,42 +194,30 @@ for (_sym, raw_dests) in &by_symbol {
 
 ### Impact
 
-For BPE FSTs: 50K BFS calls reduced to 1. FST construction goes from
-hanging indefinitely to completing in ~0.7s.
+For BPE FSTs: 50K BFS calls reduced to 1. FST construction goes from hanging
+indefinitely to completing in ~0.7s.
 
 ---
 
 ## Optimization 5: `arcs_x` Methods (Python)
 
-**Files**: `eager_nonrecursive.py`,
-`peekaboo_nonrecursive.py`, `peekaboo_incremental.py`
+**Files**: `eager_nonrecursive.py`, `peekaboo_nonrecursive.py`, `peekaboo_incremental.py`
 
-### Change
-
-Added `arcs_x(state, x)` methods to the various lazy NFA/DFA wrapper classes.
-These return only the successor states for a specific input symbol x, avoiding
-the overhead of generating all arcs and then filtering. This is the Python-side
-analogue of `index_ix_j` in the Rust FST.
+Added `arcs_x(state, x)` methods to lazy NFA/DFA wrapper classes. These return
+only successor states for a specific input symbol x, avoiding the overhead of
+generating all arcs and then filtering. This is the Python-side analogue of
+`index_ix_j` in the Rust FST.
 
 ---
 
 ## Known Issue: `extract_token_bytes` Structural Mismatch
 
-During benchmarking, we discovered that `token_decompose.rs`'s `extract_token_bytes`
-assumes non-epsilon input arcs emanate FROM the hub state (start state), but
-`bpe_wfst()` constructs FSTs with the opposite structure: epsilon-input arcs FROM
-the hub to trie nodes, and token-input arcs FROM leaf states back TO the hub.
+`token_decompose.py`'s `extract_token_bytes` assumes non-epsilon input arcs
+emanate FROM the hub state (start state), but `bpe_wfst()` constructs FSTs with
+the opposite structure: epsilon-input arcs FROM the hub to trie nodes, and
+token-input arcs FROM leaf states back TO the hub.
 
-This means `token_decompose` produces trivially empty results (DFA=1 state, 0 arcs)
-on real BPE FSTs from `bpe_wfst`. This is a **pre-existing bug** not introduced
-by this branch. The token_decompose dispatch is preserved as-is for FSTs that do
-match its expected structure.
-
----
-
-## Test Results
-
-```
-Rust:  10 passed
-Python: 50 passed
-```
+This means `TokenDecompose` produces trivially empty results (DFA=1 state, 0 arcs)
+on BPE FSTs from `bpe_wfst()` that don't match its expected hub structure. This is
+a pre-existing issue not introduced by these optimizations. The `TokenDecompose`
+fast path remains correct for FSTs that do match the expected structure.

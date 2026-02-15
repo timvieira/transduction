@@ -7,21 +7,20 @@ alphabet $\mathcal{Y}$, and a target string $\boldsymbol{y} \in \mathcal{Y}^*$, 
 **decomposition problem** partitions the source precover
 $\mathcal{P}(\boldsymbol{y}) = \text{proj}_\mathcal{X}(T \circ
 \boldsymbol{y}\mathcal{Y}^*)$ into a **quotient** $Q(\boldsymbol{y})$ and
-**remainder** $R(\boldsymbol{y})$ such that:
+**remainder** $R(\boldsymbol{y})$:
 
 $$\mathcal{P}(\boldsymbol{y}) = Q(\boldsymbol{y}) \cdot \mathcal{X}^* \sqcup R(\boldsymbol{y})$$
 
-where $Q$ is the set of source prefixes whose continuations always produce
-outputs beginning with $\boldsymbol{y}$ (i.e., the source prefix is
-*universal* over $\mathcal{X}$), and $R$ is the set of prefixes that produce
-$\boldsymbol{y}$ but are not universal. The quotient and remainder are
-represented as finite-state automata (FSAs).
+$Q$ contains source prefixes whose every continuation produces output beginning
+with $\boldsymbol{y}$ (i.e., the prefix is *universal* over $\mathcal{X}$).
+$R$ contains source prefixes that produce $\boldsymbol{y}$ exactly but are not
+universal. Both are represented as finite-state automata (FSAs).
 
 In **autoregressive decoding**, the target is built one symbol at a time:
 $\varepsilon \to y_1 \to y_1 y_2 \to \cdots$. Each step requires a fresh
-decomposition. A naive approach recomputes the full decomposition from scratch
-at each step. The dirty-state algorithm exploits the incremental structure of
-prefix extensions to avoid redundant work.
+decomposition. Recomputing from scratch at each step is wasteful. The
+dirty-state algorithm exploits the incremental structure of prefix extensions
+to avoid redundant work.
 
 ## 2. The Precover NFA and Powerset DFA
 
@@ -52,18 +51,16 @@ $\text{proj}_\mathcal{X}(T \circ \boldsymbol{y}\mathcal{Y}^*)$.
 
 ### 2.2 Powerset Determinization
 
-The Precover NFA is determinized on-the-fly via the **powerset
-construction**. Each DFA state is a set (frozenset) of NFA states. Let $d$
-denote a DFA state, so $d = \{(i_1, \boldsymbol{b}_1), (i_2,
-\boldsymbol{b}_2), \ldots\}$.
+The Precover NFA is determinized on-the-fly via the **powerset construction**.
+Each DFA state is a set (frozenset) of NFA states:
+$d = \{(i_1, \boldsymbol{b}_1), (i_2, \boldsymbol{b}_2), \ldots\}$.
 
-A DFA state $d$ is **final** if any of its NFA elements is final:
+A DFA state $d$ is **final** if any NFA element is final:
 $\exists (i, \boldsymbol{b}) \in d : i \in F_T \wedge \boldsymbol{b} = \boldsymbol{y}$.
 
 A final DFA state $d$ is **universal** if
-$L(\text{DFA rooted at } d) = \mathcal{X}^*$ — i.e., every possible continuation
-of the source string will still produce outputs beginning with
-$\boldsymbol{y}$.
+$L(\text{DFA rooted at } d) = \mathcal{X}^*$ — every continuation of the
+source string still produces output beginning with $\boldsymbol{y}$.
 
 ### 2.3 State Classification
 
@@ -453,43 +450,44 @@ frontier.
 
 ### 7.3 Python Implementation
 
-The Python `TruncatedIncrementalDFADecomp` mirrors the Rust `DirtyDecomp`
-closely. DFA states are Python `frozenset` objects containing `(fst_state,
-buffer_string)` tuples. Key differences from the Rust version:
+`TruncatedIncrementalDFADecomp` (in `dfa_decomp_incremental_truncated.py`)
+mirrors the Rust `DirtyDecomp`. DFA states are Python `frozenset` objects
+containing `(fst_state, buffer_string)` tuples. Key differences from the
+Rust version:
 
 - Uses Python `dict` and `set` for `_dfa_trans`, `_incoming`, `_dfa_status`.
 - The `__rshift__` operator transfers ownership of parent dicts via reference
   (O(1)) rather than copying.
-- The `decompose_next()` method creates `_OverlayChild` objects that hold
-  `_overlay_trans`, `_overlay_status`, and incoming diff sets, reading clean
-  arcs from the parent's dicts.
-- Overlay children flatten to full `TruncatedIncrementalDFADecomp` objects
-  when further incremental steps are needed (the `>>` and `decompose_next()`
-  on an overlay child trigger `_flatten()`).
+- `decompose_next()` creates `_OverlayChild` objects holding `_overlay_trans`,
+  `_overlay_status`, and incoming diff sets, reading clean arcs from the
+  parent's dicts.
+- Overlay children flatten to full `TruncatedIncrementalDFADecomp` objects on
+  demand — calling `>>` or `decompose_next()` on an overlay child triggers
+  `_flatten()`.
 
 ### 7.4 Rust Implementation
 
-The Rust `DirtyDecomp` struct stores all persistent state in flat `Vec`
-arrays indexed by `u32` state IDs. The PowersetArena uses `FxHashMap` (a
-fast non-cryptographic hash) for intern lookups, with a single-element fast
-path that hashes a `u64` instead of a `Vec` (the common case).
+`DirtyDecomp` (in `incremental.rs`) stores all persistent state in flat `Vec`
+arrays indexed by `u32` state IDs. The `PowersetArena` (in `powerset.rs`) uses
+`FxHashMap` for intern lookups, with a single-element fast path that hashes a
+`u64` directly instead of a `Vec` — this covers 99% of BPE DFA states.
 
-The Python-Rust bridge (`rust_bridge.py`) converts Python FST objects to
+The Python-Rust bridge (`rust_bridge.py`) converts Python `FST` objects to
 Rust `RustFst` via integer-mapped symbols and state IDs, delegates to
-`DirtyDecomp.decompose_dirty()` and `decompose_next_all()` via PyO3
-bindings, and converts the resulting `FsaResult` parallel arrays back to
+`DirtyDecomp.decompose_dirty()` and `decompose_next_all()` via PyO3 bindings
+(in `py.rs`), and converts the resulting `FsaResult` parallel arrays back to
 Python `FSA` objects.
 
 ## 8. Incremental Peekaboo (`DirtyPeekaboo`)
 
 ### 8.1 Background: Peekaboo Decomposition
 
-The **Peekaboo** algorithm computes per-symbol quotient and remainder — for
-each next output symbol $\gamma \in \mathcal{Y}$, it produces $Q(\boldsymbol{y}
-\cdot \gamma)$ and $R(\boldsymbol{y} \cdot \gamma)$ simultaneously. Instead
-of a single BFS over a fixed-target Precover NFA, peekaboo runs a sequence
-of **steps** $0, 1, \ldots, |\boldsymbol{y}|$, each using a
-`PeekabooNFAMapped` parameterized by `step_n`:
+**Peekaboo** computes per-symbol quotient and remainder — for each next output
+symbol $\gamma \in \mathcal{Y}$, it produces $Q(\boldsymbol{y} \cdot \gamma)$
+and $R(\boldsymbol{y} \cdot \gamma)$ simultaneously. Instead of a single BFS
+over a fixed-target Precover NFA, peekaboo runs a sequence of **steps**
+$0, 1, \ldots, |\boldsymbol{y}|$, each using a `PeekabooNFAMapped`
+parameterized by `step_n`:
 
 - NFA states are $(i, \text{buf\_len}, \text{extra\_sym}, \text{truncated})$
   packed into `u64`.
@@ -500,10 +498,10 @@ of **steps** $0, 1, \ldots, |\boldsymbol{y}|$, each using a
 - The final step ($k = |\boldsymbol{y}|$) produces the per-symbol Q/R
   classification.
 
-A non-incremental approach would rebuild everything from scratch:
-running all $|\boldsymbol{y}| + 1$ steps, constructing the arena and merged
-incoming arcs anew. This is wasteful in autoregressive decoding where the
-target grows by one symbol at a time.
+A non-incremental approach rebuilds everything from scratch: running all
+$|\boldsymbol{y}| + 1$ steps and constructing the arena and merged incoming
+arcs anew. This is wasteful in autoregressive decoding where the target grows
+by one symbol at a time.
 
 ### 8.2 Key Insight
 

@@ -1,4 +1,4 @@
-# FST Output Label Pushing — Stats Report
+# FST Output Label Pushing
 
 ## Overview
 
@@ -52,23 +52,23 @@ powerset state diversity during decomposition.
 
 ## Analysis
 
-**`lookahead`** shows a consistent 50% DFA state reduction with sorted-alphabet targets.
-This FST has genuine output delay: `0 --a/eps--> 1 --a/x--> ...` where the output `x`
-is delayed until the second input symbol. After pushing, the output appears earlier,
-reducing the number of distinct DFA states the decomposition needs to track.
+**`lookahead`** shows a consistent 50% DFA state reduction with sorted-alphabet
+targets. This FST has genuine output delay: `0 --a/eps--> 1 --a/x--> ...` where
+the output `x` is delayed until the second input symbol. After pushing, the output
+appears earlier, reducing the number of distinct DFA states the decomposition tracks.
 
-For most other FSTs in the test suite, the current Rust decomposition already achieves
-`max_powerset_size=1` (every DFA state is a singleton NFA state set), so output pushing
-has no additional effect — the powerset is already minimal.
+For most other test FSTs, the Rust decomposition already achieves
+`max_powerset_size=1` (every DFA state is a singleton NFA state set), so output
+pushing has no additional effect — the powerset is already minimal.
 
 The benefit of `push_labels()` is expected to be more significant for:
 - Larger FSTs (e.g., real BPE tokenizers) where output delay creates genuine gaps
   between buffer positions across different NFA paths
-- FSTs with long ε-output chains that delay buffer advancement
+- FSTs with long epsilon-output chains that delay buffer advancement
 - Cases where the powerset construction produces states with `max_powerset_size > 1`
 
 ## Correctness
 
 All 12 example FSTs pass relation-preservation tests (up to length 8).
 Idempotence verified for mystery1, mystery7, mystery8, samuel_example, lookahead.
-Full test suite: 107 passed, 1 xfailed (pre-existing), 0 regressions.
+Full push-labels test suite: 35 tests pass (`test_push_labels.py`).
