@@ -135,5 +135,5 @@
 
 ### examples.py
 
-- [ ] Dump pynini-based machine to Python code to remove pynini dependency
-  (line 294, commented out)
+- [x] Dump pynini-based machine to Python code to remove pynini dependency
+  (done — `newspeak2()` is the hand-coded version; pynini source kept as reference)

@@ -223,16 +223,6 @@ def parity(alphabet):
     return m
 
 
-#def duplicate(V):
-#    dup = FST()
-#    dup.add_start(0)
-#    for b in V:
-#        dup.add_arc(0, b, b, (1, b))
-#        dup.add_arc((1, b), EPSILON, b, 0)
-#    dup.add_stop(0)
-#    return dup
-
-
 def duplicate(V, K=2):
     "Duplicate (by K > 1) each symbol in the input string, e.g., `abc -> a^K b^K c^K`."
     assert K > 1
@@ -280,20 +270,10 @@ def doom(V, K):   # k-tuples of doom
     return dup.renumber()
 
 
-#def togglecase():
-#    T = FST()
-#    T.add_start(0)
-#    for b in range(256):
-#        if bytes([b]).isupper():
-#            T.add_arc(0, b, bytes([b]).lower()[0], 0)
-#        else:
-#            T.add_arc(0, b, bytes([b]).upper()[0], 0)
-#    T.add_stop(0)
-#    return T
-
-
-# # TODO: dump the machine to python code and create it here so that `pynini` is
-# # no longer a dependency.
+# Original pynini-based newspeak() for reference.  The hand-coded pure-Python
+# version is newspeak2() below, which was produced by dumping the pynini
+# machine's arcs.  Keeping the pynini source as documentation of how cdrewrite
+# was used to build the FST.
 # def newspeak():
 #     import pynini
 #
