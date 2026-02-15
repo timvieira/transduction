@@ -14,20 +14,6 @@
   `incoming`, `_univ`, etc.). The incremental computation logic is complex and
   there's no overview of how the pieces fit together.
 
-## High — causes confusion
-
-
-
-## Medium — naming issues
-
-- [ ] **Document `extract_token_bytes()` and `ByteTrie`
-  (`token_decompose.py`).** "Hub structure" comment is cryptic. What is a
-  "hub"? When does this work vs fail?
-
-- [ ] **Document `enumeration.py` classes.** `prioritized_enumeration` and
-  `importance_sampling` lack algorithmic explanations. `Item.weight` units
-  (log probability?) undocumented.
-
 ## Bugs / Limitations
 
 ### precover_nfa.py — Multi-character symbol support
@@ -44,20 +30,6 @@
   boundaries but changes hashing/comparison), (b) require single-char
   symbols and remap at the caller level, (c) store a separate length
   counter alongside the string buffer.
-
-### lm/transduced.py — Beam carry-forward for multi-state FSTs
-
-- [ ] **TransducedLM carry-forward drops intermediate DFA states.** In
-  `_compute_logp_next`, the `carry_forward` dict only captures beam items
-  at Q/R states (during the expansion phase) and at resume-frontier states
-  (during the drain phase).  Intermediate DFA states that are on the
-  resume frontier but are expanded before the drain phase are lost from the
-  carry-forward beam.  This causes `<< y` to fail with "Out of vocabulary"
-  on multi-state FSTs where the beam can't reach Q/R states for some target
-  symbols.  Symptom: works for 1-state FSTs (identity/copy, lowercase) but
-  fails for most multi-state FSTs (duplicate, small, etc.).
-
-  See the existing TODO comment at line 125 of transduced.py.
 
 ## Inline TODOs/XXXs from source
 
@@ -133,7 +105,3 @@
 - [ ] Unify test frameworks or bring recursive testing strategy to finite tests
   (line 6)
 
-### examples.py
-
-- [x] Dump pynini-based machine to Python code to remove pynini dependency
-  (done — `newspeak2()` is the hand-coded version; pynini source kept as reference)
