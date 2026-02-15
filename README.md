@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="images/logo.svg" alt="transduction" width="400">
-</p>
-
 # Transduction
 
 A library for **transducing language models** through finite state transducers (FSTs) — computing the induced distribution over output strings given an LM over input strings and a deterministic string-to-string transformation.
