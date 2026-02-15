@@ -22,7 +22,12 @@ impl PowersetArena {
     }
 
     /// Intern a sorted set of NFA states. Returns the u32 ID.
+    ///
     /// `any_final` indicates whether any NFA state in the set is final.
+    /// On cache hit, `is_final` is **always updated** to `any_final`.
+    /// This is essential when the arena is reused across different target
+    /// lengths (incremental decomposition), where the same NFA state set
+    /// can have different finality depending on the current target.
     pub fn intern(&mut self, sorted_set: Vec<u64>, any_final: bool) -> u32 {
         if sorted_set.len() == 1 {
             // Fast path: single-element set — hash a u64 instead of a Vec
@@ -80,5 +85,24 @@ mod tests {
 
         assert!(!arena.is_final[id0 as usize]);
         assert!(arena.is_final[id1 as usize]);
+    }
+
+    #[test]
+    fn test_intern_updates_is_final_on_hit() {
+        let mut arena = PowersetArena::new();
+
+        // Multi-element set: intern as non-final, then re-intern as final
+        let id0 = arena.intern(vec![1, 2, 3], false);
+        assert!(!arena.is_final[id0 as usize]);
+        let id1 = arena.intern(vec![1, 2, 3], true);
+        assert_eq!(id0, id1);
+        assert!(arena.is_final[id0 as usize]); // updated on hit
+
+        // Single-element set: same behavior
+        let id2 = arena.intern(vec![42], true);
+        assert!(arena.is_final[id2 as usize]);
+        let id3 = arena.intern(vec![42], false);
+        assert_eq!(id2, id3);
+        assert!(!arena.is_final[id2 as usize]); // updated on hit
     }
 }

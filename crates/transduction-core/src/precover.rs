@@ -285,13 +285,16 @@ impl<'a> PrecoverNFA<'a> {
             }
         }
 
-        // Drain non-empty entries into result, sort+dedup each bucket
+        // Collect non-empty entries into result, sort+dedup each bucket.
+        // Use replace instead of take so the buffer vecs keep their allocated
+        // capacity for reuse on subsequent calls.
         let mut result: Vec<(u32, Vec<u64>)> = Vec::with_capacity(by_symbol.len());
         for (&sym, v) in by_symbol.iter_mut() {
             if !v.is_empty() {
                 v.sort_unstable();
                 v.dedup();
-                result.push((sym, std::mem::take(v)));
+                let cap = v.capacity();
+                result.push((sym, std::mem::replace(v, Vec::with_capacity(cap))));
             }
         }
 

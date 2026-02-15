@@ -252,6 +252,11 @@ impl DirtyDecomp {
                 let sid_usize = sid as usize;
                 self.remove_outgoing_reverse_arcs(sid);
                 self.state_status[sid_usize] = STATUS_NEW;
+                // Note: this reset is technically redundant — the subsequent
+                // intern() call during BFS re-expansion will overwrite is_final
+                // with the correct value. Kept as a defensive safety net so that
+                // any code reading arena.is_final between reset and re-expansion
+                // sees a conservative `false` rather than a stale `true`.
                 self.arena.is_final[sid_usize] = false;
                 self.needs_reexpand[sid_usize] = false;
             }
@@ -558,6 +563,22 @@ impl DirtyDecomp {
     /// Uses a lightweight overlay per symbol that shares the base DFA's clean-state
     /// arcs. The base DirtyDecomp is NOT modified (arena may grow via interning,
     /// but arcs/status/reverse_arcs are untouched).
+    ///
+    /// # Shared arena correctness
+    ///
+    /// The `PowersetArena` is shared across all per-symbol iterations. This is
+    /// safe because:
+    ///
+    /// 1. All symbols extend the same target prefix, so `target_ext.len()` is
+    ///    identical for every symbol. Since NFA finality depends only on
+    ///    `buf_pos == target_len`, finality is consistent across symbols.
+    ///
+    /// 2. The overlay BFS computes finality directly from the NFA (line 719),
+    ///    never trusting `arena.is_final` for its own classification logic.
+    ///
+    /// 3. `bfs_universal` also computes finality from the NFA, and
+    ///    `PowersetArena::intern` updates `is_final` on cache hits, so
+    ///    sub-BFS-interned states always have correct finality.
     pub fn decompose_next_all(
         &mut self,
         fst: &Fst,

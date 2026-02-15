@@ -246,7 +246,10 @@ impl UniversalityFilter {
         num_source_symbols: usize,
         stats: &mut ProfileStats,
     ) -> bool {
-        if !arena.is_final[sid as usize] {
+        // Compute finality from the NFA rather than arena.is_final, which may
+        // be stale when the arena is reused across different target lengths
+        // (e.g., in decompose_next_all overlays).
+        if !arena.sets[sid as usize].iter().any(|&s| nfa.is_final(s)) {
             return false;
         }
 
@@ -258,7 +261,7 @@ impl UniversalityFilter {
         sub_worklist.push_back(sid);
 
         while let Some(cur) = sub_worklist.pop_front() {
-            if !arena.is_final[cur as usize] {
+            if !arena.sets[cur as usize].iter().any(|&s| nfa.is_final(s)) {
                 return false;
             }
 
