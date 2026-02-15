@@ -41,32 +41,38 @@ def save_svg(graph, path: Path):
 
 
 def generate_logo():
-    """Conceptual diagram: p(x) -> FST -> p(y)."""
+    """Conceptual diagram: LM over X* -> FST f -> transduced LM over Y*."""
     dot = Digraph(
         graph_attr=dict(
             rankdir='LR',
             bgcolor='transparent',
-            label='transduction',
-            labelloc='b',
-            fontname='Helvetica',
-            fontsize='16',
-            fontcolor='#333333',
-            pad='0.3',
+            pad='0.4',
+            nodesep='0.6',
+            ranksep='0.8',
         ),
-        node_attr=dict(fontname='Helvetica', fontsize='14'),
-        edge_attr=dict(arrowsize='0.7', color='#666666', penwidth='1.5'),
+        node_attr=dict(fontname='Helvetica', fontsize='13'),
+        edge_attr=dict(arrowsize='0.6', color='#555555', penwidth='1.2',
+                       fontname='Helvetica', fontsize='10'),
     )
-    dot.node('px', label='p(x)', shape='ellipse',
-             style='filled', fillcolor='#f9e4b7', color='#d4a84b',
-             fontcolor='#333333', width='0.9', height='0.5')
-    dot.node('fst', label='FST', shape='box',
-             style='filled,rounded', fillcolor='#4a86c8', color='#3a6ea5',
-             fontcolor='white', width='0.8', height='0.5')
-    dot.node('py', label='p(y)', shape='ellipse',
-             style='filled', fillcolor='#c8e6c9', color='#66bb6a',
-             fontcolor='#333333', width='0.9', height='0.5')
-    dot.edge('px', 'fst')
-    dot.edge('fst', 'py')
+    # Source LM
+    dot.node('px', label='<<b>p</b>(<i>x</i>)>',
+             shape='ellipse', style='filled',
+             fillcolor='#fff3e0', color='#e6a123', penwidth='1.5',
+             fontcolor='#333333', width='0.8', height='0.45')
+    # FST
+    dot.node('fst',
+             label='<<b><i>f</i></b><br/><font point-size="9">X* → Y*</font>>',
+             shape='box', style='filled,rounded',
+             fillcolor='#4a86c8', color='#35628f', penwidth='1.8',
+             fontcolor='white', width='0.9', height='0.55')
+    # Target LM
+    dot.node('py', label='<<b>p</b>(<i>y</i>)>',
+             shape='ellipse', style='filled',
+             fillcolor='#e8f5e9', color='#4caf50', penwidth='1.5',
+             fontcolor='#333333', width='0.8', height='0.45')
+
+    dot.edge('px', 'fst', label='  X*  ', fontcolor='#888888')
+    dot.edge('fst', 'py', label='  Y*  ', fontcolor='#888888')
     save_svg(dot, IMAGES_DIR / "logo.svg")
 
 

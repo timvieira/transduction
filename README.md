@@ -6,15 +6,19 @@
 
 A library for **transducing language models** through finite state transducers (FSTs) — computing the induced distribution over output strings given an LM over input strings and a deterministic string-to-string transformation.
 
-Given an FST `f` and a target prefix **y** already generated, transduction computes for each possible next output symbol `z` the set of source strings that transduce through `f` to produce **y**`z`... — partitioned into a **quotient** (sources that can continue) and a **remainder** (sources that have terminated):
+Consider a simple FST that deletes every `b` and maps `a` to `A` (the `delete_b` example):
 
-<p align="center"><img src="images/delete_b.svg" alt="Example FST: delete_b" width="250"></p>
+<p align="center"><img src="images/delete_b.svg" alt="The delete_b FST: deletes b, maps a→A" width="250"></p>
+
+Given this FST and a target prefix **y** already generated, transduction computes for each possible next output symbol `z` the **precover** — the set of source strings that transduce through the FST to produce **y**`z`... — partitioned into a **quotient** Q (sources that can continue with any suffix) and a **remainder** R (sources that have terminated):
 
 $$\mathcal{P}(\mathbf{y}) = \mathcal{Q}(\mathbf{y})\mathcal{X}^* \sqcup \mathcal{R}(\mathbf{y})$$
 
-<p align="center"><img src="images/decomposition.svg" alt="Precover decomposition (colored DFA)" width="500"></p>
+Below is the precover DFA for `delete_b` with target `'A'`. States are colored by their role: green = quotient (universal — accepts any source continuation), magenta = remainder (finite source strings), gold = intermediate (neither final nor universal).
 
-Both Q and R are returned as finite state automata (FSAs). Green states are quotient (universal — can continue with any source suffix), magenta states are remainder (finite, terminated), and gold states are intermediate.
+<p align="center"><img src="images/decomposition.svg" alt="Precover DFA for delete_b with target 'A'" width="500"></p>
+
+Both Q and R are returned as finite state automata (FSAs).
 
 ## What is transduction?
 
@@ -68,7 +72,9 @@ fst.add_arc(5, EPSILON, 'd', 0)
 # ... (plus identity arcs for other characters)
 ```
 
-<p align="center"><img src="images/newspeak2.svg" alt="newspeak2 FST" width="600"></p>
+The full `newspeak2` FST (which replaces `bad` → `ungood` while copying all other characters) is shown below. The library's visualization compresses identity arcs (e.g., `a`–`z` minus `b`) into compact labels:
+
+<p align="center"><img src="images/newspeak2.svg" alt="newspeak2 FST: replaces 'bad' with 'ungood'" width="600"></p>
 
 ### Compute a decomposition
 
@@ -251,7 +257,9 @@ examples.duplicate({'a','b'}, K=3)  # Triplicates each symbol
 examples.number_comma_separator(Domain={'0','1',',',' '})  # Comma disambiguation
 ```
 
-<p align="center"><img src="images/parity.svg" alt="parity FST" width="400"></p>
+For instance, the `parity` FST consumes an input string over `{a, b}`, outputs nothing until the end, then emits a single bit indicating whether the input length was even or odd:
+
+<p align="center"><img src="images/parity.svg" alt="parity FST: outputs 1 for even-length input, 0 for odd" width="400"></p>
 
 ## Authors
 
