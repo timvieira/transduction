@@ -1,19 +1,32 @@
+<p align="center">
+  <img src="images/logo.svg" alt="transduction" width="400">
+</p>
+
 # Transduction
 
-A library for computing **precover decompositions** of finite state transducers (FSTs), enabling constrained decoding for language models.
+A library for **transducing language models** through finite state transducers (FSTs) — computing the induced distribution over output strings given an LM over input strings and a deterministic string-to-string transformation.
 
 Given an FST `f` and a target prefix **y** already generated, transduction computes for each possible next output symbol `z` the set of source strings that transduce through `f` to produce **y**`z`... — partitioned into a **quotient** (sources that can continue) and a **remainder** (sources that have terminated):
 
-$$\mathcal{P}(\mathbf{y}) = \mathcal{Q}(\mathbf{y})\Sigma^* \sqcup \mathcal{R}(\mathbf{y})$$
+<p align="center"><img src="images/delete_b.svg" alt="Example FST: delete_b" width="250"></p>
 
-Both Q and R are returned as finite state automata (FSAs).
+$$\mathcal{P}(\mathbf{y}) = \mathcal{Q}(\mathbf{y})\mathcal{X}^* \sqcup \mathcal{R}(\mathbf{y})$$
 
-## Use cases
+<p align="center"><img src="images/decomposition.svg" alt="Precover decomposition (colored DFA)" width="500"></p>
 
-- **Constrained decoding** — force a language model to respect output format constraints (JSON, CSV, regex, etc.)
-- **Tokenizer-aware constraints** — handle BPE/WordPiece tokenization within the constraint framework
-- **Structured generation** — enforce grammars or schemas on LM output
-- **LM-weighted enumeration** — best-first search over valid source strings, weighted by LM log-probabilities
+Both Q and R are returned as finite state automata (FSAs). Green states are quotient (universal — can continue with any source suffix), magenta states are remainder (finite, terminated), and gold states are intermediate.
+
+## What is transduction?
+
+Given a language model **p(x)** over source strings X\* and an FST **f : X\* → Y\***, transduction computes the **pushforward distribution p(y)** over target strings. The precover decomposition P(y) = Q(y)X\* ⊔ R(y) enables incremental, symbol-by-symbol computation of this distribution — the key primitive for autoregressive decoding with any string-to-string transformation.
+
+### Applications
+
+- **BPE to character/byte-level LMs** — transduce GPT-2's BPE token distribution into a byte-level distribution (tokenizer inversion)
+- **Token-level to word-level LMs** — apply PTB-style tokenization as an FST to get word-level distributions
+- **DNA to amino acid sequence LMs** — codon translation tables as FSTs transform nucleotide LMs into protein-level distributions
+- **General string-to-string transformations** — case conversion, symbol deletion, pattern replacement, transliteration
+- **Constrained decoding** — a special case where the FST is the identity restricted to a constraint language (regex, grammar, schema)
 
 ## Installation
 
@@ -54,6 +67,8 @@ fst.add_arc(4, EPSILON, 'o', 5)
 fst.add_arc(5, EPSILON, 'd', 0)
 # ... (plus identity arcs for other characters)
 ```
+
+<p align="center"><img src="images/newspeak2.svg" alt="newspeak2 FST" width="600"></p>
 
 ### Compute a decomposition
 
@@ -162,7 +177,7 @@ transduction/                Python package
   lazy_incremental.py        LazyIncremental decomposition (finite-language FSTs only)
   lazy_nonrecursive.py       LazyNonrecursive decomposition
   prioritized_lazy_incremental.py  PrioritizedLazyIncremental (finite-language, heuristic BFS)
-  vibes.py                   Visualization/display utilities for automata
+  viz.py                     Visualization/display utilities for automata
   rust_bridge.py             Python <-> Rust conversion layer
   examples.py                Example FSTs for testing
   applications/              Application-specific FST builders
@@ -235,6 +250,8 @@ examples.togglecase()       # Swaps upper/lowercase
 examples.duplicate({'a','b'}, K=3)  # Triplicates each symbol
 examples.number_comma_separator(Domain={'0','1',',',' '})  # Comma disambiguation
 ```
+
+<p align="center"><img src="images/parity.svg" alt="parity FST" width="400"></p>
 
 ## Authors
 
