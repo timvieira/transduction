@@ -1,66 +1,6 @@
-import html
-
 from transduction.util import Integerizer
 from collections import defaultdict, deque
 from functools import lru_cache
-from graphviz import Digraph
-
-
-def _render_graphviz(states, start, stop, arc_iter, fmt_node, fmt_edge, sty_node):
-    """Shared graphviz renderer for FSA and FST.
-
-    Args:
-        states: set of states
-        start: set of start states
-        stop: set of stop/final states
-        arc_iter: callable(state) yielding (label_data, dest) pairs
-        fmt_edge: callable(src, label_data, dest) -> str
-        fmt_node: callable(state) -> str
-        sty_node: callable(state) -> dict of extra graphviz node attrs
-    """
-    g = Digraph(
-        graph_attr=dict(rankdir='LR'),
-        node_attr=dict(
-            fontname='Monospace',
-            fontsize='8',
-            height='.05', width='.05',
-            margin="0.055,0.042",
-            shape='box',
-            style='rounded',
-        ),
-        edge_attr=dict(
-            arrowsize='0.3',
-            fontname='Monospace',
-            fontsize='8',
-        ),
-    )
-
-    f = Integerizer()
-
-    # Start pointers
-    for i in start:
-        start_id = f'<start_{i}>'
-        g.node(start_id, label='', shape='point', height='0', width='0')
-        g.edge(start_id, str(f(i)), label='')
-
-    # Nodes
-    for i in states:
-        sty = dict(peripheries='2' if i in stop else '1')
-        sty.update(sty_node(i))
-        g.node(str(f(i)), label=html.escape(str(fmt_node(i))), **sty)
-
-    # Collect parallel-edge labels by (src, dst)
-    by_pair = defaultdict(list)
-    for i in states:
-        for label_data, j in arc_iter(i):
-            lbl = html.escape(str(fmt_edge(i, label_data, j)))
-            by_pair[(str(f(i)), str(f(j)))].append(lbl)
-
-    # Emit one edge per (src, dst) with stacked labels
-    for (u, v), labels in by_pair.items():
-        g.edge(u, v, label='\n'.join(sorted(labels)))
-
-    return g
 
 
 def dfs(Ps, arcs):
@@ -108,7 +48,6 @@ class FSA:
         return (frozenset(self.states),
                 frozenset(self.start),
                 frozenset(self.stop),
-#                frozenset(self.syms),
                 frozenset(self.arcs()))
 
     def __hash__(self):
@@ -116,10 +55,6 @@ class FSA:
 
     def __eq__(self, other):
         return self.as_tuple() == other.as_tuple()
-
-#    def __repr__(self):
-#        return f'<{self.__class__.__name__} id={id(self)}>'
-#        return repr(self.to_regex())
 
     def __repr__(self):
         x = ['{']   # todo: better print; include start/stop
@@ -141,6 +76,7 @@ class FSA:
         return self.graphviz()._repr_mimebundle_(*args, **kwargs)
 
     def graphviz(self, fmt_node=lambda x: x, sty_node=lambda x: {}, fmt_edge=lambda i,a,j: 'ε' if a == EPSILON else a):
+        from transduction.viz import _render_graphviz
         return _render_graphviz(
             self.states, self.start, self.stop,
             arc_iter=lambda i: self.arcs(i),
@@ -306,10 +242,6 @@ class FSA:
         "self^*"
         return one + self.p()
 
-#    def L(self, s):
-#        assert s in self.states
-#        return dfs({s}, self.arcs)
-
     def epsremove(self):
 
         eps_m = FSA()
@@ -423,7 +355,6 @@ class FSA:
         # create new equivalence classes of states
         minstates = {}
         for i, qs in enumerate(P):
-            #minstate = frozenset(qs)
             for q in qs:
                 minstates[q] = i #minstate
 
@@ -513,9 +444,6 @@ class FSA:
 
         assert len(self.start) == 1 and len(other.start) == 1
 
-        #self = self.renumber()
-        #other = other.renumber()
-
         [p] = self.start
         [q] = other.start
 
@@ -549,34 +477,6 @@ class FSA:
                     stack.append((r,s))
 
         return self.rename(iso.get) == other
-
-#    def to_regex(self):
-#        import numpy as np
-#        from semirings.regex import Symbol
-#        from semirings.kleene import kleene
-#
-#        n = len(self.states)
-#
-#        A = np.full((n,n), Symbol.zero)
-#        start = np.full(n, Symbol.zero)
-#        stop = np.full(n, Symbol.zero)
-#
-#        ix = Integerizer(list(self.states))
-#
-#        for i in self.states:
-#            for a, j in self.arcs(i):
-#                if a == eps:
-#                    A[ix(i),ix(j)] += Symbol.one
-#                else:
-#                    A[ix(i),ix(j)] += Symbol(a)
-#
-#        for i in self.start:
-#            start[ix(i)] += Symbol.one
-#
-#        for i in self.stop:
-#            stop[ix(i)] += Symbol.one
-#
-#        return start @ kleene(A, Symbol) @ stop
 
     def __and__(self, other):
         "intersection"
