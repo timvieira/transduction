@@ -28,6 +28,7 @@ impl PowersetArena {
             // Fast path: single-element set — hash a u64 instead of a Vec
             let key = sorted_set[0];
             if let Some(&id) = self.single_map.get(&key) {
+                self.is_final[id as usize] = any_final;
                 return id;
             }
             let id = self.sets.len() as u32;
@@ -38,6 +39,7 @@ impl PowersetArena {
         }
 
         if let Some(&id) = self.map.get(&sorted_set) {
+            self.is_final[id as usize] = any_final;
             return id;
         }
         let id = self.sets.len() as u32;
