@@ -1,22 +1,25 @@
 # Project Assessment: Delivering on the Transduced LM Mission
 
-## 2026-02-14
+## 2026-02-15
 
 ---
 
 ## Executive Summary
 
-The transduction library aims to efficiently compute next-symbol probabilities
-for a language model composed with a finite-state transducer — enabling
-constrained and transformed autoregressive generation. The algorithmic core is
-strong: Peekaboo decomposition, dirty-state persistence, BPE-specific fast
-paths, and Rust acceleration form a layered optimization stack that achieves
-real-time per-step costs on production-scale FSTs. However, the end-to-end
-product — `TransducedLM`, the thing users actually call — has a known
-carry-forward bug that limits it to single-state FSTs, the public API exports
-the wrong algorithms, and there is no CI to catch regressions. The path from
-"impressive research prototype" to "library others can use" requires fixing a
-small number of high-impact issues.
+The transduction library efficiently computes next-symbol probabilities for a
+language model composed with a finite-state transducer — enabling constrained
+and transformed autoregressive generation. The algorithmic core is strong:
+Peekaboo decomposition, dirty-state persistence, BPE-specific fast paths, and
+Rust acceleration form a layered optimization stack that achieves real-time
+per-step costs on production-scale FSTs. The user-facing `TransducedLM` now
+implements particle-based approximate inference with two modes: beam-sum
+(deterministic top-K, consistent as K → ∞) and SIR (sequential importance
+resampling, unbiased prefix probability estimates). Quotient states provide
+exact marginalization over infinitely many source continuations — the key
+variance reduction mechanism. CI, exports, and core documentation are in place.
+The remaining path to a production-ready library is: wire in the BPE fast path
+(TokenDecompose), batch LM calls for GPU utilization, and fix multi-character
+symbol handling.
 
 ---
 
@@ -73,10 +76,12 @@ The Rust bridge is optional and degrades gracefully. The LM submodule
 
 ### 4. Solid Test Infrastructure
 
-- **253+ passing tests** across 10 test files
+- **395+ passing tests** across 10 test files
 - Parametrized cross-algorithm validation catches disagreements automatically
 - Reference implementations (`Precover`) serve as correctness oracles
 - Real-model integration tests (GPT-2 + BPE FST in `test_enumeration.py`)
+- TransducedLM tests: multi-state FSTs, brute-force comparison, consistency
+  convergence, SIR unbiasedness
 - Clear general vs. finite-only test separation
 
 ### 5. Elegant User-Facing API
@@ -96,23 +101,16 @@ Users don't need to understand precovers, peekaboo, or dirty states. The
 
 ## What's Not Working
 
-### Critical: TransducedLM Carry-Forward Bug
+### Critical: TransducedLM Carry-Forward Bug — RESOLVED
 
-**Location:** `lm/transduced.py`, `_compute_logp_next()` beam carry-forward
-
-**Symptom:** "Out of vocabulary" errors on multi-state FSTs. Works for
-single-state FSTs (identity, lowercase, copy) but fails on multi-state FSTs
-(duplicate, small, most real transducers).
-
-**Root cause:** The `carry_forward` dict only captures beam items at Q/R
-states (during expansion) and resume-frontier states (during drain).
-Intermediate DFA states that sit on the resume frontier but are expanded
-before the drain phase are lost. The next step's beam can't reach Q/R states
-for some target symbols.
-
-**Impact:** This is the #1 blocker for the project's mission. TransducedLM is
-the product — the thing users call to get constrained generation. If it only
-works on trivial FSTs, the library doesn't deliver.
+Rewrote `TransducedLM` with particle-based inference. The carry-forward now
+uses `id()`-keyed dicts to deduplicate particles across Q/R/resume_frontier
+sets, preventing the double-counting that caused the original bug. Also added:
+- `Particle` class (replaces `BeamItem` for the main algorithm)
+- O(n) top-K selection via `np.argpartition` (beam-sum mode)
+- SIR mode with multinomial resampling and unbiased prefix probability
+- Backward-compat `max_beam`/`max_steps` parameter aliases
+- 13 new tests including multi-state FSTs, consistency, and SIR
 
 ### Critical: Wrong Algorithms Exported — RESOLVED
 
@@ -151,6 +149,14 @@ FSTs.
 multiple source-symbol expansions would improve GPU utilization dramatically
 for neural LMs.
 
+### Low: K and max_expansions Must Scale Together
+
+Beam-sum consistency requires both `K` (carry-forward budget) and
+`max_expansions` (per-step expansion budget) to grow to infinity. The
+defaults (K=100, max_expansions=1000) give a 10:1 ratio that works for
+most FSTs, but high-branching-factor FSTs may need a larger ratio.
+This coupling is not documented in the user-facing API.
+
 ---
 
 ## Codebase Health Metrics
@@ -172,12 +178,15 @@ for neural LMs.
 
 | Item | Severity | Location | Effort |
 |------|----------|----------|--------|
-| TransducedLM carry-forward bug | Critical | `lm/transduced.py` | Medium |
+| TransducedLM carry-forward bug | Resolved | `lm/transduced.py` | Done |
 | Wrong exports in `__init__.py` | Resolved | `__init__.py` | Done |
 | No CI | Resolved | `.github/workflows/` | Done |
 | Undocumented "precover" concept | Resolved | `base.py` | Done |
 | Multi-char symbol handling | High | `precover_nfa.py` | Medium |
 | No end-to-end example | High | — | Small |
+| TokenDecompose not wired into TransducedLM | High | `lm/transduced.py` | Small |
+| No batched LM calls | Medium | `lm/transduced.py` | Medium |
+| K/max_expansions coupling undocumented | Low | `lm/transduced.py` | Small |
 | No `__all__` declarations | Declined | `__init__.py` | — |
 | No type annotations | Medium | All modules | Large |
 | Utility modules untested | Low | `util.py`, `vibes.py` | Small |
@@ -190,14 +199,14 @@ for neural LMs.
 The mission is *efficiently support transduced LM*. Here's what to do, in
 priority order.
 
-### Phase 1: Make TransducedLM Work (1-2 weeks)
+### Phase 1: Make TransducedLM Work — COMPLETE
 
 **Goal:** A user can run `TransducedLM(lm, fst)` on arbitrary FSTs and get
 correct next-symbol probabilities.
 
-1. **Fix the carry-forward bug.** Save beam items at resume-frontier states
-   during expansion, not just during the drain phase. Add test coverage for
-   multi-state FSTs (duplicate, small, newspeak2) in `test_transduced.py`.
+1. **Fix the carry-forward bug.** Done — rewrote `TransducedLM` with
+   particle-based inference. `id()`-keyed dedup prevents double-counting
+   across Q/R/resume_frontier sets. 47 tests pass including multi-state FSTs.
 
 2. **Fix `__init__.py` exports.** Done — recommended algorithms exported.
 
@@ -220,9 +229,11 @@ correct next-symbol probabilities.
    some optimizations. Establish a baseline and identify the current
    bottleneck.
 
-7. **Batch source-symbol expansions.** Group beam items by DFA state,
+7. **Batch source-symbol expansions.** Group particles by DFA state,
    batch `lm_state >> x` calls into a single forward pass. This is the
-   biggest remaining performance win for GPU-backed LMs.
+   biggest remaining performance win for GPU-backed LMs. The current
+   implementation creates one `Particle` per child per expansion, each
+   requiring an independent `lm_state >> x` (KV-cache fork for neural LMs).
 
 8. **Benchmark regression tracking.** Run PTB benchmarks in CI, store timing
    in `output/`, alert on regressions > 20%.
@@ -265,12 +276,12 @@ correct next-symbol probabilities.
 | **Algorithms** | A | 12 implementations, well-tested, genuine innovations (Peekaboo, dirty-state) |
 | **Performance** | A- | 5000x BPE speedup, 25x Rust acceleration, 0.1ms per-step dirty-state |
 | **Architecture** | A- | Clean layering, no circular deps, optional Rust, self-contained LM module |
-| **Testing** | A- | 382+ tests, parametrized cross-validation, CI via GitHub Actions |
-| **End-to-End Product** | C | TransducedLM carry-forward bug blocks multi-state FSTs |
-| **API/Packaging** | C+ | Exports fixed; no end-to-end example yet |
+| **Testing** | A- | 395+ tests, parametrized cross-validation, CI via GitHub Actions |
+| **End-to-End Product** | A- | Particle-based beam-sum/SIR inference; quotient exact marginalization |
+| **API/Packaging** | B- | Exports fixed; no end-to-end example; TokenDecompose not auto-wired |
 | **Documentation** | C+ | Core concepts now documented; function-level docs still sparse |
 
-**Bottom line:** The hard part — fast, correct FST decomposition — is done.
-The easy part — wiring it into a working TransducedLM that users can import
-and call — is what remains. Phase 1 is small, high-leverage work that
-transforms this from a research prototype into a usable library.
+**Bottom line:** The hard parts — fast, correct FST decomposition AND a working
+`TransducedLM` with particle-based approximate inference — are done. Phase 1 is
+complete. The remaining work is performance (Phase 2: TokenDecompose integration,
+batched LM calls) and usability (Phase 3: multi-char symbols, examples, types).

@@ -2,18 +2,18 @@
 
 ## 1. Background and Problem Setting
 
-Given a finite-state transducer $T$ over input alphabet $\Sigma$ and output
-alphabet $\Gamma$, and a target string $\boldsymbol{y} \in \Gamma^*$, the
+Given a finite-state transducer $T$ over input alphabet $\mathcal{X}$ and output
+alphabet $\mathcal{Y}$, and a target string $\boldsymbol{y} \in \mathcal{Y}^*$, the
 **decomposition problem** partitions the source precover
-$\mathcal{P}(\boldsymbol{y}) = \text{proj}_\Sigma(T \circ
-\boldsymbol{y}\Gamma^*)$ into a **quotient** $Q(\boldsymbol{y})$ and
+$\mathcal{P}(\boldsymbol{y}) = \text{proj}_\mathcal{X}(T \circ
+\boldsymbol{y}\mathcal{Y}^*)$ into a **quotient** $Q(\boldsymbol{y})$ and
 **remainder** $R(\boldsymbol{y})$ such that:
 
-$$\mathcal{P}(\boldsymbol{y}) = Q(\boldsymbol{y}) \cdot \Sigma^* \sqcup R(\boldsymbol{y})$$
+$$\mathcal{P}(\boldsymbol{y}) = Q(\boldsymbol{y}) \cdot \mathcal{X}^* \sqcup R(\boldsymbol{y})$$
 
 where $Q$ is the set of source prefixes whose continuations always produce
 outputs beginning with $\boldsymbol{y}$ (i.e., the source prefix is
-*universal* over $\Sigma$), and $R$ is the set of prefixes that produce
+*universal* over $\mathcal{X}$), and $R$ is the set of prefixes that produce
 $\boldsymbol{y}$ but are not universal. The quotient and remainder are
 represented as finite-state automata (FSAs).
 
@@ -48,7 +48,7 @@ has been produced so far. The NFA is formally defined by:
   with *any* output $o$: emit $(i, \boldsymbol{y}) \xrightarrow{x} (j, \boldsymbol{y})$.
 
 The language of this NFA is exactly
-$\text{proj}_\Sigma(T \circ \boldsymbol{y}\Gamma^*)$.
+$\text{proj}_\mathcal{X}(T \circ \boldsymbol{y}\mathcal{Y}^*)$.
 
 ### 2.2 Powerset Determinization
 
@@ -61,7 +61,7 @@ A DFA state $d$ is **final** if any of its NFA elements is final:
 $\exists (i, \boldsymbol{b}) \in d : i \in F_T \wedge \boldsymbol{b} = \boldsymbol{y}$.
 
 A final DFA state $d$ is **universal** if
-$L(\text{DFA rooted at } d) = \Sigma^*$ — i.e., every possible continuation
+$L(\text{DFA rooted at } d) = \mathcal{X}^*$ — i.e., every possible continuation
 of the source string will still produce outputs beginning with
 $\boldsymbol{y}$.
 
@@ -292,9 +292,9 @@ Materialization proceeds in two passes:
 
 In autoregressive decoding, the `decompose_next()` operation must produce
 $Q(\boldsymbol{y} \cdot \gamma)$ and $R(\boldsymbol{y} \cdot \gamma)$ for
-*every* $\gamma \in \Gamma$ simultaneously. A naive approach calls
+*every* $\gamma \in \mathcal{Y}$ simultaneously. A naive approach calls
 `decompose_dirty` independently for each symbol, repeating the dirty/border
-identification and paying the full BFS cost $|\Gamma|$ times.
+identification and paying the full BFS cost $|\mathcal{Y}|$ times.
 
 ### 5.2 Overlay Architecture
 
@@ -302,7 +302,7 @@ The `decompose_next_all` method shares the dirty/border identification
 across all symbols and uses lightweight **overlays** for per-symbol branching:
 
 ```
-function DECOMPOSE_NEXT_ALL(T, y, Γ):
+function DECOMPOSE_NEXT_ALL(T, y, 𝒴):
     // Shared Phase: Identify dirty ∪ border (once for all symbols)
     dirty_border ← identify_dirty_border(reachable, max_bufpos, reverse_arcs)
     base_q_stops ← {sid ∈ reachable : status[sid] = QSTOP, sid ∉ dirty_border}
@@ -310,7 +310,7 @@ function DECOMPOSE_NEXT_ALL(T, y, Γ):
     evicted_eps_cache ← clone_and_evict(eps_cache)
 
     results ← {}
-    for each γ ∈ Γ:
+    for each γ ∈ 𝒴:
         // Per-symbol overlay: small dicts, not full DFA copies
         overlay_arcs ← {}      // sid → [(label, dest), ...]
         overlay_status ← {}    // sid → status
@@ -390,8 +390,8 @@ This avoids copying the full DFA for each symbol.
 ## 6. Complexity Analysis
 
 Let $n = |\text{reachable DFA states}|$, $D = |\text{dirty states}|$,
-$B = |\text{border states}|$, $k = |\Sigma|$ (input alphabet), and
-$m = |\Gamma|$ (output alphabet).
+$B = |\text{border states}|$, $k = |\mathcal{X}|$ (input alphabet), and
+$m = |\mathcal{Y}|$ (output alphabet).
 
 ### 6.1 Non-Incremental Decomposition
 
@@ -485,7 +485,7 @@ Python `FSA` objects.
 ### 8.1 Background: Peekaboo Decomposition
 
 The **Peekaboo** algorithm computes per-symbol quotient and remainder — for
-each next output symbol $\gamma \in \Gamma$, it produces $Q(\boldsymbol{y}
+each next output symbol $\gamma \in \mathcal{Y}$, it produces $Q(\boldsymbol{y}
 \cdot \gamma)$ and $R(\boldsymbol{y} \cdot \gamma)$ simultaneously. Instead
 of a single BFS over a fixed-target Precover NFA, peekaboo runs a sequence
 of **steps** $0, 1, \ldots, |\boldsymbol{y}|$, each using a

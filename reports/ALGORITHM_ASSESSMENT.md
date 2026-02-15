@@ -6,7 +6,7 @@ Given an FST `f` and a target prefix **y**, compute for each next symbol `z`:
 
 $$P(z \mid \mathbf{y}) \propto \sum_{x \in \mathcal{Q}(\mathbf{y}z)} P_{\text{LM}}(x) + \sum_{x \in \mathcal{R}(\mathbf{y}z)} P_{\text{LM}}(x \cdot \text{EOS})$$
 
-where $\mathcal{P}(\mathbf{y}) = \mathcal{Q}(\mathbf{y})\Sigma^* \sqcup \mathcal{R}(\mathbf{y})$ is the precover decomposition.
+where $\mathcal{P}(\mathbf{y}) = \mathcal{Q}(\mathbf{y})\mathcal{X}^* \sqcup \mathcal{R}(\mathbf{y})$ is the precover decomposition.
 
 The precover $\mathcal{P}(\mathbf{y})$ is the set of all source strings whose transduction
 through `f` begins with **y**. The quotient $\mathcal{Q}$ captures source strings that
