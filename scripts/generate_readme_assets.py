@@ -41,91 +41,98 @@ def save_svg(graph, path: Path):
 
 
 def generate_pushforward():
-    """Conceptual diagram: cloud of source strings mapped to cloud of target strings.
+    """Conceptual diagram: source distribution mapped through a lowercasing FST.
 
-    Uses the delete_b FST (deletes b, maps a→A) with a fictional source
-    distribution to illustrate many-to-one transduction and mass aggregation.
+    Shows realistic English strings with plausible LM probabilities being
+    transduced through a case-normalization FST, illustrating many-to-one
+    mass aggregation (e.g., "The", "the", "THE" all map to "the").
     """
-    # Source strings with fictional probabilities and their delete_b images
+    # Source strings: plausible LM probabilities for cased English words.
+    # FST: lowercase normalization (every character mapped to its lowercase).
     source_strings = [
-        ("a",   0.30, "A"),
-        ("b",   0.20, "ε"),
-        ("ab",  0.15, "A"),
-        ("aa",  0.10, "AA"),
-        ("ba",  0.08, "A"),
-        ("bb",  0.07, "ε"),
-        ("aab", 0.05, "AA"),
-        ("aba", 0.05, "AA"),
+        ("the",    0.218,  "the"),
+        ("The",    0.147,  "the"),
+        ("of",     0.109,  "of"),
+        ("a",      0.094,  "a"),
+        ("and",    0.086,  "and"),
+        ("is",     0.077,  "is"),
+        ("A",      0.064,  "a"),
+        ("And",    0.038,  "and"),
+        ("Is",     0.031,  "is"),
+        ("THE",    0.019,  "the"),
+        ("OF",     0.017,  "of"),
     ]
 
     # Aggregate target probabilities
     target_mass = {}
     for _, p, y in source_strings:
         target_mass[y] = target_mass.get(y, 0.0) + p
-    # Sort targets by mass descending
     target_strings = sorted(target_mass.items(), key=lambda t: -t[1])
 
-    def fontsize(p, lo=10, hi=20):
-        """Scale fontsize linearly with probability."""
-        return lo + (hi - lo) * (p / 0.53)  # 0.53 is max target mass
+    max_p = max(p for _, p in target_strings)
 
-    def bar(p, max_width=1.8):
-        """Node width scaled by probability."""
-        return 0.4 + max_width * (p / 0.53)
+    def fontsize(p, lo=9.5, hi=14):
+        return lo + (hi - lo) * (p / max_p)
+
+    def node_width(p, base=0.45, scale=1.4):
+        return base + scale * (p / max_p)
 
     dot = Digraph(
         graph_attr=dict(
             rankdir='LR',
             bgcolor='transparent',
-            pad='0.3',
-            nodesep='0.15',
-            ranksep='1.5',
+            pad='0.25',
+            nodesep='0.12',
+            ranksep='1.8',
             compound='true',
         ),
-        node_attr=dict(fontname='Monospace', fontsize='11', shape='box',
-                       style='filled,rounded', height='0.3', margin='0.08,0.04'),
-        edge_attr=dict(arrowsize='0.4', color='#bbbbbb', penwidth='0.7'),
+        node_attr=dict(fontname='Helvetica', fontsize='10', shape='box',
+                       style='filled,rounded', height='0.28',
+                       margin='0.1,0.035'),
+        edge_attr=dict(arrowsize='0.35', color='#cccccc', penwidth='0.6'),
     )
 
     # Source cloud
     with dot.subgraph(name='cluster_source') as s:
-        s.attr(label='<<b>p(x)</b>  over X*>', labelloc='t',
-               fontname='Helvetica', fontsize='12', fontcolor='#555555',
-               style='rounded,dashed', color='#d4a84b', bgcolor='#fffdf5',
-               penwidth='1.2')
+        s.attr(label='<<font point-size="11"><b>p(x)</b></font>>',
+               labelloc='t', fontname='Helvetica', fontcolor='#666666',
+               style='rounded', color='#dddddd', bgcolor='#fafafa',
+               penwidth='0.8')
         for x, p, _ in source_strings:
-            fs = f'{fontsize(p):.0f}'
-            w = f'{bar(p):.2f}'
-            lbl = f'<<font point-size="{fs}"><b>{x}</b></font>  <font point-size="9" color="#999999">.{p*100:.0f}</font>>'
-            s.node(f'x_{x}', label=lbl, fillcolor='#fff3e0', color='#e6a123',
-                   width=w, penwidth='1.0')
+            fs = f'{fontsize(p):.1f}'
+            w = f'{node_width(p):.2f}'
+            prob = f'{p:.3f}'[1:]   # ".218" style
+            lbl = (f'<<font point-size="{fs}">{x}</font>'
+                   f'<font point-size="8" color="#aaaaaa">  {prob}</font>>')
+            s.node(f'x_{x}', label=lbl,
+                   fillcolor='#fff8f0', color='#d9c5a0', penwidth='0.6')
 
     # Target cloud
     with dot.subgraph(name='cluster_target') as t:
-        t.attr(label='<<b>p(y)</b>  over Y*>', labelloc='t',
-               fontname='Helvetica', fontsize='12', fontcolor='#555555',
-               style='rounded,dashed', color='#4caf50', bgcolor='#f5fff5',
-               penwidth='1.2')
+        t.attr(label='<<font point-size="11"><b>p(y)</b></font>>',
+               labelloc='t', fontname='Helvetica', fontcolor='#666666',
+               style='rounded', color='#dddddd', bgcolor='#fafafa',
+               penwidth='0.8')
         for y, p in target_strings:
-            fs = f'{fontsize(p):.0f}'
-            w = f'{bar(p):.2f}'
-            display = y if y != 'ε' else 'ε'
-            lbl = f'<<font point-size="{fs}"><b>{display}</b></font>  <font point-size="9" color="#999999">.{p*100:.0f}</font>>'
-            t.node(f'y_{y}', label=lbl, fillcolor='#e8f5e9', color='#4caf50',
-                   width=w, penwidth='1.0')
+            fs = f'{fontsize(p):.1f}'
+            w = f'{node_width(p):.2f}'
+            prob = f'{p:.3f}'[1:]
+            lbl = (f'<<font point-size="{fs}">{y}</font>'
+                   f'<font point-size="8" color="#aaaaaa">  {prob}</font>>')
+            t.node(f'y_{y}', label=lbl,
+                   fillcolor='#f0f7f0', color='#a0c9a0', penwidth='0.6',
+                   width=w)
 
     # Mapping edges
-    for x, p, y in source_strings:
+    for x, _, y in source_strings:
         dot.edge(f'x_{x}', f'y_{y}')
 
-    # FST label between clusters (invisible node)
+    # FST label between clusters
     dot.node('fst_label',
-             label='<<font point-size="13"><b><i>f</i></b></font><br/>'
-                   '<font point-size="9">delete_b</font>>',
-             shape='none', fontname='Helvetica', fontcolor='#4a86c8')
-    # Position it between clusters via invisible edges
-    dot.edge('x_ab', 'fst_label', style='invis')
-    dot.edge('fst_label', 'y_A', style='invis')
+             label='<<font point-size="11" color="#555555"><i>f</i>  = lowercase</font>>',
+             shape='none', fontname='Helvetica')
+    dot.edge('x_and', 'fst_label', style='invis')
+    dot.edge('fst_label', 'y_and', style='invis')
 
     save_svg(dot, IMAGES_DIR / "pushforward.svg")
 
