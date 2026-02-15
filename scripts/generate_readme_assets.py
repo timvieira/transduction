@@ -49,19 +49,21 @@ def generate_pushforward():
     """
     from graphviz import Graph
 
-    # Source strings with plausible LM probabilities and their lowercase images
+    # Source strings: complete independent sentences with different casings.
+    # These must be obviously unrelated topics so readers don't mistake them
+    # for sequential fragments of one text.
     source_strings = [
-        ("the brown fox",     0.148, "the brown fox"),
-        ("The brown fox",     0.117, "the brown fox"),
-        ("THE BROWN FOX",     0.009, "the brown fox"),
-        ("a lazy dog",        0.106, "a lazy dog"),
-        ("A lazy dog",        0.079, "a lazy dog"),
-        ("jumped over it",    0.094, "jumped over it"),
-        ("Jumped Over It",    0.016, "jumped over it"),
-        ("and ran away",      0.072, "and ran away"),
-        ("And ran away",      0.043, "and ran away"),
-        ("is not so bad",     0.063, "is not so bad"),
-        ("Is Not So Bad",     0.022, "is not so bad"),
+        ("it is cold outside",   0.148, "it is cold outside"),
+        ("It is cold outside",   0.117, "it is cold outside"),
+        ("IT IS COLD OUTSIDE",   0.009, "it is cold outside"),
+        ("she likes coffee",     0.106, "she likes coffee"),
+        ("She likes coffee",     0.079, "she likes coffee"),
+        ("the bus is late",      0.094, "the bus is late"),
+        ("The bus is late",      0.047, "the bus is late"),
+        ("we need more time",    0.072, "we need more time"),
+        ("We Need More Time",    0.028, "we need more time"),
+        ("that was unexpected",  0.063, "that was unexpected"),
+        ("That Was Unexpected",  0.022, "that was unexpected"),
     ]
 
     # Aggregate target probabilities
