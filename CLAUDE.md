@@ -19,7 +19,7 @@
 - `transduction/lazy_nonrecursive.py` — LazyNonrecursive decomposition (finite-language FSTs only)
 - `transduction/prioritized_lazy_incremental.py` — PrioritizedLazyIncremental (finite-language, heuristic BFS)
 - `transduction/token_decompose.py` — BPE-optimized fast path
-- `transduction/vibes.py` — Visualization/display utilities for automata (used in notebooks)
+- `transduction/viz.py` — Visualization/display utilities for automata (used in notebooks)
 - `transduction/enumeration.py` — LM-weighted path enumeration (prioritized_enumeration, importance_sampling)
 - `transduction/lazy.py` — Lazy automaton framework (LazyDeterminize, EpsilonRemove)
 - `transduction/applications/bpe.py` — BPE WFST builder (`bpe_wfst`)

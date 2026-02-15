@@ -2,7 +2,7 @@ from collections import defaultdict, deque
 from functools import cached_property
 from itertools import zip_longest
 
-from transduction.fsa import FSA, EPSILON, _render_graphviz
+from transduction.fsa import FSA, EPSILON
 
 from transduction.util import Integerizer
 
@@ -191,6 +191,7 @@ class FST:
         fmt_edge=lambda i, a, j: f'{str(a[0] or "ε")}:{str(a[1] or "ε")}' if a[0] != a[1] else str(a[0]),
         sty_node=lambda i: {},
     ):
+        from transduction.viz import _render_graphviz
         return _render_graphviz(
             self.states, self.start, self.stop,
             arc_iter=lambda i: (((a, b), j) for a, b, j in self.arcs(i)),
