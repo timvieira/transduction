@@ -40,7 +40,7 @@ from transduction.applications.ptb import (
     SEP,
     MARKER,
 )
-from benchmark.data import load_wikitext, wikitext_detokenize
+from transduction.applications.wikitext import load_wikitext, wikitext_detokenize
 from transduction.fsa import EPSILON
 from transduction.fst import FST
 
