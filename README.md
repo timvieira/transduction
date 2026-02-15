@@ -18,7 +18,7 @@ Both Q and R are returned as finite state automata (FSAs).
 
 ## What is transduction?
 
-Given a language model **p(x)** over source strings X\* and an FST **f : X\* → Y\***, transduction computes the **pushforward distribution p(y)** over target strings. Multiple source strings may map to the same target, so p(y) sums over all source preimages. For example, a lowercasing FST maps "The", "the", and "THE" to the same target "the", aggregating their probabilities:
+Given a language model **p(x)** over source strings X\* and an FST **f : X\* → Y\***, transduction computes the **pushforward distribution p(y)** over target strings. Multiple source strings may map to the same target, so p(y) sums over all source preimages. For example, a lowercasing FST maps "The brown fox", "the brown fox", and "THE BROWN FOX" to the same target, aggregating their probabilities:
 
 <p align="center"><img src="images/pushforward.svg" alt="Pushforward: source distribution mapped through delete_b FST to target distribution" width="600"></p>
 

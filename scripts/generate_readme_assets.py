@@ -41,26 +41,27 @@ def save_svg(graph, path: Path):
 
 
 def generate_pushforward():
-    """Conceptual diagram: source distribution mapped through a lowercasing FST.
+    """Conceptual diagram: cloud of source strings mapped through an FST to a cloud of targets.
 
-    Shows realistic English strings with plausible LM probabilities being
-    transduced through a case-normalization FST, illustrating many-to-one
-    mass aggregation (e.g., "The", "the", "THE" all map to "the").
+    Uses neato with pinned positions for a scattered cloud layout.
+    Ellipsis nodes indicate the distributions are partial views.
+    Multi-word phrases with plausible probabilities; lowercasing FST.
     """
-    # Source strings: plausible LM probabilities for cased English words.
-    # FST: lowercase normalization (every character mapped to its lowercase).
+    from graphviz import Graph
+
+    # Source strings with plausible LM probabilities and their lowercase images
     source_strings = [
-        ("the",    0.218,  "the"),
-        ("The",    0.147,  "the"),
-        ("of",     0.109,  "of"),
-        ("a",      0.094,  "a"),
-        ("and",    0.086,  "and"),
-        ("is",     0.077,  "is"),
-        ("A",      0.064,  "a"),
-        ("And",    0.038,  "and"),
-        ("Is",     0.031,  "is"),
-        ("THE",    0.019,  "the"),
-        ("OF",     0.017,  "of"),
+        ("the brown fox",     0.148, "the brown fox"),
+        ("The brown fox",     0.117, "the brown fox"),
+        ("THE BROWN FOX",     0.009, "the brown fox"),
+        ("a lazy dog",        0.106, "a lazy dog"),
+        ("A lazy dog",        0.079, "a lazy dog"),
+        ("jumped over it",    0.094, "jumped over it"),
+        ("Jumped Over It",    0.016, "jumped over it"),
+        ("and ran away",      0.072, "and ran away"),
+        ("And ran away",      0.043, "and ran away"),
+        ("is not so bad",     0.063, "is not so bad"),
+        ("Is Not So Bad",     0.022, "is not so bad"),
     ]
 
     # Aggregate target probabilities
@@ -69,70 +70,80 @@ def generate_pushforward():
         target_mass[y] = target_mass.get(y, 0.0) + p
     target_strings = sorted(target_mass.items(), key=lambda t: -t[1])
 
-    max_p = max(p for _, p in target_strings)
+    max_src = max(p for _, p, _ in source_strings)
+    max_tgt = max(p for _, p in target_strings)
 
-    def fontsize(p, lo=9.5, hi=14):
-        return lo + (hi - lo) * (p / max_p)
-
-    def node_width(p, base=0.45, scale=1.4):
-        return base + scale * (p / max_p)
-
+    # Use neato with pinned positions for organic cloud layout
     dot = Digraph(
+        engine='neato',
         graph_attr=dict(
-            rankdir='LR',
             bgcolor='transparent',
-            pad='0.25',
-            nodesep='0.12',
-            ranksep='1.8',
-            compound='true',
+            pad='0.3',
+            overlap='false',
+            splines='true',
         ),
         node_attr=dict(fontname='Helvetica', fontsize='10', shape='box',
-                       style='filled,rounded', height='0.28',
-                       margin='0.1,0.035'),
-        edge_attr=dict(arrowsize='0.35', color='#cccccc', penwidth='0.6'),
+                       style='filled,rounded', height='0.26',
+                       margin='0.08,0.03'),
+        edge_attr=dict(arrowsize='0.3', color='#cccccc', penwidth='0.5'),
     )
 
-    # Source cloud
-    with dot.subgraph(name='cluster_source') as s:
-        s.attr(label='<<font point-size="11"><b>p(x)</b></font>>',
-               labelloc='t', fontname='Helvetica', fontcolor='#666666',
-               style='rounded', color='#dddddd', bgcolor='#fafafa',
-               penwidth='0.8')
-        for x, p, _ in source_strings:
-            fs = f'{fontsize(p):.1f}'
-            w = f'{node_width(p):.2f}'
-            prob = f'{p:.3f}'[1:]   # ".218" style
-            lbl = (f'<<font point-size="{fs}">{x}</font>'
-                   f'<font point-size="8" color="#aaaaaa">  {prob}</font>>')
-            s.node(f'x_{x}', label=lbl,
-                   fillcolor='#fff8f0', color='#d9c5a0', penwidth='0.6')
+    # Source cloud — scattered positions on the left (x ~ 0-2.5)
+    src_positions = [
+        (0.3, 5.8), (1.8, 5.2), (0.1, 4.3),   # brown fox variants
+        (1.5, 3.6), (0.4, 2.9),                  # lazy dog variants
+        (1.7, 2.1), (0.2, 1.4),                  # jumped over it
+        (1.4, 0.7), (0.6, 0.0),                  # and ran away
+        (1.8, -0.7), (0.3, -1.3),                # is not so bad
+    ]
 
-    # Target cloud
-    with dot.subgraph(name='cluster_target') as t:
-        t.attr(label='<<font point-size="11"><b>p(y)</b></font>>',
-               labelloc='t', fontname='Helvetica', fontcolor='#666666',
-               style='rounded', color='#dddddd', bgcolor='#fafafa',
-               penwidth='0.8')
-        for y, p in target_strings:
-            fs = f'{fontsize(p):.1f}'
-            w = f'{node_width(p):.2f}'
-            prob = f'{p:.3f}'[1:]
-            lbl = (f'<<font point-size="{fs}">{y}</font>'
-                   f'<font point-size="8" color="#aaaaaa">  {prob}</font>>')
-            t.node(f'y_{y}', label=lbl,
-                   fillcolor='#f0f7f0', color='#a0c9a0', penwidth='0.6',
-                   width=w)
+    for i, ((x_str, p, _), (px, py)) in enumerate(zip(source_strings, src_positions)):
+        fs = 8.5 + 3.0 * (p / max_src)
+        lbl = (f'<<font point-size="{fs:.1f}">{x_str}</font>'
+               f'<font point-size="7" color="#aaaaaa"> {p:.3f}</font>>')
+        dot.node(f'x{i}', label=lbl, pos=f'{px},{py}!',
+                 fillcolor='#fff8f0', color='#d9c5a0', penwidth='0.6')
+
+    # Source ellipsis nodes
+    dot.node('xdots1', label='<<font point-size="12" color="#bbbbbb">...</font>>',
+             shape='none', pos='0.9,6.5!')
+    dot.node('xdots2', label='<<font point-size="12" color="#bbbbbb">...</font>>',
+             shape='none', pos='1.1,-2.0!')
+
+    # Target cloud — scattered positions on the right (x ~ 6-8)
+    tgt_positions = [
+        (7.0, 4.8),   # the brown fox
+        (6.3, 3.1),   # a lazy dog
+        (7.2, 1.5),   # jumped over it
+        (6.5, -0.1),  # and ran away
+        (7.0, -1.2),  # is not so bad
+    ]
+
+    tgt_ids = {}
+    for j, ((y, p), (px, py)) in enumerate(zip(target_strings, tgt_positions)):
+        tgt_ids[y] = f'y{j}'
+        fs = 9.0 + 3.0 * (p / max_tgt)
+        w = 1.1 + 0.9 * (p / max_tgt)
+        lbl = (f'<<font point-size="{fs:.1f}">{y}</font>'
+               f'<font point-size="7" color="#aaaaaa"> {p:.3f}</font>>')
+        dot.node(f'y{j}', label=lbl, pos=f'{px},{py}!',
+                 fillcolor='#f0f7f0', color='#a0c9a0', penwidth='0.6',
+                 width=f'{w:.2f}')
+
+    # Target ellipsis
+    dot.node('ydots1', label='<<font point-size="12" color="#bbbbbb">...</font>>',
+             shape='none', pos='6.8,5.8!')
+    dot.node('ydots2', label='<<font point-size="12" color="#bbbbbb">...</font>>',
+             shape='none', pos='6.7,-2.0!')
 
     # Mapping edges
-    for x, _, y in source_strings:
-        dot.edge(f'x_{x}', f'y_{y}')
+    for i, (_, _, y) in enumerate(source_strings):
+        dot.edge(f'x{i}', tgt_ids[y])
 
-    # FST label between clusters
+    # FST label in the center
     dot.node('fst_label',
-             label='<<font point-size="11" color="#555555"><i>f</i>  = lowercase</font>>',
-             shape='none', fontname='Helvetica')
-    dot.edge('x_and', 'fst_label', style='invis')
-    dot.edge('fst_label', 'y_and', style='invis')
+             label='<<font point-size="11" color="#555555"><i>f</i> = lowercase</font>>',
+             shape='none', fontname='Helvetica', pos='3.8,2.5!')
 
     save_svg(dot, IMAGES_DIR / "pushforward.svg")
 
