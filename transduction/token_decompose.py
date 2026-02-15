@@ -180,7 +180,7 @@ class TokenDecompose(DecompositionResult):
             "TokenDecompose requires all_input_universal"
 
         self.fst = fst
-        self.target = target
+        self.target = tuple(target)
         target_alphabet = fst.B - {EPSILON}
         oov = set(target) - target_alphabet
         if oov:

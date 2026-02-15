@@ -108,10 +108,11 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
       arc overrides.
     """
 
-    def __init__(self, fst, target='', parent=None):
+    def __init__(self, fst, target=(), parent=None):
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
+        target = tuple(target)
         oov = set(target) - self.target_alphabet
         if oov:
             raise ValueError(f"Out of vocabulary target symbols: {oov}")
@@ -340,7 +341,7 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
 
     def __rshift__(self, y):
         _consume(self)
-        return TruncatedIncrementalDFADecomp(self.fst, self.target + y, parent=self)
+        return TruncatedIncrementalDFADecomp(self.fst, self.target + (y,), parent=self)
 
     def decompose_next(self):
         """Decompose for every next target symbol using lightweight overlays.
@@ -382,7 +383,7 @@ class _OverlayChild(IncrementalDecomposition):
         self.fst = parent.fst
         self.source_alphabet = parent.source_alphabet
         self.target_alphabet = parent.target_alphabet
-        self.target = parent.target + y
+        self.target = parent.target + (y,)
         self.parent = parent
         self._consumed = False
         self._all_input_universal = parent._all_input_universal
@@ -503,7 +504,7 @@ class _OverlayChild(IncrementalDecomposition):
         TruncatedIncrementalDFADecomp for further incremental use."""
         _consume(self)
         flat = self._flatten()
-        return TruncatedIncrementalDFADecomp(flat.fst, flat.target + y, parent=flat)
+        return TruncatedIncrementalDFADecomp(flat.fst, flat.target + (y,), parent=flat)
 
     def decompose_next(self):
         """Flatten and delegate to TruncatedIncrementalDFADecomp.decompose_next()."""

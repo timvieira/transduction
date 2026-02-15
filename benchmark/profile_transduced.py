@@ -244,7 +244,7 @@ class ProfiledTransducedLM(TransducedLM):
         from transduction.peekaboo_incremental import PeekabooState as _DefaultDecompState
         from transduction.peekaboo_incremental import FstUniversality as _DefaultUniv
 
-        peekaboo = self._decomp_state_cls(self.fst, '', parent=None, univ=self._univ)
+        peekaboo = self._decomp_state_cls(self.fst, (), parent=None, univ=self._univ)
         dfa = peekaboo.dfa
         start_states = list(dfa.start())
         inner_initial = self.inner_lm.initial()
@@ -261,9 +261,9 @@ class ProfiledTransducedLM(TransducedLM):
 
 def remap_fst_to_single_chars(fst):
     """Remap an FST's multi-character symbols (like '84', '258') to single
-    Unicode characters.  This is necessary because the PeekabooPrecover NFA
-    uses string concatenation for buffers and indexes by character position,
-    which breaks for multi-character symbol names.
+    Unicode characters.  This reduces the alphabet size and keeps symbol
+    representations compact, which improves performance for FSTs with large
+    numeric token IDs.
 
     Returns (new_fst, fwd_map, inv_map) where fwd_map[old_sym] = new_char
     and inv_map[new_char] = old_sym.
@@ -316,8 +316,7 @@ def build_ptb_setup(text=None, max_chars=100):
     text = text[:max_chars]
     print(f"  Input text: {text!r}")
 
-    # Remap multi-char symbols to single Unicode chars
-    # (PeekabooPrecover NFA requires single-char symbols for correct buffer indexing)
+    # Remap multi-char symbols to single Unicode chars for compact representation
     print("  Remapping FST symbols to single chars...")
     fst, fwd_map, inv_map = remap_fst_to_single_chars(raw_fst)
     print(f"  Remapped FST: |A|={len(fst.A)}, |B|={len(fst.B)}")

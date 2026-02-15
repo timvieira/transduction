@@ -46,8 +46,8 @@ class PrecoverNFA(Lazy):
 
     def __init__(self, fst, target):
         self.fst = fst
-        self.target = target
-        self.N = len(target)
+        self.target = tuple(target)
+        self.N = len(self.target)
         fst.ensure_arc_indexes()
         self._has_eps = EPSILON in fst.A
 
@@ -111,8 +111,8 @@ class TruncationMarkerPrecoverNFA(Lazy):
 
     def __init__(self, fst, target):
         self.fst = fst
-        self.target = target
-        self.N = len(target)
+        self.target = tuple(target)
+        self.N = len(self.target)
         fst.ensure_arc_indexes()
         self._has_eps = EPSILON in fst.A
 
@@ -202,8 +202,8 @@ class PopPrecoverNFA(Lazy):
 
     def __init__(self, fst, target):
         self.fst = fst
-        self.target = target
-        self.N = len(target)
+        self.target = tuple(target)
+        self.N = len(self.target)
 
     def arcs(self, state):
         (i, ys) = state
@@ -258,16 +258,16 @@ class TargetSideBuffer(Lazy):
     def arcs(self, state):
         (i, ys) = state
         for x,y,j in self.f.arcs(i):
-            yield x, (j, ys + y)
+            yield x, (j, ys if y == EPSILON else ys + (y,))
 
     def arcs_x(self, state, x):
         (i, ys) = state
         for y, j in self.f.arcs(i, x):
-            yield (j, ys + y)
+            yield (j, ys if y == EPSILON else ys + (y,))
 
     def start(self):
         for i in self.f.start:
-            yield (i, '')
+            yield (i, ())
 
     def is_final(self, state):
         raise NotImplementedError()
@@ -285,16 +285,18 @@ class Relevance(Lazy):
 
     def __init__(self, base, target):
         self.base = base
-        self.target = target
+        self.target = tuple(target)
 
     def arcs(self, state):
         for x, (i, ys) in self.base.arcs(state):
-            if self.target.startswith(ys) or ys.startswith(self.target):
+            m = min(len(self.target), len(ys))
+            if self.target[:m] == ys[:m]:
                 yield x, (i, ys)
 
     def arcs_x(self, state, x):
         for (i, ys) in self.base.arcs_x(state, x):
-            if self.target.startswith(ys) or ys.startswith(self.target):
+            m = min(len(self.target), len(ys))
+            if self.target[:m] == ys[:m]:
                 yield (i, ys)
 
     def start(self):
@@ -320,8 +322,8 @@ class PeekabooLookaheadNFA(Lazy):
 
     def __init__(self, fst, target, K=1):
         self.fst = fst
-        self.target = target
-        self.N = len(target)
+        self.target = tuple(target)
+        self.N = len(self.target)
         self.K = K
         assert K >= 1
         fst.ensure_arc_indexes()
@@ -351,7 +353,7 @@ class PeekabooLookaheadNFA(Lazy):
                     if y == EPSILON:
                         yield (x, (j, ys, False))
                     else:
-                        was = (ys + y)
+                        was = ys + (y,)
                         now = was[:self.N+self.K]
                         yield (x, (j, now, (was != now)))
         else:                              # i.e, ys < target)
@@ -376,7 +378,7 @@ class PeekabooLookaheadNFA(Lazy):
                     if y == EPSILON:
                         yield (j, ys, False)
                     else:
-                        was = (ys + y)
+                        was = ys + (y,)
                         now = was[:self.N+self.K]
                         yield (j, now, (was != now))
         else:
@@ -391,7 +393,7 @@ class PeekabooLookaheadNFA(Lazy):
 
     def is_final(self, state):
         (i, ys, _) = state
-        return self.fst.is_final(i) and ys.startswith(self.target) and len(ys) > self.N
+        return self.fst.is_final(i) and ys[:self.N] == self.target and len(ys) > self.N
 
 
 class PeekabooFixedNFA(Lazy):
@@ -409,8 +411,8 @@ class PeekabooFixedNFA(Lazy):
 
     def __init__(self, fst, target):
         self.fst = fst
-        self.target = target
-        self.N = len(target)
+        self.target = tuple(target)
+        self.N = len(self.target)
         fst.ensure_arc_indexes()
         self._has_eps = EPSILON in fst.A
 
@@ -434,12 +436,12 @@ class PeekabooFixedNFA(Lazy):
 
         # extend the buffer beyond the target string by one symbol
         elif n == self.N:
-            # Need y for ys + y, keep fst.arcs(i)
+            # Need y for ys + (y,), keep fst.arcs(i)
             for x, y, j in self.fst.arcs(i):
                 if y == EPSILON:
                     yield (x, (j, ys))
                 else:
-                    yield (x, (j, ys + y))
+                    yield (x, (j, ys + (y,)))
 
         # truncate the buffer after the (N+1)th symbol
         elif n == self.N + 1:
@@ -457,23 +459,23 @@ class PeekabooFixedNFA(Lazy):
             for j in self.fst.index_ixy_j.get((i, x, self.target[n]), ()):
                 yield (j, self.target[:n+1])
         elif n == self.N:
-            # Need y for ys + y, keep fst.arcs(i, x)
+            # Need y for ys + (y,), keep fst.arcs(i, x)
             for y, j in self.fst.arcs(i, x):
                 if y == EPSILON:
                     yield (j, ys)
                 else:
-                    yield (j, ys + y)
+                    yield (j, ys + (y,))
         elif n == self.N + 1:
             for j in self.fst.index_ix_j.get((i, x), ()):
                 yield (j, ys)
 
     def start(self):
         for i in self.fst.start:
-            yield (i, '')
+            yield (i, ())
 
     def is_final(self, state):
         (i, ys) = state
-        return self.fst.is_final(i) and ys.startswith(self.target) and len(ys) == self.N+1
+        return self.fst.is_final(i) and ys[:self.N] == self.target and len(ys) == self.N+1
 
 
 # Backward-compatible aliases for old names

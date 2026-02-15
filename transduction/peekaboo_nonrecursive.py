@@ -22,6 +22,7 @@ class PeekabooStrings:
         self.target_alphabet = fst.B - {EPSILON}
 
     def __call__(self, target):
+        target = tuple(target)
         precover = {y: DecompositionResult(set(), set()) for y in self.target_alphabet}
         worklist = deque()
 
@@ -55,9 +56,9 @@ class PeekabooStrings:
             # worklist), giving a contradiction.
             continuous = set()
             for y in relevant_symbols:
-                dfa_filtered = FilteredDFA(dfa=dfa, fst=self.fst, target=target + y)
-                #assert dfa_filtered.materialize().equal(Precover(self.fst, target + y).min)
-                #print('ok:', repr(target + y))
+                dfa_filtered = FilteredDFA(dfa=dfa, fst=self.fst, target=target + (y,))
+                #assert dfa_filtered.materialize().equal(Precover(self.fst, target + (y,)).min)
+                #print('ok:', repr(target + (y,)))
                 if dfa_filtered.accepts_universal(state, self.source_alphabet):
                     precover[y].quotient.add(xs)
                     continuous.add(y)
@@ -79,8 +80,9 @@ class PeekabooStrings:
 
 class Peekaboo(DecompositionResult):
 
-    def __init__(self, fst, target='', *, _parent=None, _symbol=None):
+    def __init__(self, fst, target=(), *, _parent=None, _symbol=None):
         self.fst = fst
+        target = tuple(target)
         self.target = target
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
@@ -112,7 +114,7 @@ class Peekaboo(DecompositionResult):
 
             continuous = set()
             for y in relevant_symbols:
-                dfa_filtered = FilteredDFA(dfa=dfa, fst=self.fst, target=self.target + y)
+                dfa_filtered = FilteredDFA(dfa=dfa, fst=self.fst, target=self.target + (y,))
                 if dfa_filtered.accepts_universal(state, self.source_alphabet):
                     precover[y].quotient.add(state)
                     continuous.add(y)
@@ -148,7 +150,7 @@ class Peekaboo(DecompositionResult):
         return {y: DecompositionResult(*qr) for y, qr in p._results.items()}
 
     def decompose_next(self):
-        return {y: Peekaboo(self.fst, self.target + y, _parent=self, _symbol=y)
+        return {y: Peekaboo(self.fst, self.target + (y,), _parent=self, _symbol=y)
                 for y in self.target_alphabet}
 
     @cached_property

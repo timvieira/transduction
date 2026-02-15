@@ -75,7 +75,7 @@ def _extract_meta(dfa_state, target, fst_is_final):
         if len(output) > N:
             sym = output[N]
             relevant.add(sym)
-            if output.startswith(target) and fst_is_final(fst_state):
+            if output[:N] == target and fst_is_final(fst_state):
                 final.add(sym)
         has_truncated = has_truncated or truncated
     return DFAStateMeta(relevant, final, is_preimage, has_truncated)
@@ -155,10 +155,10 @@ class _FusedSearch:
         uf = self._univ_filters.get(symbol)
         if uf is None:
             trunc_dfa = TruncatedDFA(
-                dfa=self._raw_dfa, fst=self._fst, target=self._target + symbol
+                dfa=self._raw_dfa, fst=self._fst, target=self._target + (symbol,)
             )
             uf = self._univ.make_filter(
-                self._fst, self._target + symbol, trunc_dfa, self._source_alphabet
+                self._fst, self._target + (symbol,), trunc_dfa, self._source_alphabet
             )
             self._univ_filters[symbol] = uf
         return uf
@@ -328,7 +328,7 @@ class FusedTransducedState(LMState):
 
         return FusedTransducedState(
             self.tlm, new_beam,
-            self._target + key,
+            self._target + (key,),
             self.logp + lp_y,
             history=(self.history, y),
         )
@@ -370,7 +370,7 @@ class FusedTransducedLM(LM):
 
     def initial(self):
         """Return the initial FusedTransducedState (empty target prefix)."""
-        nfa = PeekabooPrecover(self.fst, '')
+        nfa = PeekabooPrecover(self.fst, ())
         raw_dfa = nfa.det()
 
         start_states = list(raw_dfa.start())
@@ -385,7 +385,7 @@ class FusedTransducedLM(LM):
             for s in start_states
         ]
 
-        return FusedTransducedState(self, beam, '', 0.0)
+        return FusedTransducedState(self, beam, (), 0.0)
 
     def __repr__(self):
         return f'FusedTransducedLM(inner={self.inner_lm!r}, fst={self.fst!r})'

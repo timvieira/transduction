@@ -48,7 +48,7 @@ class Precover(DecompositionResult):
                     symbols from the front of the target.
         """
         self.fst = fst
-        self.target = target
+        self.target = tuple(target)
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
         oov = set(target) - self.target_alphabet

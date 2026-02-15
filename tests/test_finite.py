@@ -201,12 +201,12 @@ def test_delayed_output_cycle(impl):
 def test_lazy_precover_nfa():
     fst = examples.replace([('a', 'A'), ('b', 'B')])
     c = LazyPrecoverNFA(fst, 'AB')
-    assert set(c.arcs((0, ''))) == {('a', (0, 'A'))}
-    assert set(c.arcs((0, 'A'))) == {('b', (0, 'AB'))}
-    assert set(c.arcs((0, 'AB'))) == {('a', (0, 'AB')), ('b', (0, 'AB'))}
-    assert c.is_final((0, 'AB'))
-    assert not c.is_final((0, 'A'))
-    assert set(c.start()) == {(0, '')}
+    assert set(c.arcs((0, ()))) == {('a', (0, ('A',)))}
+    assert set(c.arcs((0, ('A',)))) == {('b', (0, ('A', 'B')))}
+    assert set(c.arcs((0, ('A', 'B')))) == {('a', (0, ('A', 'B'))), ('b', (0, ('A', 'B')))}
+    assert c.is_final((0, ('A', 'B')))
+    assert not c.is_final((0, ('A',)))
+    assert set(c.start()) == {(0, ())}
 
 
 def test_delete_b_infinite_quotient():

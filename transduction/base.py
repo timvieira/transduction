@@ -97,7 +97,7 @@ class DecompositionResult:
     def decompose_next(self):
         """Decompose for every next target symbol, returning a dict {y: DecompositionResult}."""
         target_alphabet = self.fst.B - {EPSILON}
-        return {y: type(self)(self.fst, self.target + y) for y in target_alphabet}
+        return {y: type(self)(self.fst, self.target + (y,)) for y in target_alphabet}
 
 
 class DecompositionFunction(ABC):

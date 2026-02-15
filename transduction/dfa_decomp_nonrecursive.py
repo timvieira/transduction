@@ -11,6 +11,7 @@ class NonrecursiveDFADecomp(DecompositionResult):
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
 
+        target = tuple(target)
         oov = set(target) - self.target_alphabet
         if oov:
             raise ValueError(f"Out of vocabulary target symbols: {oov}")

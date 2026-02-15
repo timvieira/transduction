@@ -96,7 +96,7 @@ class Peekaboo:
 
     def initial(self):
         """Return the initial PeekabooState (empty target)."""
-        return PeekabooState(self.fst, '', parent=None, univ=self._univ)
+        return PeekabooState(self.fst, (), parent=None, univ=self._univ)
 
     def __call__(self, target):
         """Decompose for every next target symbol after `target`.
@@ -128,12 +128,14 @@ class Peekaboo:
         # using HTML tables inside node internals.)
         #
         from graphviz import Digraph
+        target = tuple(target)
 
         def helper(target, outer):
-            with outer.subgraph(name=f"cluster_{target}") as inner:
-                inner.attr(label=target, style='rounded, filled', color='black', fillcolor='white')
-                if target == '':
-                    curr = PeekabooState(self.fst, '', parent=None)
+            label = ''.join(str(s) for s in target)
+            with outer.subgraph(name=f"cluster_{label}") as inner:
+                inner.attr(label=label, style='rounded, filled', color='black', fillcolor='white')
+                if not target:
+                    curr = PeekabooState(self.fst, (), parent=None)
                 else:
                     curr = helper(target[:-1], inner) >> target[-1]
                 for j, arcs in curr.incoming.items():
@@ -171,11 +173,12 @@ class Peekaboo:
         from transduction import display_table
         from IPython.display import HTML
 
+        target = tuple(target)
         Have = self(target)
 
         for y in self.target_alphabet:
 
-            want = Precover(self.fst, target + y)
+            want = Precover(self.fst, target + (y,))
             have = Have[y]
 
             q_ok = have.quotient.equal(want.quotient)
@@ -258,10 +261,11 @@ class PeekabooState(IncrementalDecomposition):
         'decomp', 'dfa', 'resume_frontiers', 'preimage_stops', 'incoming',
     })
 
-    def __init__(self, fst, target='', parent=None, *, univ=None):
+    def __init__(self, fst, target=(), parent=None, *, univ=None):
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
+        target = tuple(target)
         oov = set(target) - self.target_alphabet
         if oov:
             raise ValueError(f"Out of vocabulary target symbols: {oov}")
@@ -322,10 +326,10 @@ class PeekabooState(IncrementalDecomposition):
                 if y not in decomp:
                     decomp[y] = DecompositionResult(set(), set())
                     resume_frontiers[y] = set()
-                    trunc_dfa = TruncatedDFA(dfa=dfa, fst=self.fst, target=target + y)
+                    trunc_dfa = TruncatedDFA(dfa=dfa, fst=self.fst, target=target + (y,))
                     truncated_dfas[y] = trunc_dfa
                     univ_filters[y] = self._univ.make_filter(
-                        self.fst, target + y, trunc_dfa, self.source_alphabet,
+                        self.fst, target + (y,), trunc_dfa, self.source_alphabet,
                     )
 
         truncated_dfas = {}
@@ -353,7 +357,7 @@ class PeekabooState(IncrementalDecomposition):
                 if len(ys) > N:
                     y = ys[N]
                     relevant_symbols.add(y)
-                    if ys.startswith(target) and _fst_is_final(i):
+                    if ys[:N] == target and _fst_is_final(i):
                         final_symbols.add(y)
                 state_has_truncated = state_has_truncated or truncated
 
@@ -447,7 +451,7 @@ class PeekabooState(IncrementalDecomposition):
         assert y in self.target_alphabet, repr(y)
         if hasattr(self, '_children') and y in self._children:
             return self._children[y]
-        return PeekabooState(self.fst, self.target + y, parent=self)
+        return PeekabooState(self.fst, self.target + (y,), parent=self)
 
     def _merged_incoming(self):
         """Walk the parent chain and merge all incoming dicts into one.
@@ -586,4 +590,4 @@ class TruncatedDFA(Lazy):
             yield self.refine(next_state)
 
     def is_final(self, state):
-        return any(ys.startswith(self.target) and self.fst.is_final(i) for (i, ys, _) in state)
+        return any(ys[:len(self.target)] == self.target and self.fst.is_final(i) for (i, ys, _) in state)

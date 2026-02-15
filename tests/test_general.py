@@ -39,20 +39,21 @@ def run_test(cls, fst, target, depth, verbosity=0):
     """Unified test runner: recursively checks decompose_next() against reference."""
     reference = Precover.factory(fst)
     target_alphabet = fst.B - {EPSILON}
+    target = tuple(target)
 
     def recurse(target, depth, state):
         if depth == 0:
             return
-        want = {y: reference(target + y) for y in target_alphabet}
+        want = {y: reference(target + (y,)) for y in target_alphabet}
         have = state.decompose_next()
         assert_equal_decomp_map(have, want)
         for y in want:
             if verbosity > 0:
-                print('>', repr(target + y))
+                print('>', repr(target + (y,)))
             q = want[y].quotient.trim()
             r = want[y].remainder.trim()
             if q.states or r.states:
-                recurse(target + y, depth - 1, have[y])
+                recurse(target + (y,), depth - 1, have[y])
 
     recurse(target, depth, cls(fst, target))
 
@@ -336,6 +337,19 @@ def test_delayed_output_cycle(impl):
     fst.add_arc(1, '', 'b', 0)     # no input, produce output
     # Functional: a* -> b*; each cycle consumes one 'a' and emits one 'b'
     run_test(impl, fst, '', depth=5, verbosity=0)
+
+
+def test_multichar_output_symbols(impl):
+    """FST with multi-character output symbols — tuples must keep symbols distinct."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(0)
+    # source 'a' produces multi-char output 'ab', source 'b' produces 'cd'
+    fst.add_arc(0, 'a', 'ab', 0)
+    fst.add_arc(0, 'b', 'cd', 0)
+    # With string buffers, 'ab'+'cd' == 'a'+'bcd' — decomposition would be wrong.
+    # With tuple buffers, ('ab','cd') != ('a','bcd') — symbols are kept distinct.
+    run_test(impl, fst, (), depth=3, verbosity=0)
 
 
 def test_consume_raises_on_double_use():

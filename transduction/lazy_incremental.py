@@ -23,7 +23,7 @@ class LazyIncremental(IncrementalDecomposition):
         state.remainder   # FSA
     """
 
-    def __init__(self, fst, target='', parent=None, *, empty_source='', empty_target='', extend=lambda x, y: x + y, max_steps=float('inf')):
+    def __init__(self, fst, target='', parent=None, *, empty_source='', empty_target=(), extend=lambda x, y: x + y, max_steps=float('inf')):
         """
         Args:
             fst: The FST to decompose.
@@ -37,6 +37,7 @@ class LazyIncremental(IncrementalDecomposition):
             max_steps: Maximum BFS steps per decomposition (default unlimited).
         """
         self.fst = fst
+        target = tuple(target)
         self.target = target
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
@@ -111,7 +112,7 @@ class LazyIncremental(IncrementalDecomposition):
         return FSA.from_strings(self._remainder_set)
 
     def __rshift__(self, y):
-        return LazyIncremental(self.fst, self.target + y, parent=self)
+        return LazyIncremental(self.fst, self.target + (y,), parent=self)
 
     def candidates(self, xs, target):
         for source_symbol in self.source_alphabet:
@@ -121,13 +122,13 @@ class LazyIncremental(IncrementalDecomposition):
 
     def candidacy(self, xs, target):
         return any(
-            (ys.startswith(target) or target.startswith(ys))
+            target[:min(len(target), len(ys))] == ys[:min(len(target), len(ys))]
             for (_, ys) in self.frontier(xs)
         )
 
     def discontinuity(self, xs, target):
         return any((s in self.fst.stop) for (s, ys) in self.frontier(xs)
-                   if ys.startswith(target))
+                   if ys[:len(target)] == target)
 
     def frontier(self, xs):
         """Returns the state of `xs` in the powerset construction where each
@@ -150,7 +151,7 @@ class LazyIncremental(IncrementalDecomposition):
         next_frontier = set()
         for s, ys in frontier:
             for b, j in self.fst.arcs(s, source_symbol):
-                next_frontier.add((j, self.extend(ys, b)))
+                next_frontier.add((j, ys if b == EPSILON else ys + (b,)))
         return self._epsilon_closure_frontier(next_frontier)
 
     def _epsilon_closure_frontier(self, frontier):
@@ -163,7 +164,7 @@ class LazyIncremental(IncrementalDecomposition):
             if (s, ys) in next_frontier: continue
             next_frontier.add((s, ys))
             for b, next_state in self.fst.arcs(s, EPSILON):
-                worklist.add((next_state, self.extend(ys, b)))    
+                worklist.add((next_state, ys if b == EPSILON else ys + (b,)))    
         return next_frontier
 
     def continuity(self, xs, target):

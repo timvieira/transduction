@@ -101,7 +101,7 @@ class RustDecomp(DecompositionResult):
         import transduction_core
 
         self.fst = fst
-        self.target = target
+        self.target = tuple(target)
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
 
@@ -126,9 +126,9 @@ class RustDirtyState(IncrementalDecomposition):
     contain frontier elements.
     """
 
-    def __init__(self, fst, target='', *, minimize=False, _rust_state=None):
+    def __init__(self, fst, target=(), *, minimize=False, _rust_state=None):
         self.fst = fst
-        self.target = target
+        self.target = tuple(target)
         self._minimize = minimize
         if _rust_state is not None:
             self._rust_state = _rust_state
@@ -161,7 +161,7 @@ class RustDirtyState(IncrementalDecomposition):
 
     def __rshift__(self, y):
         return RustDirtyState(
-            self.fst, self.target + y,
+            self.fst, self.target + (y,),
             minimize=self._minimize,
             _rust_state=self._rust_state,
         )
@@ -185,7 +185,7 @@ class RustDirtyState(IncrementalDecomposition):
                 q_fsa = FSA()
                 r_fsa = FSA()
             output[y] = RustDirtyState(
-                self.fst, self.target + y,
+                self.fst, self.target + (y,),
                 minimize=self._minimize,
                 _rust_state=self._rust_state,
             )
@@ -201,9 +201,10 @@ class RustDirtyPeekaboo(DecompositionResult):
     runs the new step(s) instead of rebuilding from scratch.
     """
 
-    def __init__(self, fst, target='', *, minimize=False, _rust_state=None,
+    def __init__(self, fst, target=(), *, minimize=False, _rust_state=None,
                  _parent=None, _symbol=None):
         self.fst = fst
+        target = tuple(target)
         self.target = target
         self.target_alphabet = fst.B - {EPSILON}
         self._minimize = minimize
@@ -237,7 +238,7 @@ class RustDirtyPeekaboo(DecompositionResult):
                 q_fsa = FSA()
                 r_fsa = FSA()
             child = RustDirtyPeekaboo(
-                self.fst, self.target + y,
+                self.fst, self.target + (y,),
                 minimize=self._minimize,
                 _rust_state=self._rust_state,
                 _parent=self, _symbol=y,

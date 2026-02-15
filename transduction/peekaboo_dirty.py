@@ -88,17 +88,18 @@ class DirtyPeekaboo(IncrementalDecomposition):
     per-symbol quotient and remainder stops from a single BFS.
     """
 
-    def __init__(self, fst, target='', parent=None):
+    def __init__(self, fst, target=(), parent=None):
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
+        target = tuple(target)
         oov = set(target) - self.target_alphabet
         if oov:
             raise ValueError(f"Out of vocabulary target symbols: {oov}")
         self.target = target
         self.parent = parent
         self._has_eps = EPSILON in fst.A
-        self._cat = (lambda s, y: s + (y,)) if isinstance(target, tuple) else (lambda s, y: s + y)
+        self._cat = lambda s, y: s + (y,)
 
         if parent is not None:
             assert fst is parent.fst
