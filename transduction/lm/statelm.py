@@ -35,11 +35,32 @@ _encode_bytes_str = [
 _default_byte_decoder = {s: i for i, s in enumerate(_encode_bytes_str)}
 
 
-# TODO: Add some documentation here about what's going on and what assumptions
-# are being made.  This decoding method might not work for all hugging face
-# tokenizers.
 def decode_hf_tokenizer(tokenizer):
-    "Extract what we need from a HuggingFace tokenizer."
+    """Extract BPE merge rules and byte-level encode/decode tables from a
+    HuggingFace tokenizer.
+
+    Assumptions:
+      - The tokenizer is a byte-level BPE tokenizer (GPT-2 style).  Each
+        token's string representation is a sequence of Unicode characters that
+        map 1:1 to bytes via the GPT-2 ``bytes_to_unicode()`` table (the
+        ``_encode_bytes_str`` array above).
+      - Merge rules are extracted from either ``tokenizer.bpe_ranks`` (older
+        GPT2TokenizerFast) or the ``tokenizer._tokenizer`` JSON backend
+        (newer PreTrainedTokenizerFast).  The ``_tokenizer`` path accesses a
+        private attribute and may break on future transformers versions.
+      - The ``byte_decoder`` attribute (mapping Unicode chars → byte values)
+        is read from ``tokenizer.byte_decoder`` if present, otherwise the
+        default GPT-2 mapping is used.
+      - Every byte 0–255 must appear as a single-byte token in the vocabulary.
+        Tokenizers that lack byte-level coverage will raise an error.
+
+    Returns:
+      (merges, encode, decode, encode_byte) where:
+        - merges: list of (left_id, right_id, merged_id) triples
+        - encode: dict mapping bytes → token_id
+        - decode: list mapping token_id → bytes
+        - encode_byte: list mapping byte_value (0–255) → single-byte token_id
+    """
     _merges = []
     V = tokenizer.get_vocab()
     if hasattr(tokenizer, 'bpe_ranks'):
