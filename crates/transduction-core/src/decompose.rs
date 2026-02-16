@@ -395,28 +395,10 @@ pub fn decompose_with_ip_univ(fst: &Fst, target: &[u32], ip_univ: &[bool]) -> De
     stats.init_ms = init_start.elapsed().as_secs_f64() * 1000.0;
 
     let bfs_start = Instant::now();
-    let mut bfs_iterations: u64 = 0;
     let mut arcs_buf: FxHashMap<u32, Vec<u64>> = FxHashMap::default();
 
     // 2. BFS
     while let Some(sid) = worklist.pop_front() {
-        bfs_iterations += 1;
-
-        // Log progress every 1000 iterations
-        if bfs_iterations % 1000 == 0 {
-            let elapsed = bfs_start.elapsed().as_secs_f64();
-            eprintln!(
-                "[decompose] iter={}, visited={}, arena={}, arcs={}, q_stops={}, r_stops={}, elapsed={:.1}s",
-                bfs_iterations,
-                visited.len(),
-                arena.len(),
-                arc_src.len(),
-                q_stop.len(),
-                r_stop.len(),
-                elapsed,
-            );
-        }
-
         if arena.is_final[sid as usize] {
             let uni_start = Instant::now();
             stats.universal_calls += 1;
