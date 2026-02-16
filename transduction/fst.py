@@ -267,8 +267,8 @@ class FST:
         d = (self @ FSA.from_strings(self.B - {EPSILON}).star().min()).project(0)
         other = d.invert(self.A - {EPSILON}).min()
 
-        # TODO: this is not guaranteed to be renamed apart
-        def gensym(i): return ('other', i)
+        _ns = object()  # unique namespace sentinel — cannot collide with any existing state
+        def gensym(i): return (_ns, i)
         m = self.spawn(keep_arcs=True, keep_init=True, keep_stop=True)
 
         # copy arcs from `other` such that they read the same symbol, but now
@@ -317,11 +317,14 @@ class FST:
                 )  # rename epsilons on the left
             )
 
-    # TODO: add assertions for the 'bad' epsilon cases to ensure users aren't using this method incorrectly.
     # TODO: use lazy machine pattern
     def _compose(self, other):
         """
         Implements the on-the-fly composition of the FST `self` with the FST `other`.
+
+        Internal: both operands must already have epsilon-augmented labels
+        (ε_1/ε_2) via ``_augment_epsilon_transitions()``.  Call ``__matmul__``
+        for the public composition API.
         """
 
         C = FST()
@@ -357,7 +360,11 @@ class FST:
             # `b:c` in the left and right machines respectively.
             for a, b, Pʼ in self.arcs(P):
                 for c, Qʼ in tmp[Q, b]:
-                    assert b != EPSILON
+                    assert b != EPSILON, (
+                        f"Matched on raw epsilon in _compose(); both operands must "
+                        f"have augmented epsilon labels (ε_1/ε_2) — use __matmul__ "
+                        f"instead of calling _compose() directly."
+                    )
 
                     PʼQʼ = (Pʼ, Qʼ)
 
