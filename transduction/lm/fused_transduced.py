@@ -39,7 +39,7 @@ import numpy as np
 from dataclasses import dataclass
 
 from transduction.lm.base import LM, LMState, LogpNext
-from transduction.lm.transduced import logsumexp, _to_key, BeamItem
+from transduction.lm.transduced import logsumexp, BeamItem
 from transduction.fst import EPSILON
 from transduction.precover_nfa import PeekabooLookaheadNFA as PeekabooPrecover
 from transduction.peekaboo_incremental import FstUniversality, TruncatedDFA
@@ -315,12 +315,11 @@ class FusedTransducedState(LMState):
             raise ValueError(f"Out of vocabulary: {y!r}")
         self._ensure_computed()
 
-        key = _to_key(y)
-        if key is None or key not in self._logp_next_cache:
+        if y not in self._logp_next_cache:
             raise ValueError(f"Out of vocabulary: {y!r}")
 
         lp_y = self._logp_next_cache[y]
-        new_beam = self._carry_forward_cache.get(key, [])
+        new_beam = self._carry_forward_cache.get(y, [])
 
         if len(new_beam) > self.tlm.max_beam:
             new_beam = sorted(new_beam, key=lambda it: it.weight, reverse=True)
@@ -328,7 +327,7 @@ class FusedTransducedState(LMState):
 
         return FusedTransducedState(
             self.tlm, new_beam,
-            self._target + (key,),
+            self._target + (y,),
             self.logp + lp_y,
             history=(self.history, y),
         )

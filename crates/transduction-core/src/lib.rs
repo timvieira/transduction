@@ -21,6 +21,7 @@ fn transduction_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<py::DirtyStepResult>()?;
     m.add_class::<py::DirtyNextResult>()?;
     m.add_class::<py::RustDirtyPeekabooDecomp>()?;
+    m.add_class::<py::PeekabooBeamView>()?;
     m.add_function(wrap_pyfunction!(py::rust_decompose, m)?)?;
     Ok(())
 }

@@ -252,7 +252,7 @@ class CharNgramLM(LM):
         self.n = n
         self.alpha = alpha
         self.eos = '<EOS>'
-        self.alphabet = sorted(alphabet)
+        self.alphabet = alphabet
         V = len(self.alphabet)
 
         self._tables = {}

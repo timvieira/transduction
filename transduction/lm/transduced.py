@@ -42,9 +42,9 @@ import numpy as np
 
 from transduction.lm.base import LM, LMState, LogpNext
 
-# Default incremental decomposition; can be overridden via TransducedLM constructor.
-from transduction.peekaboo_incremental import PeekabooState as _DefaultDecompState
-from transduction.peekaboo_incremental import FstUniversality as _DefaultUniv
+# Default incremental decomposition (Rust backend).
+from transduction.rust_bridge import RustPeekabooState as _DefaultDecompState
+from transduction.rust_bridge import _RustPeekabooUniv as _DefaultUniv
 
 
 def logsumexp(arr):
@@ -59,16 +59,6 @@ def logsumexp(arr):
     out += vmax
     return out
 
-
-def _to_key(token):
-    """Coerce token to a string key for output symbols."""
-    if isinstance(token, (bytes, bytearray)):
-        return token.decode('latin-1')
-    if isinstance(token, int):
-        return chr(token)
-    if isinstance(token, str):
-        return token
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -191,17 +181,16 @@ class TransducedState(LMState):
             raise ValueError(f"Out of vocabulary: {y!r}")
         self._ensure_computed()
 
-        key = _to_key(y)
-        if key is None or key not in self._logp_next_cache:
+        if y not in self._logp_next_cache:
             raise ValueError(f"Out of vocabulary: {y!r}")
 
         lp_y = self._logp_next_cache[y]
 
         # Advance peekaboo decomposition state
-        new_peekaboo = self._peekaboo_state >> key
+        new_peekaboo = self._peekaboo_state >> y
 
         # Get carry-forward particles for this symbol
-        cf_particles = self._carry_forward_cache.get(key, [])
+        cf_particles = self._carry_forward_cache.get(y, [])
 
         K = self.tlm.K
 
@@ -210,7 +199,7 @@ class TransducedState(LMState):
             #   log p-hat(y_t | y_{<t}) = log[ (1/K) * sum_k C_k(y_t) ]
             #                           = raw_score(y_t) - log(K_input)
             K_input = max(len(self._particles), 1)
-            raw_y = self._raw_scores_cache.get(key, -np.inf)
+            raw_y = self._raw_scores_cache.get(y, -np.inf)
             new_logp = self.logp + raw_y - np.log(K_input)
             new_particles, _ = _resample(cf_particles, K, self.tlm._rng)
         else:

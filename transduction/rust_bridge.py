@@ -271,3 +271,117 @@ class RustDirtyPeekaboo(DecompositionResult):
     @property
     def remainder(self):
         return self._qr[1]
+
+
+# ---------------------------------------------------------------------------
+# RustPeekabooState: adapter for TransducedLM beam search
+# ---------------------------------------------------------------------------
+
+class _RustDFAAdapter:
+    """Wraps Rust DFA arc queries for beam search in TransducedLM."""
+
+    __slots__ = ('_rust_decomp', '_inv', '_start_id')
+
+    def __init__(self, rust_decomp, inv_sym_map, start_id):
+        self._rust_decomp = rust_decomp
+        self._inv = inv_sym_map
+        self._start_id = start_id
+
+    def arcs(self, state_id):
+        raw = self._rust_decomp.arcs_for(state_id)
+        return [(self._inv[lbl], dst) for lbl, dst in raw]
+
+    def start(self):
+        return [self._start_id]
+
+
+class _RustPeekabooUniv:
+    """No-op universality placeholder — Rust handles universality internally."""
+    def __init__(self, fst):
+        pass
+
+
+class RustPeekabooState:
+    """Adapter matching PeekabooState interface, backed by Rust DirtyPeekaboo.
+
+    Uses decompose_for_beam() to get DFA state IDs directly instead of
+    constructing FSA objects. The beam search in TransducedLM walks the
+    DFA via arcs_for() using interned u32 state IDs.
+    """
+
+    # Lazy attributes computed by _ensure_bfs()
+    _LAZY_BFS_ATTRS = frozenset({
+        'decomp', 'dfa', 'resume_frontiers', 'preimage_stops',
+    })
+
+    def __init__(self, fst, target=(), parent=None, *, univ=None,
+                 _rust_state=None):
+        self.fst = fst
+        self.target = tuple(target) if not isinstance(target, tuple) else target
+        self.target_alphabet = fst.B - {EPSILON}
+        self.source_alphabet = fst.A - {EPSILON}
+
+        if _rust_state is not None:
+            self._rust_state = _rust_state
+        else:
+            import transduction_core
+            rust_fst, sym_map, _ = to_rust_fst(fst)
+            rust_decomp = transduction_core.RustDirtyPeekabooDecomp(rust_fst)
+            self._rust_state = (rust_decomp, sym_map)
+
+        self._bfs_done = False
+
+    def __getattr__(self, name):
+        if name in RustPeekabooState._LAZY_BFS_ATTRS:
+            self._ensure_bfs()
+            return self.__dict__[name]
+        raise AttributeError(
+            f"'{type(self).__name__}' object has no attribute {name!r}"
+        )
+
+    def _ensure_bfs(self):
+        if self._bfs_done:
+            return
+
+        rust_decomp, sym_map = self._rust_state
+        inv_sym_map = {v: k for k, v in sym_map.items()}
+
+        target_u32 = [sym_map(y) for y in self.target]
+        view = rust_decomp.decompose_for_beam(target_u32)
+
+        # Build decomp: {py_sym: DecompositionResult(quotient=set, remainder=set)}
+        decomp = {}
+        for sym_u32, sids in view.decomp_q():
+            py_sym = inv_sym_map[sym_u32]
+            if py_sym not in decomp:
+                decomp[py_sym] = DecompositionResult(set(), set())
+            decomp[py_sym].quotient.update(sids)
+        for sym_u32, sids in view.decomp_r():
+            py_sym = inv_sym_map[sym_u32]
+            if py_sym not in decomp:
+                decomp[py_sym] = DecompositionResult(set(), set())
+            decomp[py_sym].remainder.update(sids)
+
+        # Build resume_frontiers: {py_sym: set[u32]}
+        resume_frontiers = {}
+        for sym_u32, sids in view.resume_frontiers():
+            py_sym = inv_sym_map[sym_u32]
+            resume_frontiers[py_sym] = set(sids)
+
+        # Build preimage_stops: set[u32]
+        preimage_stops = set(view.preimage_stops)
+
+        # Build DFA adapter
+        dfa = _RustDFAAdapter(rust_decomp, inv_sym_map, view.start_id)
+
+        self.decomp = decomp
+        self.resume_frontiers = resume_frontiers
+        self.preimage_stops = preimage_stops
+        self.dfa = dfa
+        self._bfs_done = True
+
+    def __rshift__(self, y):
+        return RustPeekabooState(
+            self.fst, self.target + (y,),
+            _rust_state=self._rust_state,
+        )

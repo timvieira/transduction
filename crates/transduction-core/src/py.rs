@@ -499,6 +499,68 @@ impl RustDirtyPeekabooDecomp {
         RustDirtyPeekabooDecomp { fst, persistent }
     }
 
+    /// Decompose the FST for the given target, returning a lightweight
+    /// PeekabooBeamView for beam search (no FSA construction).
+    fn decompose_for_beam(&mut self, py: Python<'_>, target: Vec<u32>) -> PyResult<PeekabooBeamView> {
+        let fst = &self.fst.borrow(py).inner;
+        // Run BFS (reuses dirty-state incremental logic)
+        self.persistent.decompose_bfs_only(fst, &target);
+
+        let step_n = target.len() as u16;
+        let start_id = self.persistent.global_start_id();
+        let preimage_stops = self.persistent.compute_preimage_stops(fst, step_n);
+        let resume_frontiers_raw = self.persistent.compute_resume_frontiers();
+
+        let idx_to_sym = self.persistent.idx_to_sym();
+        let reachable_flags = self.persistent.reachable_flags();
+
+        // Convert decomp_q: u16 idx -> u32 sym, filter to reachable
+        let mut decomp_q: Vec<(u32, Vec<u32>)> = Vec::new();
+        for (&y_idx, sids) in self.persistent.decomp_q() {
+            let sym = idx_to_sym[y_idx as usize];
+            let filtered: Vec<u32> = sids.iter()
+                .filter(|&&sid| (sid as usize) < reachable_flags.len() && reachable_flags[sid as usize])
+                .copied().collect();
+            if !filtered.is_empty() {
+                decomp_q.push((sym, filtered));
+            }
+        }
+
+        // Convert decomp_r: u16 idx -> u32 sym, filter to reachable
+        let mut decomp_r: Vec<(u32, Vec<u32>)> = Vec::new();
+        for (&y_idx, sids) in self.persistent.decomp_r() {
+            let sym = idx_to_sym[y_idx as usize];
+            let filtered: Vec<u32> = sids.iter()
+                .filter(|&&sid| (sid as usize) < reachable_flags.len() && reachable_flags[sid as usize])
+                .copied().collect();
+            if !filtered.is_empty() {
+                decomp_r.push((sym, filtered));
+            }
+        }
+
+        // Convert resume_frontiers: u16 idx -> u32 sym
+        let mut resume_frontiers: Vec<(u32, Vec<u32>)> = Vec::new();
+        for (y_idx, sids) in resume_frontiers_raw {
+            let sym = idx_to_sym[y_idx as usize];
+            resume_frontiers.push((sym, sids));
+        }
+
+        Ok(PeekabooBeamView {
+            start_id,
+            preimage_stops,
+            decomp_q,
+            decomp_r,
+            resume_frontiers,
+        })
+    }
+
+    /// Return the arcs from a DFA state: Vec<(input_label_u32, dest_sid)>.
+    /// Called per-particle during beam search.
+    fn arcs_for(&self, py: Python<'_>, state_id: u32) -> Vec<(u32, u32)> {
+        let _ = py;
+        self.persistent.arcs_from(state_id).to_vec()
+    }
+
     /// Decompose the FST for the given target, returning per-symbol Q/R.
     #[pyo3(signature = (target, minimize=false))]
     fn decompose(&mut self, py: Python<'_>, target: Vec<u32>, minimize: bool) -> PyResult<PeekabooDecompResult> {
@@ -554,6 +616,41 @@ impl RustDirtyPeekabooDecomp {
         })?;
 
         Ok(PeekabooDecompResult { per_symbol, symbols, stats })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PeekabooBeamView: lightweight snapshot for beam search
+// ---------------------------------------------------------------------------
+
+/// Lightweight snapshot of DirtyPeekaboo state for beam search.
+/// Returned by decompose_for_beam(); avoids FSA construction.
+#[pyclass]
+pub struct PeekabooBeamView {
+    #[pyo3(get)]
+    start_id: u32,
+    #[pyo3(get)]
+    preimage_stops: Vec<u32>,
+    decomp_q: Vec<(u32, Vec<u32>)>,
+    decomp_r: Vec<(u32, Vec<u32>)>,
+    resume_frontiers: Vec<(u32, Vec<u32>)>,
+}
+
+#[pymethods]
+impl PeekabooBeamView {
+    /// Per-symbol quotient stop states: Vec<(output_sym_u32, stop_sids)>.
+    fn decomp_q(&self) -> Vec<(u32, Vec<u32>)> {
+        self.decomp_q.clone()
+    }
+
+    /// Per-symbol remainder stop states: Vec<(output_sym_u32, stop_sids)>.
+    fn decomp_r(&self) -> Vec<(u32, Vec<u32>)> {
+        self.decomp_r.clone()
+    }
+
+    /// Per-symbol resume frontier states: Vec<(output_sym_u32, frontier_sids)>.
+    fn resume_frontiers(&self) -> Vec<(u32, Vec<u32>)> {
+        self.resume_frontiers.clone()
     }
 }
 

@@ -866,6 +866,134 @@ impl DirtyPeekaboo {
         per_symbol_result
     }
 
+    // --- Accessors for py.rs beam view ---
+
+    pub fn global_start_id(&self) -> u32 {
+        self.global_start_id
+    }
+
+    pub fn arcs_from(&self, sid: u32) -> &[(u32, u32)] {
+        let sid_usize = sid as usize;
+        if sid_usize < self.arcs_from.len() {
+            &self.arcs_from[sid_usize]
+        } else {
+            &[]
+        }
+    }
+
+    pub fn idx_to_sym(&self) -> &[u32] {
+        &self.idx_to_sym
+    }
+
+    pub fn decomp_q(&self) -> &FxHashMap<u16, Vec<u32>> {
+        &self.decomp_q
+    }
+
+    pub fn decomp_r(&self) -> &FxHashMap<u16, Vec<u32>> {
+        &self.decomp_r
+    }
+
+    pub fn reachable_flags(&self) -> &[bool] {
+        &self.reachable_flags
+    }
+
+    /// Compute preimage stop states: DFA states where any NFA element has
+    /// buf_len == step_n, extra_sym == NO_EXTRA, and fst_state is final.
+    /// These represent source strings that produce exactly the current target.
+    pub fn compute_preimage_stops(&self, fst: &Fst, step_n: u16) -> Vec<u32> {
+        let mut stops = Vec::new();
+        for &sid in &self.reachable {
+            let sid_usize = sid as usize;
+            if sid_usize >= self.reachable_flags.len() || !self.reachable_flags[sid_usize] {
+                continue;
+            }
+            let nfa_set = &self.arena.sets[sid_usize];
+            let is_preimage = nfa_set.iter().any(|&packed| {
+                let (fst_state, buf_len, extra_sym, _truncated) = unpack_peekaboo(packed);
+                buf_len == step_n && extra_sym == NO_EXTRA && fst.is_final[fst_state as usize]
+            });
+            if is_preimage {
+                stops.push(sid);
+            }
+        }
+        stops
+    }
+
+    /// Compute resume frontiers: for each output symbol y, collect non-truncated
+    /// reachable states that sit on the truncation boundary for y.
+    ///
+    /// A state is on the resume frontier for y if:
+    /// - It has no truncated NFA elements, AND one of:
+    ///   (a) any successor contains a truncated NFA element with extra_sym == y_idx, OR
+    ///   (b) the state is in decomp_q[y_idx] or decomp_r[y_idx]
+    pub fn compute_resume_frontiers(&self) -> FxHashMap<u16, Vec<u32>> {
+        let mut frontiers: FxHashMap<u16, Vec<u32>> = FxHashMap::default();
+
+        for &sid in &self.reachable {
+            let sid_usize = sid as usize;
+            if sid_usize >= self.reachable_flags.len() || !self.reachable_flags[sid_usize] {
+                continue;
+            }
+            let nfa_set = &self.arena.sets[sid_usize];
+
+            // Check if this state has any truncated NFA element
+            let has_truncated = nfa_set.iter().any(|&packed| {
+                let (_fst_state, _buf_len, _extra_sym, truncated) = unpack_peekaboo(packed);
+                truncated
+            });
+
+            if has_truncated {
+                continue;  // Only non-truncated states can be resume frontiers
+            }
+
+            // Check successors for truncated elements
+            let mut frontier_syms: FxHashSet<u16> = FxHashSet::default();
+            for &(_lbl, dst) in &self.arcs_from[sid_usize] {
+                let dst_usize = dst as usize;
+                if dst_usize < self.arena.sets.len() {
+                    for &packed in &self.arena.sets[dst_usize] {
+                        let (_fst_state, _buf_len, extra_sym, truncated) = unpack_peekaboo(packed);
+                        if truncated && extra_sym != NO_EXTRA {
+                            frontier_syms.insert(extra_sym);
+                        }
+                    }
+                }
+            }
+
+            for &y_idx in &frontier_syms {
+                frontiers.entry(y_idx).or_default().push(sid);
+            }
+
+            // Also add if state is in decomp_q or decomp_r for any symbol
+            for (&y_idx, q_stops) in &self.decomp_q {
+                if q_stops.contains(&sid) {
+                    frontiers.entry(y_idx).or_default().push(sid);
+                }
+            }
+            for (&y_idx, r_stops) in &self.decomp_r {
+                if r_stops.contains(&sid) {
+                    frontiers.entry(y_idx).or_default().push(sid);
+                }
+            }
+        }
+
+        // Deduplicate
+        for (_y_idx, sids) in frontiers.iter_mut() {
+            sids.sort_unstable();
+            sids.dedup();
+        }
+
+        frontiers
+    }
+
+    /// Decompose without extracting FSA results — just runs the BFS and
+    /// populates the DFA structure. Used by decompose_for_beam().
+    pub fn decompose_bfs_only(&mut self, fst: &Fst, target: &[u32]) {
+        // Run the full decompose but discard the extracted results.
+        // We need the BFS side effects (arena, arcs_from, decomp_q/r, etc.)
+        let _ = self.decompose(fst, target);
+    }
+
     /// Main entry point: decompose the FST for the given target.
     /// Uses a single-pass BFS with step_n=target.len(). On prefix extension,
     /// only re-expands dirty and border states.
