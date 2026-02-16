@@ -1,7 +1,7 @@
 """
-Direct equivalence tests for the Rust lazy DFA used by FusedTransducedLM.
+Direct equivalence tests for the Rust lazy peekaboo DFA.
 
-Compares the Rust RustFusedHelper's arcs() and classify() against the Python
+Compares RustLazyPeekabooDFA's arcs() and classify() against the Python
 reference (PeekabooPrecover + LazyDeterminize + FstUniversality) at every
 reachable DFA state, not just through the beam-search output.
 """
@@ -113,7 +113,7 @@ def compare_dfa(fst, target, max_states=500):
 
     # --- Rust lazy DFA ---
     rust_fst, sym_map, _ = to_rust_fst(fst)
-    helper = transduction_core.RustFusedHelper(rust_fst)
+    helper = transduction_core.RustLazyPeekabooDFA(rust_fst)
     target_u32 = [sym_map(y) for y in target]
     helper.new_step(target_u32)
     rust_starts = helper.start_ids()
@@ -353,7 +353,7 @@ class TestFusedDFAEquivalence:
             fst.add_arc(0, x, x, 0)
 
         rust_fst, sym_map, _ = to_rust_fst(fst)
-        helper = transduction_core.RustFusedHelper(rust_fst)
+        helper = transduction_core.RustLazyPeekabooDFA(rust_fst)
         inv_sym = {v: k for k, v in sym_map.items()}
 
         # Step 0: empty target

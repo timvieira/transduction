@@ -326,7 +326,7 @@ class FusedTransducedLM(LM):
 
         # Build Rust FST and helper
         rust_fst, sym_map, _ = to_rust_fst(fst)
-        self._rust_helper = transduction_core.RustFusedHelper(rust_fst)
+        self._rust_helper = transduction_core.RustLazyPeekabooDFA(rust_fst)
         self._sym_map = {k: v for k, v in sym_map.items()}
         self._inv_sym_map = {v: k for k, v in sym_map.items()}
 

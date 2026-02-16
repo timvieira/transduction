@@ -669,12 +669,12 @@ impl PeekabooBeamView {
 }
 
 // ---------------------------------------------------------------------------
-// RustFusedHelper: lazy DFA for FusedTransducedLM
+// RustLazyPeekabooDFA: general-purpose lazy DFA over the peekaboo NFA
 // ---------------------------------------------------------------------------
 
-/// Result of classifying a DFA state for the fused search.
+/// Result of classifying a lazy peekaboo DFA state.
 #[pyclass]
-pub struct FusedClassifyResult {
+pub struct PeekabooClassifyResult {
     #[pyo3(get)]
     pub quotient_sym: Option<u32>,
     #[pyo3(get)]
@@ -687,13 +687,13 @@ pub struct FusedClassifyResult {
     pub trunc_output_syms: Vec<u32>,
 }
 
-/// Rust-backed lazy DFA helper for FusedTransducedLM.
+/// Rust-backed lazy DFA over the peekaboo NFA.
 ///
 /// Per-FST data is precomputed in `new()`.  Each target step creates a fresh
 /// lazy DFA via `new_step()`.  The DFA only materializes states on demand
 /// through `arcs()` and `classify()`.
 #[pyclass(unsendable)]
-pub struct RustFusedHelper {
+pub struct RustLazyPeekabooDFA {
     fst: Py<RustFst>,
     sym_to_idx: rustc_hash::FxHashMap<u32, u16>,
     idx_to_sym: Vec<u32>,
@@ -703,7 +703,7 @@ pub struct RustFusedHelper {
 }
 
 #[pymethods]
-impl RustFusedHelper {
+impl RustLazyPeekabooDFA {
     #[new]
     fn new(py: Python<'_>, fst: Py<RustFst>) -> Self {
         use rustc_hash::{FxHashMap, FxHashSet};
@@ -738,7 +738,7 @@ impl RustFusedHelper {
             (sym_to_idx, idx_to_sym, ip_universal_states, num_source_symbols)
         };
 
-        RustFusedHelper {
+        RustLazyPeekabooDFA {
             fst,
             sym_to_idx,
             idx_to_sym,
@@ -776,7 +776,7 @@ impl RustFusedHelper {
     }
 
     /// Lazily compute and return classification of a DFA state.
-    fn classify(&mut self, py: Python<'_>, sid: u32) -> FusedClassifyResult {
+    fn classify(&mut self, py: Python<'_>, sid: u32) -> PeekabooClassifyResult {
         let inner = &self.fst.borrow(py).inner;
         let dfa = self.lazy_dfa.as_mut().expect("call new_step first");
 
@@ -799,7 +799,7 @@ impl RustFusedHelper {
         let trunc_output_syms: Vec<u32> = meta.trunc_output_syms
             .iter().map(|&idx| idx_to_sym[idx as usize]).collect();
 
-        FusedClassifyResult {
+        PeekabooClassifyResult {
             quotient_sym,
             remainder_syms,
             is_preimage,
