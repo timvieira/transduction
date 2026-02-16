@@ -51,10 +51,12 @@ Each algorithm builds over a specific NFA variant defined in `precover_nfa.py`. 
 
 | NFA Variant | Class in `precover_nfa.py` | Buffer | Truncation | State format | Used by |
 |---|---|---|---|---|---|
-| `PrecoverNFA` | ✓ | push, grows to target prefix | at N (bounded) | `(i, ys)` | Precover, NonrecursiveDFADecomp, LazyNonrecursive |
-| `TruncationMarkerPrecoverNFA` | ✓ | push, tracks info loss | at N; `truncated` flag distinguishes eps vs non-eps overflow | `(i, ys, truncated)` | Precover (push-truncated mode) |
-| `TargetSideBuffer` | ✓ | unconditional accumulation | none (unbounded) | `(i, ys)` | (archived) |
-| `PeekabooLookaheadNFA` | ✓ | push, K-lookahead | at N+K with truncation bit | `(i, ys, truncated)` | PeekabooState, DirtyPeekaboo |
-| `PeekabooFixedNFA` | ✓ | push, fixed N+1 | at N+1, no truncation bit | `(i, ys)` | Peekaboo (nonrecursive) |
+| `PrecoverNFA` | ✓ | tuple push, grows to target prefix | at N (bounded) | `(i, ys)` | Precover, NonrecursiveDFADecomp, LazyNonrecursive |
+| `TruncationMarkerPrecoverNFA` | ✓ | tuple push, tracks info loss | at N; `truncated` flag distinguishes eps vs non-eps overflow | `(i, ys, truncated)` | Precover (push-truncated mode) |
+| `TargetSideBuffer` | ✓ | unconditional tuple accumulation | none (unbounded) | `(i, ys)` | (archived) |
+| `PeekabooLookaheadNFA` | ✓ | tuple push, K-lookahead | at N+K with truncation bit | `(i, ys, truncated)` | PeekabooState, DirtyPeekaboo |
+| `PeekabooFixedNFA` | ✓ | tuple push, fixed N+1 | at N+1, no truncation bit | `(i, ys)` | Peekaboo (nonrecursive) |
+
+All NFA variants use **tuples of symbols** for the target-side buffer `ys`, supporting multi-character output symbols (e.g., PTB byte-value strings like `'84'`). Buffer operations use tuple slicing and concatenation (`ys + (a,)`, `ys[:n]`), which correctly preserves symbol boundaries.
 
 Note: `TruncatedIncrementalDFADecomp` and `RustDirtyState` use a frontier-marker approach conceptually similar to `TruncationMarkerPrecoverNFA` — tracking whether each NFA state is at the frontier (`|ys| == N`) to enable dirty-state detection. In the Rust implementation, this is handled directly in `incremental.rs` via `max_bufpos` tracking rather than a separate NFA class.

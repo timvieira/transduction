@@ -18,8 +18,7 @@ resampling, unbiased prefix probability estimates). Quotient states provide
 exact marginalization over infinitely many source continuations — the key
 variance reduction mechanism. CI, exports, and core documentation are in place.
 The remaining path to production readiness: wire in the BPE fast path
-(TokenDecompose), batch LM calls for GPU utilization, and fix multi-character
-symbol handling.
+(TokenDecompose) and batch LM calls for GPU utilization.
 
 ---
 
@@ -40,7 +39,7 @@ paths, and Rust backends. Each variant serves a distinct niche:
 | Rust | `RustDecomp`, `RustDirtyState`, `RustDirtyPeekaboo` | 3-25x over Python |
 | Finite-only | `LazyIncremental`, `LazyNonrecursive`, `PrioritizedLazy` | Finite-language FSTs |
 
-The parametrized test suite (`test_general.py`: 307 tests) ensures all
+The parametrized test suite (`test_general.py`: 316 tests) ensures all
 general-case algorithms agree.
 
 ### 2. Optimizations With Measured Impact
@@ -72,7 +71,7 @@ is self-contained with no pollution of core algorithms.
 
 ### 4. Solid Test Infrastructure
 
-- **663 tests** across 10 test files
+- **672 tests** across 10 test files
 - Parametrized cross-algorithm validation catches disagreements automatically
 - Reference implementations (`Precover`) serve as correctness oracles
 - Real-model integration tests (GPT-2 + BPE FST in `test_enumeration.py`)
@@ -99,13 +98,6 @@ unbiased).
 ---
 
 ## Open Issues
-
-### High: Multi-Character Symbol Handling Broken
-
-All PrecoverNFA implementations index into the output buffer by character
-position (`ys[N]`, `ys[:N+1]`). This clips multi-character symbols (e.g.,
-PTB byte-value strings like '84', '104'). Blocks use cases beyond byte-level
-FSTs.
 
 ### High: TokenDecompose Not Wired Into TransducedLM
 
@@ -152,13 +144,12 @@ documented in the user-facing API.
 | Applications | 3 | ~590 | BPE, PTB, WikiText |
 | Utilities | 3 | ~2,400 | viz, examples, lazy |
 | **Total Python** | **32** | **~11,200** | |
-| Tests | 10 | ~3,350 | 663 tests |
+| Tests | 10 | ~3,350 | 672 tests |
 
 ### Technical Debt
 
 | Item | Severity | Location | Effort |
 |------|----------|----------|--------|
-| Multi-char symbol handling | High | `precover_nfa.py` | Medium |
 | No end-to-end example | High | — | Small |
 | TokenDecompose not wired into TransducedLM | High | `lm/transduced.py` | Small |
 | No batched LM calls | Medium | `lm/transduced.py` | Medium |
@@ -192,9 +183,8 @@ documented in the user-facing API.
 
 **Goal:** A new contributor can understand and extend the library.
 
-5. **Fix multi-character symbol handling.** Switch PrecoverNFA buffers from
-   string indexing to tuple-of-symbols. This unblocks PTB and other
-   non-byte FSTs.
+5. ~~**Fix multi-character symbol handling.**~~ Done. All output buffers
+   now use tuples of symbols; `FSA.language()` always returns tuples.
 
 6. **Add type annotations to public API.** Start with `base.py`, `fst.py`,
    `lm/base.py`, `lm/transduced.py`.
@@ -222,12 +212,13 @@ documented in the user-facing API.
 | **Algorithms** | A | 12 implementations, well-tested, genuine innovations (Peekaboo, dirty-state) |
 | **Performance** | A- | 5000x BPE speedup, 25x Rust acceleration, 0.1ms per-step dirty-state |
 | **Architecture** | A- | Clean layering, no circular deps, optional Rust, self-contained LM module |
-| **Testing** | A | 663 tests, parametrized cross-validation, CI via GitHub Actions |
+| **Testing** | A | 672 tests, parametrized cross-validation, CI via GitHub Actions |
 | **End-to-End Product** | A- | Particle-based beam-sum/SIR inference; quotient exact marginalization |
 | **API/Packaging** | B | Exports correct; no end-to-end example; TokenDecompose not auto-wired |
 | **Documentation** | B- | Core concepts documented; function-level docs still sparse |
 
 **Bottom line:** The hard parts — fast, correct FST decomposition AND a working
-`TransducedLM` with particle-based approximate inference — are done. The remaining
-work is performance (TokenDecompose integration, batched LM calls) and usability
-(multi-char symbols, examples, types).
+`TransducedLM` with particle-based approximate inference — are done. Multi-character
+symbol support is complete (tuple-based buffers throughout). The remaining work is
+performance (TokenDecompose integration, batched LM calls) and usability (examples,
+types).

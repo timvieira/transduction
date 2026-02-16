@@ -176,12 +176,12 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 
 ## Test Status
 
-- **`test_general.py`**: 307 tests collected
+- **`test_general.py`**: 316 tests collected
 - **`test_finite.py`**: 70 tests collected
 - **`test_enumeration.py`**: 55 tests collected
 - **`test_push_labels.py`**: 35 tests collected
 - **`test_transduced.py`**: 47 tests collected
-- **Total**: 663 tests across 10 test files
+- **Total**: 672 tests across 10 test files
 
 ---
 

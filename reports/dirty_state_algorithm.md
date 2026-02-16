@@ -452,7 +452,8 @@ frontier.
 
 `TruncatedIncrementalDFADecomp` (in `dfa_decomp_incremental_truncated.py`)
 mirrors the Rust `DirtyDecomp`. DFA states are Python `frozenset` objects
-containing `(fst_state, buffer_string)` tuples. Key differences from the
+containing `(fst_state, buffer_tuple)` pairs, where `buffer_tuple` is a
+tuple of output symbols. Key differences from the
 Rust version:
 
 - Uses Python `dict` and `set` for `_dfa_trans`, `_incoming`, `_dfa_status`.
