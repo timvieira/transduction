@@ -52,8 +52,8 @@ class FST:
         output.append('{')
         for p in self.states:
             output.append(f'  {p} \t\t({p in self.start}, {p in self.stop})')
-            for a, q in self.arcs(p):
-                output.append(f'    {a}: {q}')
+            for a, b, q in self.arcs(p):
+                output.append(f'    {a}:{b} -> {q}')
         output.append('}')
         return '\n'.join(output)
 

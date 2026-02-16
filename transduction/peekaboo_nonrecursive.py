@@ -1,27 +1,41 @@
 from transduction.base import DecompositionResult
+from transduction.eager_nonrecursive import Precover
 from transduction.lazy import Lazy
 from transduction.fsa import FSA
 from transduction.fst import EPSILON
-from transduction.precover_nfa import PeekabooFixedNFA as PeekabooPrecover
+from transduction.precover_nfa import PrecoverNFA, PeekabooFixedNFA as PeekabooPrecover
 
 from collections import deque
 from functools import cached_property
 
 
-# [2025-11-21 Fri] This version of the next-symbol prediction algorithm
-# enumerates strings (and states).  We also have a version that enumerates just
-# the states.
-#
-# TODO: hook this up to our suite of (finite) test cases
-#
 class PeekabooStrings:
 
-    def __init__(self, fst):
+    def __init__(self, fst, max_steps=float('inf'), **kwargs):
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
+        self.max_steps = max_steps
 
     def __call__(self, target):
+        """Return Q/R for a single target string.
+
+        For the empty target, delegates to the reference Precover
+        implementation — decompose_next computes results for target+y
+        (all next symbols) so it cannot produce the result for the
+        empty target itself.
+
+        For non-empty targets, calls decompose_next on the prefix and
+        looks up the last symbol.
+        """
+        target = tuple(target)
+        if not target:
+            return Precover(self.fst, target)
+        return self.decompose_next(target[:-1]).get(
+            target[-1], DecompositionResult(set(), set())
+        )
+
+    def decompose_next(self, target):
         target = tuple(target)
         precover = {y: DecompositionResult(set(), set()) for y in self.target_alphabet}
         worklist = deque()
@@ -31,8 +45,12 @@ class PeekabooStrings:
             worklist.append(('', state))
 
         N = len(target)
+        t = 0
         while worklist:
             (xs, state) = worklist.popleft()
+            t += 1
+            if t > self.max_steps:
+                break
 
             relevant_symbols = {ys[N] for _, ys in state if len(ys) > N}
 
@@ -57,8 +75,6 @@ class PeekabooStrings:
             continuous = set()
             for y in relevant_symbols:
                 dfa_filtered = FilteredDFA(dfa=dfa, fst=self.fst, target=target + (y,))
-                #assert dfa_filtered.materialize().equal(Precover(self.fst, target + (y,)).min)
-                #print('ok:', repr(target + (y,)))
                 if dfa_filtered.accepts_universal(state, self.source_alphabet):
                     precover[y].quotient.add(xs)
                     continuous.add(y)

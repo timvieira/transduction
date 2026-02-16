@@ -28,24 +28,13 @@ def _precover_factory(fst, **kwargs):
     return Precover.factory(fst)
 
 
-def _peekaboo_strings_factory(fst, **kwargs):
-    """Adapt PeekabooStrings.decompose_next to the factory(target) interface."""
-    ps = PeekabooStrings(fst)
-    def query(target):
-        target = tuple(target)
-        if not target:
-            pytest.skip("PeekabooStrings.decompose_next does not cover empty target")
-        return ps(target[:-1]).get(target[-1], DecompositionResult(set(), set()))
-    return query
-
-
 IMPLEMENTATIONS = [
     pytest.param(EagerNonrecursive, id="eager_nonrecursive"),
     pytest.param(LazyNonrecursive, id="lazy_nonrecursive"),
     pytest.param(LazyIncremental, id="lazy_incremental"),
     pytest.param(_precover_factory, id="precover"),
     pytest.param(PrioritizedLazyIncremental, id="prioritized_lazy_incremental"),
-    pytest.param(_peekaboo_strings_factory, id="peekaboo_strings"),
+    pytest.param(PeekabooStrings, id="peekaboo_strings"),
 ]
 
 
