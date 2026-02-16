@@ -7,11 +7,10 @@ Usage:
 Outputs SVG files to images/ directory.
 """
 import re
-import resource
 from pathlib import Path
 
-# Memory limit per CLAUDE.md guidelines
-resource.setrlimit(resource.RLIMIT_AS, (4 * 1024**3, 4 * 1024**3))
+from transduction.util import set_memory_limit
+set_memory_limit(4)
 
 from graphviz import Digraph
 

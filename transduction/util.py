@@ -1,3 +1,4 @@
+import resource
 import signal
 from functools import partial
 from contextlib import contextmanager
@@ -129,16 +130,23 @@ class Timeout(Exception):
 
 @contextmanager
 def timelimit(seconds, sig=signal.SIGALRM):
-    """Context manager that raises Timeout after `seconds`."""
+    """Context manager that raises Timeout after `seconds`.
+
+    Saves and restores the previous signal handler. Clears the timer
+    on both normal exit and exception paths.
+    """
     if seconds is None:
         yield
         return
     def signal_handler(signum, frame):
         raise Timeout(f'Call took longer than {seconds} seconds.')
-    signal.signal(sig, signal_handler)
+    prev = signal.signal(sig, signal_handler)
     signal.setitimer(signal.ITIMER_REAL, seconds)
-    yield
-    signal.setitimer(signal.ITIMER_REAL, 0)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(sig, prev)
 
 
 @contextmanager
@@ -153,6 +161,38 @@ def timeit(name, fmt='{name} ({htime})', header=None):
     sec = time() - b4
     ht = f'{sec:.4f} sec' if sec < 60 else f'{sec/60:.1f} min'
     print(fmt.format(name=name, htime=ht, sec=sec), file=sys.stderr)
+
+
+#_______________________________________________________________________________
+# memory limits
+
+def set_memory_limit(gb):
+    """Set process virtual address space limit in gigabytes (RLIMIT_AS).
+
+    No-op if gb is None or non-positive.
+    """
+    if gb is not None and gb > 0:
+        limit = int(gb * 1024**3)
+        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+
+
+@contextmanager
+def memory_limit(gb):
+    """Context manager that sets a memory limit and restores the original on exit.
+
+    Saves the original RLIMIT_AS soft/hard limits, sets a new soft limit
+    (preserving the hard limit), and restores on exit.
+    """
+    if gb is None or gb <= 0:
+        yield
+        return
+    soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+    new_soft = int(gb * 1024**3)
+    resource.setrlimit(resource.RLIMIT_AS, (new_soft, hard))
+    try:
+        yield
+    finally:
+        resource.setrlimit(resource.RLIMIT_AS, (soft, hard))
 
 
 #_______________________________________________________________________________

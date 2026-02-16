@@ -198,6 +198,31 @@ def test_delayed_output_cycle(impl):
     run_test_finite(impl, fst, depth=5)
 
 
+def test_togglecase(impl):
+    fst = examples.togglecase()
+    run_test_finite(impl, fst, depth=1)
+
+
+def test_lowercase(impl):
+    fst = examples.lowercase()
+    run_test_finite(impl, fst, depth=1)
+
+
+def test_mystery1(impl):
+    fst = examples.mystery1()
+    run_test_finite(impl, fst, depth=5)
+
+
+def test_mystery7(impl):
+    fst = examples.mystery7()
+    run_test_finite(impl, fst, depth=5)
+
+
+def test_mystery8(impl):
+    fst = examples.mystery8()
+    run_test_finite(impl, fst, depth=5)
+
+
 # ── Standalone tests (algorithm-specific) ─────────────────────────────────────
 
 def test_lazy_precover_nfa():

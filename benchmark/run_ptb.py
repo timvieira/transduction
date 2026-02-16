@@ -21,8 +21,6 @@ Available methods:
 import argparse
 import csv
 import json
-import resource
-import signal
 import time
 from pathlib import Path
 
@@ -43,6 +41,7 @@ from transduction.applications.ptb import (
 from transduction.applications.wikitext import load_wikitext, wikitext_detokenize
 from transduction.fsa import EPSILON
 from transduction.fst import FST
+from transduction.util import Timeout, timelimit, set_memory_limit
 
 # Decomposition methods
 from transduction.rust_bridge import RustDecomp
@@ -99,26 +98,6 @@ def decode_with_boundaries(output_tuple, boundary_char='|'):
         tokens.append(bytes(current_token).decode('utf-8', errors='replace'))
 
     return ''.join(tokens)
-
-
-# -----------------------------------------------------------------------------
-# Resource limits
-# -----------------------------------------------------------------------------
-
-class TimeoutError(Exception):
-    """Raised when an operation exceeds its time limit."""
-    pass
-
-
-def _timeout_handler(signum, frame):
-    raise TimeoutError("Operation timed out")
-
-
-def set_memory_limit(max_mb):
-    """Set process memory limit in megabytes."""
-    if max_mb is not None and max_mb > 0:
-        max_bytes = max_mb * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (max_bytes, max_bytes))
 
 
 # -----------------------------------------------------------------------------
@@ -213,83 +192,73 @@ def benchmark_precover(fst, target, method=None, timeout_sec=None):
     if method not in METHODS:
         raise ValueError(f"Unknown method: {method}. Available: {list(METHODS.keys())}")
 
-    # Set up timeout handler
-    old_handler = None
-    if timeout_sec is not None:
-        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.alarm(int(timeout_sec))
-
     try:
-        t0 = time.perf_counter()
+        with timelimit(timeout_sec):
+            t0 = time.perf_counter()
 
-        if method in PEEKABOO_METHODS:
-            # Peekaboo methods: reuse cached instance, call with target
-            cache_key = (method, id(fst))
-            if cache_key not in _peekaboo_cache:
-                _peekaboo_cache[cache_key] = PEEKABOO_METHODS[method](fst)
-            peekaboo = _peekaboo_cache[cache_key]
-            per_symbol = peekaboo(target)
-            t1 = time.perf_counter()
+            if method in PEEKABOO_METHODS:
+                # Peekaboo methods: reuse cached instance, call with target
+                cache_key = (method, id(fst))
+                if cache_key not in _peekaboo_cache:
+                    _peekaboo_cache[cache_key] = PEEKABOO_METHODS[method](fst)
+                peekaboo = _peekaboo_cache[cache_key]
+                per_symbol = peekaboo(target)
+                t1 = time.perf_counter()
 
-            # Aggregate stats across all symbols
-            total_q_states = 0
-            total_q_final = 0
-            total_q_arcs = 0
-            total_r_states = 0
-            total_r_final = 0
-            total_r_arcs = 0
-            non_empty = 0
-            for y, decomp in per_symbol.items():
-                Q, R = decomp.quotient, decomp.remainder
-                total_q_states += len(Q.states)
-                total_q_final += len(Q.stop)
-                total_q_arcs += sum(len(list(Q.arcs(s))) for s in Q.states)
-                total_r_states += len(R.states)
-                total_r_final += len(R.stop)
-                total_r_arcs += sum(len(list(R.arcs(s))) for s in R.states)
-                if len(Q.states) > 0 or len(R.states) > 0:
-                    non_empty += 1
+                # Aggregate stats across all symbols
+                total_q_states = 0
+                total_q_final = 0
+                total_q_arcs = 0
+                total_r_states = 0
+                total_r_final = 0
+                total_r_arcs = 0
+                non_empty = 0
+                for y, decomp in per_symbol.items():
+                    Q, R = decomp.quotient, decomp.remainder
+                    total_q_states += len(Q.states)
+                    total_q_final += len(Q.stop)
+                    total_q_arcs += sum(len(list(Q.arcs(s))) for s in Q.states)
+                    total_r_states += len(R.states)
+                    total_r_final += len(R.stop)
+                    total_r_arcs += sum(len(list(R.arcs(s))) for s in R.states)
+                    if len(Q.states) > 0 or len(R.states) > 0:
+                        non_empty += 1
 
-            return {
-                'method': method,
-                'time_ms': (t1 - t0) * 1000,
-                'quotient_states': total_q_states,
-                'quotient_final': total_q_final,
-                'quotient_arcs': total_q_arcs,
-                'remainder_states': total_r_states,
-                'remainder_final': total_r_final,
-                'remainder_arcs': total_r_arcs,
-                'num_symbols': len(per_symbol),
-                'non_empty_symbols': non_empty,
-            }
-        else:
-            # Direct methods: call with (fst, target)
-            result = DIRECT_METHODS[method](fst, target)
-            Q, R = result.quotient, result.remainder
-            t1 = time.perf_counter()
+                return {
+                    'method': method,
+                    'time_ms': (t1 - t0) * 1000,
+                    'quotient_states': total_q_states,
+                    'quotient_final': total_q_final,
+                    'quotient_arcs': total_q_arcs,
+                    'remainder_states': total_r_states,
+                    'remainder_final': total_r_final,
+                    'remainder_arcs': total_r_arcs,
+                    'num_symbols': len(per_symbol),
+                    'non_empty_symbols': non_empty,
+                }
+            else:
+                # Direct methods: call with (fst, target)
+                result = DIRECT_METHODS[method](fst, target)
+                Q, R = result.quotient, result.remainder
+                t1 = time.perf_counter()
 
-            q_arcs = sum(len(list(Q.arcs(s))) for s in Q.states)
-            r_arcs = sum(len(list(R.arcs(s))) for s in R.states)
+                q_arcs = sum(len(list(Q.arcs(s))) for s in Q.states)
+                r_arcs = sum(len(list(R.arcs(s))) for s in R.states)
 
-            return {
-                'method': method,
-                'time_ms': (t1 - t0) * 1000,
-                'quotient_states': len(Q.states),
-                'quotient_final': len(Q.stop),
-                'quotient_arcs': q_arcs,
-                'remainder_states': len(R.states),
-                'remainder_final': len(R.stop),
-                'remainder_arcs': r_arcs,
-            }
-    except TimeoutError:
+                return {
+                    'method': method,
+                    'time_ms': (t1 - t0) * 1000,
+                    'quotient_states': len(Q.states),
+                    'quotient_final': len(Q.stop),
+                    'quotient_arcs': q_arcs,
+                    'remainder_states': len(R.states),
+                    'remainder_final': len(R.stop),
+                    'remainder_arcs': r_arcs,
+                }
+    except Timeout:
         return {'method': method, 'error': f'timeout ({timeout_sec}s)'}
     except MemoryError:
         return {'method': method, 'error': 'out of memory'}
-    finally:
-        if timeout_sec is not None:
-            signal.alarm(0)
-            if old_handler is not None:
-                signal.signal(signal.SIGALRM, old_handler)
 
 
 # -----------------------------------------------------------------------------
@@ -331,7 +300,7 @@ def main(n_pgs=1, max_chars=None, max_prefix_len=None,
         print(f"Timeout: {timeout_sec}s per decomposition")
     if max_memory_mb:
         print(f"Memory limit: {max_memory_mb} MB")
-        set_memory_limit(max_memory_mb)
+        set_memory_limit(max_memory_mb / 1024)
 
     # Build PTB FST
     print("\nBuilding PTB FST...")

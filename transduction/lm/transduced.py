@@ -393,18 +393,14 @@ class TransducedState(LMState):
         raw_scores = {}
         for y, w_list in scores.items():
             raw_scores[y] = logsumexp(w_list)
-
-        eos_raw = logsumexp(eos_scores)
+        raw_scores[EOS] = logsumexp(eos_scores)
 
         Z_parts = list(raw_scores.values())
-        if eos_raw > -np.inf:
-            Z_parts.append(eos_raw)
         Z = logsumexp(Z_parts)
 
         normalized = {}
         for y, raw in raw_scores.items():
             normalized[y] = raw - Z
-        normalized[self.tlm.eos] = eos_raw - Z if Z > -np.inf else -np.inf
 
         self._logp_next_cache = LogpNext(normalized)
         self._raw_scores_cache = raw_scores
@@ -494,13 +490,11 @@ class TransducedLM(LM):
         )
         dfa = peekaboo.dfa
         start_states = list(dfa.start())
-
         inner_initial = self.inner_lm.initial()
         particles = [
             Particle(s, inner_initial, 0.0)
             for s in start_states
         ]
-
         return TransducedState(self, peekaboo, particles, 0.0)
 
     def __repr__(self):

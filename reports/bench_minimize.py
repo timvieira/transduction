@@ -5,11 +5,12 @@ Compares three Hopcroft variants:
   min_faster_old  — find index, but O(|Y|) superset check (X >= Y)
   min_faster_new  — find index + O(1) block_members grouping
 """
-import resource, time, random
+import time, random
 from collections import defaultdict
 from transduction.fsa import FSA
+from transduction.util import set_memory_limit
 
-resource.setrlimit(resource.RLIMIT_AS, (4 * 1024**3, 4 * 1024**3))
+set_memory_limit(4)
 
 
 def min_faster_old(self):

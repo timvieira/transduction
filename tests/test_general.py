@@ -302,6 +302,46 @@ def test_parity_copy(impl):
     run_test(impl, fst, '', depth=5)
 
 
+def test_togglecase(impl):
+    fst = examples.togglecase()
+    run_test(impl, fst, '', depth=2)
+
+
+def test_lowercase(impl):
+    fst = examples.lowercase()
+    run_test(impl, fst, '', depth=2)
+
+
+def test_mystery1(impl):
+    fst = examples.mystery1()
+    run_test(impl, fst, '', depth=7)
+
+
+def test_mystery3(impl):
+    fst = examples.mystery3()
+    run_test(impl, fst, '', depth=5)
+
+
+def test_mystery4(impl):
+    fst = examples.mystery4()
+    run_test(impl, fst, '', depth=5)
+
+
+def test_mystery5(impl):
+    fst = examples.mystery5()
+    run_test(impl, fst, '', depth=5)
+
+
+def test_mystery7(impl):
+    fst = examples.mystery7()
+    run_test(impl, fst, '', depth=7)
+
+
+def test_mystery8(impl):
+    fst = examples.mystery8()
+    run_test(impl, fst, '', depth=7)
+
+
 def test_productive_eps_chain(impl):
     """Functional FST with a long productive input-epsilon chain."""
     fst = FST()

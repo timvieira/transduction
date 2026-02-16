@@ -85,7 +85,7 @@ Optional deps:
 - `tqdm` — progress bars in benchmarks
 
 Eliminated deps (previously external, now inlined):
-- `arsenal` — `Integerizer`, `colors`, `memoize`, `timelimit`, `timeit`, `sample` inlined into `util.py`
+- `arsenal` — `Integerizer`, `colors`, `memoize`, `timelimit`, `timeit`, `sample`, `set_memory_limit`, `memory_limit` inlined into `util.py`
 - `genlm` — `get_byte_vocab` replaced with local `decode_hf_tokenizer`
 - `tokenization` — `StateLM`, `LazyProb`, `logsumexp` all copied/inlined
 
@@ -115,9 +115,11 @@ Eliminated deps (previously external, now inlined):
 
 **Always set a memory limit when running scripts that may consume unbounded
 memory** (benchmarks, determinization, materialization, enumeration, etc.).
-Use `resource.setrlimit(resource.RLIMIT_AS, (limit, limit))` at the top of
-the script or use `ulimit -v` from the shell. A reasonable default is 4 GB.
-Without this, a runaway process can exhaust RAM and crash the machine.
+Use `from transduction.util import set_memory_limit; set_memory_limit(4)` at
+the top of the script (argument is in GB), or use `ulimit -v` from the shell.
+For interactive/notebook use, `memory_limit(gb)` is a context manager that
+restores the original limits on exit. A reasonable default is 4 GB. Without
+this, a runaway process can exhaust RAM and crash the machine.
 
 ## Build Pipeline
 
