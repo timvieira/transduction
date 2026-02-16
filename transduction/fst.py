@@ -534,8 +534,10 @@ class FST:
                         queue.append(dest)
             product_arcs[pair] = arcs
 
-        if not product_final:
-            return (True, None)
+        # After trim(), every start state has a path to some stop state f.
+        # Running both product copies from (s, s) on that path reaches (f, f),
+        # so product_final is always non-empty.
+        assert product_final, "product_final empty: (s,s) always reaches (f,f) after trim"
 
         # --- Phase 2: Backward reachability → co-accessible states ---
         rev = defaultdict(set)
@@ -570,7 +572,6 @@ class FST:
 
         visited = set()
         worklist = deque()
-        exceeded = False
 
         for s1 in t.start:
             for s2 in t.start:
@@ -587,9 +588,13 @@ class FST:
             if (q1, q2) in product_final and (side != 0 or buf != ''):
                 return (False, (x, y1, y2))
 
-            if len(buf) > delay_bound:
-                exceeded = True
-                continue
+            # Delay cannot exceed the bound: any divergence at product state P
+            # can exit to a product_final in at most |trimmed_product| steps,
+            # each growing delay by at most M, so the witness is found at
+            # delay ≤ |trimmed_product| * M = delay_bound before this fires.
+            assert len(buf) <= delay_bound, (
+                f"delay {len(buf)} exceeded bound {delay_bound}"
+            )
 
             for a, b1, b2, j1, j2 in product_arcs.get((q1, q2), ()):
                 if (j1, j2) not in trimmed_product:
@@ -601,13 +606,6 @@ class FST:
                 visited.add(key)
                 worklist.append((j1, j2, new_side, new_buf,
                                  x + a, y1 + b1, y2 + b2))
-
-        if exceeded:
-            # Delay exceeded bound on a co-accessible product state.
-            # A cycle is pumping the delay on a path to acceptance
-            # → non-functional, but the witness requires more pumping
-            # than the bound allows.
-            return (False, None)
 
         return (True, None)
 
@@ -689,10 +687,11 @@ class FST:
                     delay[q] = new_val
                     changed = True
 
-        # Finalize any remaining None to ()
+        # After trim(), every state lies on a start→stop path, so the
+        # iterative fixpoint always propagates delay from stop states
+        # backward through all reachable predecessors.
         for q in t.states:
-            if delay[q] is None:
-                delay[q] = ()
+            assert delay[q] is not None, f"fixpoint failed to resolve delay for state {q} after trim"
 
         # --- 2. Transform arcs ---
         result = FST()

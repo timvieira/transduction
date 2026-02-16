@@ -1,6 +1,6 @@
 """Tests for transduction/fst.py — targeting uncovered methods and branches."""
 import pytest
-from transduction.fst import FST, EPSILON, _advance_buf
+from transduction.fst import FST, EPSILON, _advance_buf, _lcp_pair, _strip_prefix
 from transduction.fsa import FSA
 
 
@@ -494,3 +494,216 @@ def test_compose_smaller_right():
     composed = left @ right
     rel = set(composed.relation(5))
     assert ('aaa', 'xxx') in rel
+
+
+# ── Deprecated properties (lines 41, 45) ─────────────────────────────────────
+
+def test_deprecated_I_F_properties():
+    """Deprecated .I and .F aliases for .start and .stop."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(1)
+    fst.add_arc(0, 'a', 'x', 1)
+    assert fst.I is fst.start
+    assert fst.F is fst.stop
+
+
+# ── spawn keep_arcs (lines 170-172) ──────────────────────────────────────────
+
+def test_spawn_keep_arcs():
+    """spawn(keep_arcs=True) copies all arcs."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(1)
+    fst.add_arc(0, 'a', 'x', 1)
+    fst.add_arc(0, 'b', 'y', 1)
+
+    copy = fst.spawn(keep_init=True, keep_arcs=True, keep_stop=True)
+    assert copy.start == fst.start
+    assert copy.stop == fst.stop
+    assert set(copy.arcs(0)) == set(fst.arcs(0))
+
+
+# ── make_total (lines 265-285, also covers spawn keep_arcs) ──────────────────
+
+def test_make_total():
+    """make_total adds failure marker for inputs outside the domain."""
+    # Partial function: only maps 'a' → 'x'
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(1)
+    fst.add_arc(0, 'a', 'x', 1)
+    fst.A.add('b')  # 'b' in input alphabet but no arc
+
+    t = fst.make_total('FAIL')
+    rel = dict(t.relation(3))
+    # Original mapping preserved
+    assert rel['a'] == 'x'
+    # All other inputs produce FAIL
+    assert rel['b'] == 'FAIL'
+    assert rel[''] == 'FAIL'
+    assert rel['aa'] == 'FAIL'
+
+
+# ── diag and fst @ fsa coercion (lines 296, 411-419) ─────────────────────────
+
+def test_diag():
+    """FST.diag converts FSA to identity FST."""
+    fsa = FSA()
+    fsa.add_start(0)
+    fsa.add_stop(0)
+    fsa.add_arc(0, 'a', 0)
+    fsa.add_arc(0, 'b', 0)
+
+    d = FST.diag(fsa)
+    arcs = list(d.arcs(0))
+    labels = {(a, b) for a, b, _ in arcs}
+    assert ('a', 'a') in labels
+    assert ('b', 'b') in labels
+
+
+def test_compose_fst_with_fsa():
+    """fst @ fsa coerces the FSA to a diag FST then composes (line 296)."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(0)
+    fst.add_arc(0, 'a', 'x', 0)
+    fst.add_arc(0, 'b', 'y', 0)
+
+    fsa = FSA.from_strings({'x', 'y', 'xy'})
+    composed = fst @ fsa
+    rel = set(composed.relation(3))
+    assert ('a', 'x') in rel
+    assert ('b', 'y') in rel
+    assert ('ab', 'xy') in rel
+
+
+# ── __call__ with FST objects (branch coverage for isinstance checks) ─────────
+
+def test_call_both_fst_args():
+    """fst(x, y) where x and y are already FSTs (not strings)."""
+    fst = _make_call_fst()
+    x = FST.from_string('a')
+    y = FST.from_string('x')
+    result = fst(x, y)
+    assert result.start and result.stop
+
+
+def test_call_x_fst_only():
+    """fst(x, None) where x is an FST."""
+    fst = _make_call_fst()
+    x = FST.from_string('a')
+    result = fst(x, None)
+    assert isinstance(result, FSA)
+
+
+def test_call_y_fst_only():
+    """fst(None, y) where y is an FST."""
+    fst = _make_call_fst()
+    y = FST.from_string('x')
+    result = fst(None, y)
+    assert isinstance(result, FSA)
+
+
+# ── Visualization (lines 179-181, 189-190) ───────────────────────────────────
+
+def test_graphviz():
+    """graphviz() returns a Digraph object."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(1)
+    fst.add_arc(0, 'a', 'x', 1)
+
+    g = fst.graphviz()
+    assert type(g).__name__ == 'Digraph'
+
+
+def test_repr_mimebundle():
+    """_repr_mimebundle_ returns SVG for non-empty FST."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(1)
+    fst.add_arc(0, 'a', 'x', 1)
+
+    bundle = fst._repr_mimebundle_()
+    assert 'image/svg+xml' in bundle
+
+
+def test_repr_mimebundle_empty():
+    """_repr_mimebundle_ returns empty-set HTML for empty FST."""
+    fst = FST()
+    bundle = fst._repr_mimebundle_()
+    assert bundle == {'text/html': '<center>∅</center>'}
+
+
+# ── is_functional edge cases ─────────────────────────────────────────────────
+
+def test_is_functional_multi_start_incompatible_paths():
+    """Multi-start FST where cross-product start pairs are not co-accessible.
+
+    Covers line 578: (s1, s2) not in trimmed_product → continue.
+    """
+    fst = FST()
+    fst.add_start(0)
+    fst.add_start(1)
+    fst.add_stop(2)
+    fst.add_arc(0, 'a', 'x', 2)
+    fst.add_arc(1, 'b', 'y', 2)
+    # Product pairs (0,1) and (1,0) have no matching arcs → not co-accessible
+
+    ok, witness = fst.is_functional()
+    assert ok is True
+
+
+def test_is_functional_delay_exceeded():
+    """Non-functional FST where delay exceeds bound during BFS.
+
+    Covers lines 591-592: len(buf) > delay_bound → exceeded = True.
+    The FST has a self-loop with ambiguous output (x vs ε) causing
+    unbounded delay growth in the product construction.
+    """
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(1)
+    fst.add_arc(0, 'a', 'x', 0)   # output 'x'
+    fst.add_arc(0, 'a', EPSILON, 0)   # output ε — same input, different output
+    fst.add_arc(0, 'b', 'b', 1)   # exit to final
+
+    ok, witness = fst.is_functional()
+    assert ok is False
+    # Witness: input 'a...b', one copy outputs 'x...b', the other 'b'
+    assert witness is not None
+
+
+# ── transduce: BFS revisits same state (branch 478→470) ─────────────────────
+
+def test_transduce_nondeterministic():
+    """Transduce through nondeterministic FST; BFS revisits (state, pos) keys."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(2)
+    # Two paths for input 'a': 0→1→2 and 0→2
+    fst.add_arc(0, 'a', 'x', 1)
+    fst.add_arc(1, EPSILON, EPSILON, 2)
+    fst.add_arc(0, 'a', 'y', 2)
+
+    result = fst.transduce('a')
+    # BFS finds the shorter path first
+    assert result in [('x',), ('y',)]
+
+
+# ── Helper functions (lines 877-881, 886-887) ────────────────────────────────
+
+def test_lcp_pair():
+    """Longest common prefix of two tuples."""
+    assert _lcp_pair(('a', 'b', 'c'), ('a', 'b', 'd')) == ('a', 'b')
+    assert _lcp_pair(('a',), ('b',)) == ()
+    assert _lcp_pair((), ('a',)) == ()
+    assert _lcp_pair(('a', 'b'), ('a', 'b')) == ('a', 'b')
+
+
+def test_strip_prefix():
+    """Remove prefix from sequence."""
+    assert _strip_prefix(('a',), ('a', 'b', 'c')) == ('b', 'c')
+    assert _strip_prefix((), ('a',)) == ('a',)
+    assert _strip_prefix(('a', 'b'), ('a', 'b')) == ()

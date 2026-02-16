@@ -1,5 +1,10 @@
 # Transduction — Developer Guide
 
+## CRITICAL: Do NOT commit or push unless explicitly asked
+
+Never run `git commit` or `git push` unless the user explicitly requests it.
+Do not auto-commit after finishing work.
+
 ## Architecture
 
 ### Python Package
