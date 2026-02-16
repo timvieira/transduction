@@ -159,7 +159,7 @@ def load_wikitext_paragraphs_ptb(fst, split, n=4, max_chars=None):
         try:
             input_fst = FST.from_string(byte_strs)
             output_fsa = (input_fst @ fst).project(1)
-            transduced = next(output_fsa.language(tuple=True))
+            transduced = next(output_fsa.language())
             paragraphs.append(transduced)
             original.append(detokenized)
         except StopIteration:
@@ -349,7 +349,7 @@ def main(n_pgs=1, max_chars=None, max_prefix_len=None,
         test_bytes = string_to_byte_strs(test_str)
         input_fst = FST.from_string(test_bytes)
         output_fsa = (input_fst @ fst).project(1)
-        test_output = next(output_fsa.language(tuple=True))
+        test_output = next(output_fsa.language())
         print(f"\n  Sanity test: '{test_str}' -> '{decode_ptb_output(test_output)}'")
     except Exception as e:
         print(f"\n  Sanity test FAILED: {e}")

@@ -326,7 +326,7 @@ def build_ptb_setup(text=None, max_chars=100):
     remapped_input = tuple(fwd_map[s] for s in byte_strs)
     input_fst = FST.from_string(remapped_input)
     output_fsa = (input_fst @ fst).project(1)
-    target_seq = next(output_fsa.language(tuple=True))
+    target_seq = next(output_fsa.language())
     print(f"  Target sequence length: {len(target_seq)}")
 
     # Decode for display
@@ -395,7 +395,7 @@ def build_example_setup(example_name='lowercase'):
         try:
             input_fst = FST.from_string(source_str)
             output_fsa = (input_fst @ fst).project(1)
-            target_seq = next(output_fsa.language(tuple=True))
+            target_seq = next(output_fsa.language())
             if len(target_seq) >= 10:
                 break
         except StopIteration:

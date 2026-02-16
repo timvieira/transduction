@@ -28,7 +28,7 @@ def fst_tokenize(fst, text):
     try:
         input_fst = FST.from_string(byte_strs)
         output_fsa = (input_fst @ fst).project(1)
-        output = next(output_fsa.language(tuple=True))
+        output = next(output_fsa.language())
     except StopIteration:
         return None  # FST rejected input
 
