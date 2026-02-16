@@ -36,50 +36,15 @@ Usage:
 
 import heapq
 import numpy as np
-from dataclasses import dataclass
 
 from transduction.lm.base import LM, LMState, LogpNext
 from transduction.lm.transduced import logsumexp, BeamItem, _format_source_path
-from transduction.fst import EPSILON
-from transduction.precover_nfa import PeekabooLookaheadNFA as PeekabooPrecover
-from transduction.peekaboo_incremental import FstUniversality, TruncatedDFA
+from transduction.rust_bridge import to_rust_fst
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-@dataclass
-class DFAStateMeta:
-    """Summary of what a powerset DFA state tells us about the target prefix.
-
-    A DFA state is a frozenset of NFA tuples (fst_state, output_string, truncated).
-    This dataclass pre-computes the four things the search needs to know.
-    """
-    relevant_symbols: set   # candidate next target symbols (at position len(target))
-    final_symbols: set      # subset where the FST state is also final
-    is_preimage: bool       # output == target at a final FST state (exact match)
-    has_truncated: bool     # at least one tuple hit the lookahead bound
-
-
-def _extract_meta(dfa_state, target, fst_is_final):
-    """Build a DFAStateMeta from a powerset DFA state."""
-    N = len(target)
-    relevant = set()
-    final = set()
-    has_truncated = False
-    is_preimage = False
-    for fst_state, output, truncated in dfa_state:
-        if len(output) == N and fst_is_final(fst_state):
-            is_preimage = True
-        if len(output) > N:
-            sym = output[N]
-            relevant.add(sym)
-            if output[:N] == target and fst_is_final(fst_state):
-                final.add(sym)
-        has_truncated = has_truncated or truncated
-    return DFAStateMeta(relevant, final, is_preimage, has_truncated)
-
 
 def _normalize(scores, eos_scores, eos_token):
     """Turn per-symbol log-weight lists into a conditional distribution."""
@@ -107,30 +72,32 @@ class _FusedSearch:
     """
 
     def __init__(self, tlm, target, beam):
-        fst = tlm.fst
         self._target = target
         self._max_steps = tlm.max_steps
-        self._fst = fst
+        self._tlm = tlm
 
-        # Lazy DFA for the current target prefix
-        nfa = PeekabooPrecover(fst, target)
-        self._raw_dfa = nfa.det()
-        self._dfa = self._raw_dfa.cache()
+        # Create fresh Rust lazy DFA for this target prefix
+        target_u32 = [tlm._sym_map[y] for y in target]
+        tlm._rust_helper.new_step(target_u32)
 
-        # Universality (precomputed per-FST, shared across steps)
-        self._univ = tlm._univ
-        self._all_input_universal = self._univ.all_input_universal
-        self._source_alphabet = fst.A - {EPSILON}
-
-        # Caches (populated lazily)
-        self._meta_cache = {}
-        self._classify_cache = {}
-        self._univ_filters = {}
+        # Inverse symbol map for converting u32 back to Python symbols
+        self._inv = tlm._inv_sym_map
 
         # Search accumulators
         self.scores = {}          # symbol -> [log-weights]
         self.eos_scores = []      # [log-weights]
         self.carry_forward = {}   # symbol -> [BeamItem]
+
+        # Root-family tracking for carry-forward deduplication.
+        # Same invariant as TransducedLM: within each root family, only the
+        # shallowest carry-forward entry per target symbol is kept.  The
+        # priority queue pops highest-weight items first, and within a root
+        # family the shallowest item has the highest weight (monotone), so
+        # "first one wins" is correct.
+        self._root_of = {}        # id(item) -> root index
+        self._carried = set()     # (root_id, y) pairs already added
+        for i, item in enumerate(beam):
+            self._root_of[id(item)] = i
 
         # Inner LM's EOS token
         self._inner_eos = (
@@ -142,123 +109,80 @@ class _FusedSearch:
         self._queue = list(beam)
         heapq.heapify(self._queue)
 
-    # --- Caching helpers ---
+    # --- Carry-forward dedup ---
 
-    def _get_meta(self, dfa_state):
-        meta = self._meta_cache.get(dfa_state)
-        if meta is None:
-            meta = _extract_meta(dfa_state, self._target, self._fst.is_final)
-            self._meta_cache[dfa_state] = meta
-        return meta
-
-    def _get_univ_filter(self, symbol):
-        uf = self._univ_filters.get(symbol)
-        if uf is None:
-            trunc_dfa = TruncatedDFA(
-                dfa=self._raw_dfa, fst=self._fst, target=self._target + (symbol,)
-            )
-            uf = self._univ.make_filter(
-                self._fst, self._target + (symbol,), trunc_dfa, self._source_alphabet
-            )
-            self._univ_filters[symbol] = uf
-        return uf
-
-    # --- Classification ---
-
-    def _is_universal(self, symbol, dfa_state):
-        """Is `symbol` a quotient at `dfa_state`?"""
-        if self._all_input_universal:
-            return symbol in self._get_meta(dfa_state).final_symbols
-        return self._get_univ_filter(symbol).is_universal(dfa_state)
-
-    def _classify(self, dfa_state):
-        """Classify relevant symbols as quotient or remainder.
-
-        Returns (quotient_syms, remainder_syms).
-
-        Peekaboo shortcut: at most one symbol can be the quotient.  Once found,
-        the expensive universality check is skipped for remaining symbols.
-        """
-        result = self._classify_cache.get(dfa_state)
-        if result is not None:
-            return result
-
-        meta = self._get_meta(dfa_state)
-
-        # Find the (at most one) quotient symbol.
-        quotient = None
-        for y in meta.relevant_symbols:
-            if self._is_universal(y, dfa_state):
-                quotient = y
-                break
-
-        quotient_syms = {quotient} if quotient is not None else set()
-        remainder_syms = {
-            y for y in meta.relevant_symbols
-            if y in meta.final_symbols and y != quotient
-        }
-
-        result = (quotient_syms, remainder_syms)
-        self._classify_cache[dfa_state] = result
-        return result
+    def _add_carry(self, y, item):
+        rid = self._root_of[id(item)]
+        if (rid, y) in self._carried:
+            return
+        self._carried.add((rid, y))
+        self.carry_forward.setdefault(y, []).append(item)
 
     # --- Scoring (no expansion) ---
 
     def _score_item(self, item):
         """Accumulate this item's contributions to scores.  Returns True if quotient."""
-        meta = self._get_meta(item.dfa_state)
-        q_syms, r_syms = self._classify(item.dfa_state)
+        result = self._tlm._rust_helper.classify(item.dfa_state)
+        inv = self._inv
+
+        q_sym = inv[result.quotient_sym] if result.quotient_sym is not None else None
+        r_syms = [inv[s] for s in result.remainder_syms]
 
         # Quotient: full weight, no LM eval needed
-        for y in q_syms:
-            self.scores.setdefault(y, []).append(item.weight)
-            self.carry_forward.setdefault(y, []).append(item)
+        is_quotient = q_sym is not None
+        if is_quotient:
+            self.scores.setdefault(q_sym, []).append(item.weight)
+            self._add_carry(q_sym, item)
 
         # Preimage and remainder both need P_inner(EOS)
-        if meta.is_preimage or r_syms:
+        if result.is_preimage or r_syms:
             eos_lp = item.lm_state.logp_next[self._inner_eos]
 
-            if meta.is_preimage:
+            if result.is_preimage:
                 self.eos_scores.append(item.weight + eos_lp)
 
             for y in r_syms:
                 self.scores.setdefault(y, []).append(item.weight + eos_lp)
-                self.carry_forward.setdefault(y, []).append(item)
+                self._add_carry(y, item)
 
-        return bool(q_syms)
+        return is_quotient
 
     # --- Expansion ---
 
     def _expand(self, item):
         """Advance by each source symbol and push successors into the queue."""
-        meta = self._get_meta(item.dfa_state)
+        result = self._tlm._rust_helper.classify(item.dfa_state)  # cached
+        arcs = self._tlm._rust_helper.arcs(item.dfa_state)
+        inv = self._inv
         lm_logp_next = item.lm_state.logp_next
-        N = len(self._target)
+        rid = self._root_of[id(item)]
 
         trunc_resume_syms = set()
 
-        for x, next_dfa_state in self._dfa.arcs(item.dfa_state):
+        for x_u32, dest_sid in arcs:
+            x = inv[x_u32]
             w = float(item.weight + lm_logp_next[x])
             if w == -np.inf:
                 continue
 
-            heapq.heappush(self._queue, BeamItem(
-                dfa_state=next_dfa_state,
+            child = BeamItem(
+                dfa_state=dest_sid,
                 lm_state=item.lm_state >> x,
                 weight=w,
-            ))
+            )
+            self._root_of[id(child)] = rid
+            heapq.heappush(self._queue, child)
 
             # If successor has truncated tuples, note which target symbols
             # sit at the truncation boundary so we can resume there next step.
-            if meta.has_truncated:
-                next_meta = self._get_meta(next_dfa_state)
-                if next_meta.has_truncated:
-                    for _, output, truncated in next_dfa_state:
-                        if truncated and len(output) > N:
-                            trunc_resume_syms.add(output[N])
+            if result.has_truncated:
+                dest_result = self._tlm._rust_helper.classify(dest_sid)
+                if dest_result.has_truncated:
+                    for y_u32 in dest_result.trunc_output_syms:
+                        trunc_resume_syms.add(inv[y_u32])
 
         for y in trunc_resume_syms:
-            self.carry_forward.setdefault(y, []).append(item)
+            self._add_carry(y, item)
 
     # --- Main loop ---
 
@@ -392,19 +316,24 @@ class FusedTransducedLM(LM):
     """
 
     def __init__(self, inner_lm, fst, max_steps=1000, max_beam=100, eos='<EOS>'):
+        import transduction_core
+
         self.inner_lm = inner_lm
         self.fst = fst
         self.max_steps = max_steps
         self.max_beam = max_beam
         self.eos = eos
-        self._univ = FstUniversality(fst)
+
+        # Build Rust FST and helper
+        rust_fst, sym_map, _ = to_rust_fst(fst)
+        self._rust_helper = transduction_core.RustFusedHelper(rust_fst)
+        self._sym_map = {k: v for k, v in sym_map.items()}
+        self._inv_sym_map = {v: k for k, v in sym_map.items()}
 
     def initial(self):
         """Return the initial FusedTransducedState (empty target prefix)."""
-        nfa = PeekabooPrecover(self.fst, ())
-        raw_dfa = nfa.det()
-
-        start_states = list(raw_dfa.start())
+        self._rust_helper.new_step([])
+        start_ids = self._rust_helper.start_ids()
 
         inner_initial = self.inner_lm.initial()
         beam = [
@@ -413,7 +342,7 @@ class FusedTransducedLM(LM):
                 lm_state=inner_initial,
                 weight=0.0,
             )
-            for s in start_states
+            for s in start_ids
         ]
 
         return FusedTransducedState(self, beam, (), 0.0)

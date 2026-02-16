@@ -10,6 +10,7 @@ Usage:
 
 from transduction.fsa import FSA, EPSILON
 from transduction.base import DecompositionResult, IncrementalDecomposition
+from transduction.peekaboo_incremental import _trimmed_fsa
 from transduction.util import Integerizer
 from functools import cached_property
 
@@ -325,9 +326,9 @@ class RustPeekabooState:
             self._rust_state = _rust_state
         else:
             import transduction_core
-            rust_fst, sym_map, _ = to_rust_fst(fst)
+            rust_fst, sym_map, state_map = to_rust_fst(fst)
             rust_decomp = transduction_core.RustDirtyPeekabooDecomp(rust_fst)
-            self._rust_state = (rust_decomp, sym_map)
+            self._rust_state = (rust_decomp, sym_map, state_map)
 
         self._bfs_done = False
 
@@ -343,7 +344,7 @@ class RustPeekabooState:
         if self._bfs_done:
             return
 
-        rust_decomp, sym_map = self._rust_state
+        rust_decomp, sym_map, *_ = self._rust_state
         inv_sym_map = {v: k for k, v in sym_map.items()}
 
         target_u32 = [sym_map(y) for y in self.target]
@@ -379,6 +380,84 @@ class RustPeekabooState:
         self.preimage_stops = preimage_stops
         self.dfa = dfa
         self._bfs_done = True
+
+    def decode_dfa_state(self, state_id):
+        """Decode a Rust DFA state ID to its NFA constituents.
+
+        Returns frozenset of (fst_state, buffer_tuple, truncated) matching
+        the Python PeekabooLookaheadNFA representation.
+        """
+        rust_decomp = self._rust_state[0]
+        sym_map = self._rust_state[1]
+        state_map = self._rust_state[2]
+
+        # Cache inverse maps (shared across all calls)
+        if not hasattr(self, '_inv_maps'):
+            idx_to_sym_raw = rust_decomp.idx_to_sym_map()
+            inv_sym = {v: k for k, v in sym_map.items()}
+            inv_state = {v: k for k, v in state_map.items()}
+            self._inv_maps = (idx_to_sym_raw, inv_sym, inv_state)
+        idx_to_sym_raw, inv_sym, inv_state = self._inv_maps
+
+        NO_EXTRA = 0xFFFF
+        raw = rust_decomp.decode_state(state_id)
+        target = self.target
+
+        result = set()
+        for fst_state_u32, buf_len, extra_sym_idx, truncated in raw:
+            py_fst_state = inv_state.get(fst_state_u32, fst_state_u32)
+            if extra_sym_idx == NO_EXTRA:
+                buf = target[:buf_len]
+            else:
+                sym_u32 = idx_to_sym_raw[extra_sym_idx]
+                py_sym = inv_sym[sym_u32]
+                buf = target[:buf_len - 1] + (py_sym,)
+            result.add((py_fst_state, buf, truncated))
+
+        return frozenset(result)
+
+    def _collect_incoming(self):
+        """Forward BFS from DFA start, collecting incoming (reverse) arcs.
+
+        Returns {state: {(label, pred), ...}} matching the format used by
+        _trimmed_fsa() in peekaboo_incremental.py.  Cached per state.
+        """
+        if hasattr(self, '_incoming_cache'):
+            return self._incoming_cache
+        from collections import deque
+        dfa = self.dfa
+        incoming = {}
+        visited = set()
+        worklist = deque(dfa.start())
+        for s in dfa.start():
+            visited.add(s)
+        while worklist:
+            state = worklist.popleft()
+            for label, dest in dfa.arcs(state):
+                incoming.setdefault(dest, set()).add((label, state))
+                if dest not in visited:
+                    visited.add(dest)
+                    worklist.append(dest)
+        self._incoming_cache = incoming
+        return incoming
+
+    def build_qr_fsa(self, y):
+        """Build trimmed Q and R FSAs for target symbol y.
+
+        Returns (quotient_fsa, remainder_fsa) where states are DFA state IDs
+        matching the beam particle state IDs.  Uses forward BFS + backward
+        trim through the beam DFA (same approach as the Python reference
+        implementation in peekaboo_incremental.py).
+        """
+        self._ensure_bfs()
+        d = self.decomp.get(y)
+        if d is None:
+            return FSA(), FSA()
+        incoming = self._collect_incoming()
+        start_states = self.dfa.start()
+        q_fsa = _trimmed_fsa(start_states, d.quotient, incoming)
+        r_fsa = _trimmed_fsa(start_states, d.remainder, incoming)
+        return q_fsa, r_fsa
 
     def __rshift__(self, y):
         return RustPeekabooState(

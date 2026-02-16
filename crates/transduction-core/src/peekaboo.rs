@@ -37,7 +37,7 @@ fn pack_peekaboo(fst_state: u32, buf_len: u16, extra_sym: u16, truncated: bool) 
 }
 
 #[inline]
-fn unpack_peekaboo(packed: u64) -> (u32, u16, u16, bool) {
+pub(crate) fn unpack_peekaboo(packed: u64) -> (u32, u16, u16, bool) {
     let fst_state = (packed >> 32) as u32;
     let buf_len = ((packed >> 17) & 0x7FFF) as u16;
     let extra_sym = ((packed >> 1) & 0xFFFF) as u16;
@@ -97,14 +97,25 @@ impl<'a> PeekabooNFAMapped<'a> {
             && extra_sym != NO_EXTRA
     }
 
-    /// Is an NFA state "productive"?
+    /// Is an NFA state "informative"?  An NFA element is kept in the
+    /// epsilon-closed powerset state if it can produce further arcs,
+    /// contributes to DFA finality, carries preimage metadata, or is
+    /// truncated (needed for truncation metadata).
     #[inline]
     fn is_productive(&self, packed: u64) -> bool {
-        let (fst_state, buf_len, extra_sym, _truncated) = unpack_peekaboo(packed);
+        let (fst_state, buf_len, extra_sym, truncated) = unpack_peekaboo(packed);
+        // Can produce more transitions
         self.fst.has_non_eps_input[fst_state as usize]
+            // NFA-final: contributes to quotient/remainder
             || (self.fst.is_final[fst_state as usize]
                 && buf_len == self.step_n + 1
                 && extra_sym != NO_EXTRA)
+            // Is-preimage: output buffer matches target at a final state
+            || (self.fst.is_final[fst_state as usize]
+                && buf_len == self.step_n
+                && extra_sym == NO_EXTRA)
+            // Truncated: carries truncation metadata
+            || truncated
     }
 
     /// Compute the "effective" buffer position for this NFA state at the
@@ -897,6 +908,10 @@ impl DirtyPeekaboo {
         &self.reachable_flags
     }
 
+    pub fn arena_sets(&self, sid: u32) -> &[u64] {
+        &self.arena.sets[sid as usize]
+    }
+
     /// Compute preimage stop states: DFA states where any NFA element has
     /// buf_len == step_n, extra_sym == NO_EXTRA, and fst_state is final.
     /// These represent source strings that produce exactly the current target.
@@ -1349,6 +1364,409 @@ impl DirtyPeekaboo {
                 per_symbol_r_stops: Vec::new(),
             },
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LazyPeekabooDFA: per-step lazy DFA for FusedTransducedLM
+// ---------------------------------------------------------------------------
+
+/// Cheap metadata extracted from NFA set without arc computation.
+pub struct StateMeta {
+    pub relevant_symbols: Vec<u16>,
+    pub final_symbols: Vec<u16>,
+    pub is_preimage: bool,
+    pub has_truncated: bool,
+    pub trunc_output_syms: Vec<u16>,
+}
+
+impl Default for StateMeta {
+    fn default() -> Self {
+        StateMeta {
+            relevant_symbols: Vec::new(),
+            final_symbols: Vec::new(),
+            is_preimage: false,
+            has_truncated: false,
+            trunc_output_syms: Vec::new(),
+        }
+    }
+}
+
+/// Expensive classification including universality check.
+pub struct ClassifyResult {
+    pub quotient_sym: Option<u16>,
+    pub remainder_syms: Vec<u16>,
+}
+
+impl Default for ClassifyResult {
+    fn default() -> Self {
+        ClassifyResult {
+            quotient_sym: None,
+            remainder_syms: Vec::new(),
+        }
+    }
+}
+
+/// Lazy DFA over the peekaboo NFA for FusedTransducedLM.
+///
+/// The arena persists across steps so that carry-forward beam items'
+/// u32 DFA state IDs remain valid.  Each `new_step()` call clears the
+/// per-step caches (arcs, meta, classify) and computes new start states,
+/// but the arena retains all previously interned NFA sets.
+pub struct LazyPeekabooDFA {
+    sym_to_idx: FxHashMap<u32, u16>,
+    idx_to_sym: Vec<u32>,
+    ip_universal_states: Vec<bool>,
+    num_source_symbols: usize,
+
+    // Per-step (cleared on new_step)
+    target: Vec<u32>,
+    step_n: u16,
+
+    // Persistent across steps
+    arena: PowersetArena,
+    pub fst_univ_cache: FxHashMap<Vec<u32>, bool>,
+
+    // Per-step caches (cleared on new_step)
+    eps_cache: FxHashMap<u64, (Vec<u64>, u16)>,
+    arcs_computed: Vec<bool>,
+    arcs_from: Vec<Vec<(u32, u32)>>,
+    meta_computed: Vec<bool>,
+    meta: Vec<StateMeta>,
+    classify_computed: Vec<bool>,
+    classify: Vec<ClassifyResult>,
+    univ_filters: FxHashMap<u16, PeekabooUniversalityFilter>,
+
+    start_ids: Vec<u32>,
+}
+
+impl LazyPeekabooDFA {
+    /// Create a new LazyPeekabooDFA with per-FST data.  Call `new_step()`
+    /// before using any query methods.
+    pub fn new(
+        sym_to_idx: FxHashMap<u32, u16>,
+        idx_to_sym: Vec<u32>,
+        ip_universal_states: Vec<bool>,
+        num_source_symbols: usize,
+    ) -> Self {
+        LazyPeekabooDFA {
+            sym_to_idx,
+            idx_to_sym,
+            ip_universal_states,
+            num_source_symbols,
+            target: Vec::new(),
+            step_n: 0,
+            arena: PowersetArena::new(),
+            fst_univ_cache: FxHashMap::default(),
+            eps_cache: FxHashMap::default(),
+            arcs_computed: Vec::new(),
+            arcs_from: Vec::new(),
+            meta_computed: Vec::new(),
+            meta: Vec::new(),
+            classify_computed: Vec::new(),
+            classify: Vec::new(),
+            univ_filters: FxHashMap::default(),
+            start_ids: Vec::new(),
+        }
+    }
+
+    /// Reset for a new target prefix.  The arena is preserved (old state IDs
+    /// remain valid for carry-forward), but all per-step caches are cleared.
+    pub fn new_step(&mut self, fst: &Fst, target: Vec<u32>) {
+        let step_n = target.len() as u16;
+        self.target = target;
+        self.step_n = step_n;
+
+        // Clear per-step caches
+        self.eps_cache.clear();
+        self.univ_filters.clear();
+
+        // Reset computed flags for all existing arena states
+        let n = self.arena.len();
+        // Re-use vec capacity, fill with false
+        self.arcs_computed.clear();
+        self.arcs_computed.resize(n, false);
+        self.arcs_from.iter_mut().for_each(|v| v.clear());
+        self.arcs_from.resize_with(n, Vec::new);
+        self.meta_computed.clear();
+        self.meta_computed.resize(n, false);
+        self.meta.clear();
+        self.meta.resize_with(n, StateMeta::default);
+        self.classify_computed.clear();
+        self.classify_computed.resize(n, false);
+        self.classify.clear();
+        self.classify.resize_with(n, ClassifyResult::default);
+
+        // Compute new start states
+        let sym_to_idx = self.sym_to_idx.clone();
+        let nfa = PeekabooNFAMapped::new(fst, &self.target, step_n, &sym_to_idx);
+        let raw_starts = nfa.start_states();
+        let init_closed = nfa.eps_closure_set(&raw_starts, &mut self.eps_cache);
+        let any_final = init_closed.iter().any(|&s| nfa.is_final(s));
+        let start_id = self.arena.intern(init_closed, any_final);
+        self.start_ids = vec![start_id];
+
+        // Ensure capacity for any new arena entries
+        self.ensure_capacity(self.arena.len());
+    }
+
+    pub fn start_ids(&self) -> &[u32] {
+        &self.start_ids
+    }
+
+    pub fn idx_to_sym(&self) -> &[u32] {
+        &self.idx_to_sym
+    }
+
+    fn ensure_capacity(&mut self, needed: usize) {
+        let old_len = self.arcs_computed.len();
+        if needed > old_len {
+            self.arcs_computed.resize(needed, false);
+            self.arcs_from.resize_with(needed, Vec::new);
+            self.meta_computed.resize(needed, false);
+            self.meta.resize_with(needed, StateMeta::default);
+            self.classify_computed.resize(needed, false);
+            self.classify.resize_with(needed, ClassifyResult::default);
+        }
+    }
+
+    /// Lazily compute StateMeta from NFA set (cheap, no arc computation).
+    pub fn ensure_meta(&mut self, fst: &Fst, sid: u32) {
+        let sid_usize = sid as usize;
+        if sid_usize < self.meta_computed.len() && self.meta_computed[sid_usize] {
+            return;
+        }
+        self.ensure_capacity(sid_usize + 1);
+
+        let nfa_set = self.arena.sets[sid_usize].clone();
+        let step_n = self.step_n;
+        let target = &self.target;
+        let sym_to_idx = &self.sym_to_idx;
+
+        let mut relevant_symbols = Vec::new();
+        let mut final_symbols = Vec::new();
+        let mut is_preimage = false;
+        let mut has_truncated = false;
+        let mut trunc_output_syms = Vec::new();
+        let mut seen_relevant: FxHashSet<u16> = FxHashSet::default();
+        let mut seen_final: FxHashSet<u16> = FxHashSet::default();
+        let mut seen_trunc: FxHashSet<u16> = FxHashSet::default();
+
+        for &packed in &nfa_set {
+            let (fst_state, buf_len, extra_sym, truncated) = unpack_peekaboo(packed);
+
+            if buf_len == step_n && extra_sym == NO_EXTRA
+                && fst.is_final[fst_state as usize]
+            {
+                is_preimage = true;
+            }
+
+            if truncated {
+                has_truncated = true;
+                if extra_sym != NO_EXTRA {
+                    let prefix_len = buf_len - 1;
+                    if prefix_len >= step_n && seen_trunc.insert(extra_sym) {
+                        trunc_output_syms.push(extra_sym);
+                    }
+                }
+            }
+
+            if extra_sym != NO_EXTRA {
+                let prefix_len = buf_len - 1;
+                if prefix_len >= step_n {
+                    if seen_relevant.insert(extra_sym) {
+                        relevant_symbols.push(extra_sym);
+                    }
+                    if fst.is_final[fst_state as usize]
+                        && buf_len == step_n + 1
+                        && seen_final.insert(extra_sym)
+                    {
+                        final_symbols.push(extra_sym);
+                    }
+                } else if (prefix_len as usize) < target.len() {
+                    if let Some(&expected_idx) = sym_to_idx.get(&target[prefix_len as usize]) {
+                        if extra_sym == expected_idx
+                            && buf_len == step_n
+                            && fst.is_final[fst_state as usize]
+                        {
+                            is_preimage = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        self.meta[sid_usize] = StateMeta {
+            relevant_symbols,
+            final_symbols,
+            is_preimage,
+            has_truncated,
+            trunc_output_syms,
+        };
+        self.meta_computed[sid_usize] = true;
+    }
+
+    /// Lazily compute ClassifyResult via universality check.
+    pub fn ensure_classify(&mut self, fst: &Fst, sid: u32) {
+        let sid_usize = sid as usize;
+        if sid_usize < self.classify_computed.len() && self.classify_computed[sid_usize] {
+            return;
+        }
+        self.ensure_meta(fst, sid);
+        self.ensure_capacity(sid_usize + 1);
+
+        let relevant = self.meta[sid_usize].relevant_symbols.clone();
+        let final_syms_set: FxHashSet<u16> =
+            self.meta[sid_usize].final_symbols.iter().copied().collect();
+        let nfa_set = self.arena.sets[sid_usize].clone();
+
+        let sym_to_idx = self.sym_to_idx.clone();
+        let target = self.target.clone();
+        let step_n = self.step_n;
+        let num_source_symbols = self.num_source_symbols;
+
+        // Create needed universality filters (needs &self.ip_universal_states)
+        for &y_idx in &relevant {
+            if !self.univ_filters.contains_key(&y_idx) {
+                self.univ_filters.insert(
+                    y_idx,
+                    PeekabooUniversalityFilter::new(
+                        fst, step_n, y_idx, &self.ip_universal_states,
+                    ),
+                );
+            }
+        }
+
+        // Take filters out to avoid borrow conflicts with arena/eps_cache
+        let mut univ_filters = std::mem::take(&mut self.univ_filters);
+        let nfa = PeekabooNFAMapped::new(fst, &target, step_n, &sym_to_idx);
+
+        let mut quotient_sym: Option<u16> = None;
+        let mut remainder_syms = Vec::new();
+
+        for &y_idx in &relevant {
+            if quotient_sym.is_some() {
+                if final_syms_set.contains(&y_idx) {
+                    remainder_syms.push(y_idx);
+                }
+                continue;
+            }
+
+            let filter = univ_filters.get(&y_idx).unwrap();
+            let projected = filter.project_and_refine(&nfa_set, y_idx, step_n);
+
+            let cache_hit = if !projected.is_empty() {
+                let all_frontier = projected.iter().all(|&packed| {
+                    let (_, buf_len, extra_sym, _) = unpack_peekaboo(packed);
+                    buf_len == step_n + 1 && extra_sym == y_idx
+                });
+                if all_frontier {
+                    let mut fst_states: Vec<u32> = projected
+                        .iter()
+                        .map(|&packed| (packed >> 32) as u32)
+                        .collect();
+                    fst_states.sort_unstable();
+                    fst_states.dedup();
+                    self.fst_univ_cache
+                        .get(&fst_states)
+                        .copied()
+                        .map(|result| (result, fst_states))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let is_univ = if let Some((cached_result, _)) = cache_hit {
+                let filter_mut = univ_filters.get_mut(&y_idx).unwrap();
+                if cached_result {
+                    filter_mut.add_pos(&projected);
+                } else {
+                    filter_mut.add_neg(&projected);
+                }
+                cached_result
+            } else {
+                let filter_mut = univ_filters.get_mut(&y_idx).unwrap();
+                let result = filter_mut.is_universal(
+                    &nfa_set, y_idx, &nfa,
+                    &mut self.arena, &mut self.eps_cache,
+                    num_source_symbols, step_n,
+                );
+                self.ensure_capacity(self.arena.len());
+
+                if !projected.is_empty() {
+                    let all_frontier = projected.iter().all(|&packed| {
+                        let (_, buf_len, extra_sym, _) = unpack_peekaboo(packed);
+                        buf_len == step_n + 1 && extra_sym == y_idx
+                    });
+                    if all_frontier {
+                        let mut fst_states: Vec<u32> = projected
+                            .iter()
+                            .map(|&packed| (packed >> 32) as u32)
+                            .collect();
+                        fst_states.sort_unstable();
+                        fst_states.dedup();
+                        self.fst_univ_cache.insert(fst_states, result);
+                    }
+                }
+                result
+            };
+
+            if is_univ {
+                quotient_sym = Some(y_idx);
+            } else if final_syms_set.contains(&y_idx) {
+                remainder_syms.push(y_idx);
+            }
+        }
+
+        self.univ_filters = univ_filters;
+
+        self.classify[sid_usize] = ClassifyResult { quotient_sym, remainder_syms };
+        self.classify_computed[sid_usize] = true;
+    }
+
+    /// Lazily compute DFA arcs from a state.
+    pub fn ensure_arcs(&mut self, fst: &Fst, sid: u32) {
+        let sid_usize = sid as usize;
+        if sid_usize < self.arcs_computed.len() && self.arcs_computed[sid_usize] {
+            return;
+        }
+        self.ensure_capacity(sid_usize + 1);
+
+        let nfa_set = self.arena.sets[sid_usize].clone();
+        let sym_to_idx = self.sym_to_idx.clone();
+        let target = self.target.clone();
+        let step_n = self.step_n;
+
+        let nfa = PeekabooNFAMapped::new(fst, &target, step_n, &sym_to_idx);
+        let all_arcs = nfa.compute_all_arcs(&nfa_set, &mut self.eps_cache);
+
+        let mut result_arcs = Vec::new();
+        for (x, successor) in all_arcs {
+            let succ_final = successor.iter().any(|&s| nfa.is_final(s));
+            let dest_id = self.arena.intern(successor, succ_final);
+            self.ensure_capacity(self.arena.len());
+            result_arcs.push((x, dest_id));
+        }
+
+        self.arcs_from[sid_usize] = result_arcs;
+        self.arcs_computed[sid_usize] = true;
+    }
+
+    pub fn get_arcs(&mut self, fst: &Fst, sid: u32) -> Vec<(u32, u32)> {
+        self.ensure_arcs(fst, sid);
+        self.arcs_from[sid as usize].clone()
+    }
+
+    pub fn get_classify(&mut self, fst: &Fst, sid: u32) -> &ClassifyResult {
+        self.ensure_classify(fst, sid);
+        &self.classify[sid as usize]
+    }
+
+    pub fn get_meta(&mut self, fst: &Fst, sid: u32) -> &StateMeta {
+        self.ensure_meta(fst, sid);
+        &self.meta[sid as usize]
     }
 }
 

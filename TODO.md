@@ -43,6 +43,14 @@
 
 - [ ] Support NFA/epsilon arcs in `epsremove()` (line 553)
 
+### lm/transduced.py
+
+- [x] **Check fused_transduced.py for prefix-dominated carry-forward bug**: The
+  same carry-forward prefix-domination issue fixed in `TransducedLM._compute_logp_next`
+  also existed in `FusedTransducedLM`.  Fixed with root-family tracking in
+  `_FusedSearch` (`_add_carry`, `_root_of`, `_carried`).  Tested by
+  `TestFusedCarryForwardNoDuplicates`.
+
 ### lm/statelm.py
 
 - [ ] Handle tokenizers with multiple byte representations for the same token

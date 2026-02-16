@@ -9,7 +9,7 @@ from transduction.lm.base import LM, LMState
 from transduction.lm.base import LogpNext
 from transduction.lm.ngram import ByteNgramLM, CharNgramLM, NgramState
 from transduction.lm.transduced import TransducedLM, TransducedState, Particle, logsumexp
-from transduction.lm.transduced import _select_top_k, _resample
+from transduction.lm.transduced import _select_top_k
 from transduction.lm.fused_transduced import FusedTransducedLM, FusedTransducedState
 
 
@@ -602,20 +602,6 @@ class TestParticleInfrastructure:
         result = _select_top_k(particles, 10)
         assert len(result) == 2
 
-    def test_resample_basic(self):
-        """_resample returns k particles with reset weights."""
-        particles = [Particle(i, None, np.log(0.5)) for i in range(4)]
-        rng = np.random.default_rng(42)
-        resampled, log_Z = _resample(particles, 4, rng)
-        assert len(resampled) == 4
-        assert all(p.log_weight == 0.0 for p in resampled)
-        assert log_Z > -np.inf
-
-    def test_resample_empty(self):
-        resampled, log_Z = _resample([], 4, np.random.default_rng(0))
-        assert resampled == []
-        assert log_Z == -np.inf
-
 
 # ---------------------------------------------------------------------------
 # Multi-state FST tests (carry-forward correctness)
@@ -738,74 +724,151 @@ class TestConsistency:
 
 
 # ---------------------------------------------------------------------------
-# SIR mode tests
+# Carry-forward no-duplicates invariant
+# ---------------------------------------------------------------------------
+#
+# These tests verify the root-family carry-forward deduplication invariant
+# described in notes/carry-forward-prefix-invariant.md.
+#
+# The bug: during the per-step BFS (or best-first search in FusedTransducedLM),
+# carry-forward collects particles from ALL expansion depths.  A shallow
+# particle P at a resume/Q/R state gets carried forward AND expanded.  Its
+# deeper descendants at resume/Q/R states for the SAME target symbol also get
+# carried forward.  Since the DFA is deterministic with a single start state,
+# the deeper particles are fully redundant — the shallow particle's future
+# expansion will reproduce them at the same DFA state with the same weight.
+# This causes double-counting in scores and wastes beam slots.
+#
+# The fix: each particle is tagged with the index of its "root" — the initial
+# particle (from the previous step's carry-forward) it descended from.  For
+# each (root_id, target_symbol) pair, only the shallowest carry-forward entry
+# is kept ("first one wins" — correct because BFS processes layers shallowest-
+# first, and the priority queue in FusedTransducedLM pops highest-weight items
+# first, which within a root family is the shallowest by monotone weights).
+#
+# The observable invariant: after computing logp_next, no two carry-forward
+# particles for the same target symbol should share a DFA state.  This follows
+# from (a) within a root family, at most one entry per (root, y), at a unique
+# DFA state, and (b) across root families, different roots always occupy
+# distinct DFA states (by DFA determinism + non-prefix initial source paths).
+#
+# The tests below exercise this invariant on FSTs that are known to trigger
+# multi-depth carry-forward for the same target symbol:
+#   - delete_b: a->A, b->eps.  Source prefixes a, ab, abb, ... all produce 'A'.
+#   - duplicate: a->aa, b->bb.  Multi-state with buffered output.
+#   - infinite_quotient: epsilon-output arcs creating deep BFS expansion.
+#   - lookahead: epsilon-output arcs creating depth variance.
+#   - small: multi-state FST with resume frontiers.
+#   - newspeak2: multi-pattern replacement.
 # ---------------------------------------------------------------------------
 
-class TestSIR:
+def _check_no_duplicate_dfa_states(state):
+    """Assert that carry-forward has no duplicate DFA states per target symbol."""
+    state._ensure_computed()
+    cf = state._carry_forward_cache
+    for y, particles in cf.items():
+        dfa_states = [p.dfa_state for p in particles]
+        assert len(dfa_states) == len(set(dfa_states)), (
+            f"Duplicate DFA states in carry-forward for y={y!r}: "
+            f"{len(dfa_states)} particles but only {len(set(dfa_states))} "
+            f"distinct DFA states"
+        )
 
-    def test_sir_basic(self):
-        """SIR mode produces valid distributions."""
-        inner_lm = TinyLM()
-        fst = copy_fst(['a', 'b'])
 
-        tlm = TransducedLM(inner_lm, fst, K=50, max_expansions=500,
-                           method='sir', seed=42)
+# Shared test cases: (name, fst_factory, inner_lm_factory, advance_symbols)
+# Each entry defines an FST, an inner LM, and symbols to advance through.
+_CARRY_FORWARD_TEST_CASES = [
+    (
+        'copy_fst',
+        lambda: copy_fst(['a', 'b']),
+        lambda: TinyLM(),
+        ['a', 'b'],
+    ),
+    (
+        'delete_b',
+        lambda: examples.delete_b(),
+        lambda: CharNgramLM.train(list('aabb') * 10, n=2, alpha=0.5),
+        ['A', 'A'],
+    ),
+    (
+        'duplicate',
+        lambda: examples.duplicate(['a', 'b'], K=2),
+        lambda: CharNgramLM.train(list('ab') * 20, n=2, alpha=0.5),
+        ['a'],
+    ),
+    (
+        'infinite_quotient',
+        lambda: examples.infinite_quotient(),
+        lambda: CharNgramLM.train(list('a#a#') * 10, n=2, alpha=0.5),
+        [],
+    ),
+    (
+        'small',
+        lambda: examples.small(),
+        lambda: CharNgramLM.train(list('abxab') * 10, n=2, alpha=0.5),
+        ['x'],
+    ),
+    (
+        'lookahead',
+        lambda: examples.lookahead(),
+        lambda: CharNgramLM.train(list('aabb') * 10, n=2, alpha=0.5),
+        ['x'],
+    ),
+    (
+        'newspeak',
+        lambda: examples.newspeak2(),
+        lambda: CharNgramLM.train(
+            list('the bad dog had a bad day') * 5, n=2, alpha=0.5),
+        ['u', 'n'],
+    ),
+]
+
+
+class TestCarryForwardNoDuplicates:
+    """Tests root-family dedup for TransducedLM (layered BFS)."""
+
+    @pytest.mark.parametrize(
+        'name,fst_factory,lm_factory,advance',
+        _CARRY_FORWARD_TEST_CASES,
+        ids=[t[0] for t in _CARRY_FORWARD_TEST_CASES],
+    )
+    def test_no_duplicate_dfa_states(self, name, fst_factory, lm_factory, advance):
+        inner_lm = lm_factory()
+        fst = fst_factory()
+        tlm = TransducedLM(inner_lm, fst, K=50, max_expansions=500)
+
         state = tlm.initial()
+        _check_no_duplicate_dfa_states(state)
 
-        lp = state.logp_next
-        all_logps = [lp['a'], lp['b'], lp['<EOS>']]
-        total = logsumexp(all_logps)
-        assert abs(total) < 0.5, f"SIR should give valid dist, got log-sum={total:.4f}"
+        for y in advance:
+            scores = dict(state.logp_next.items())
+            if y in scores and scores[y] > -20:
+                state = state >> y
+                _check_no_duplicate_dfa_states(state)
+            else:
+                break
 
-    def test_sir_advance(self):
-        """SIR mode can advance multiple steps."""
-        inner_lm = TinyLM()
-        fst = copy_fst(['a', 'b'])
 
-        tlm = TransducedLM(inner_lm, fst, K=50, max_expansions=500,
-                           method='sir', seed=42)
-        state = tlm >> 'a' >> 'b'
+class TestFusedCarryForwardNoDuplicates:
+    """Tests root-family dedup for FusedTransducedLM (best-first search)."""
 
-        lp = state.logp_next
-        assert lp['a'] > -np.inf or lp['b'] > -np.inf
+    @pytest.mark.parametrize(
+        'name,fst_factory,lm_factory,advance',
+        _CARRY_FORWARD_TEST_CASES,
+        ids=[t[0] for t in _CARRY_FORWARD_TEST_CASES],
+    )
+    def test_no_duplicate_dfa_states(self, name, fst_factory, lm_factory, advance):
+        inner_lm = lm_factory()
+        fst = fst_factory()
+        tlm = FusedTransducedLM(inner_lm, fst, max_steps=500, max_beam=50)
 
-    def test_sir_logp_finite(self):
-        """SIR logp (prefix probability estimate) should be finite and negative."""
-        inner_lm = TinyLM()
-        fst = copy_fst(['a', 'b'])
+        state = tlm.initial()
+        _check_no_duplicate_dfa_states(state)
 
-        tlm = TransducedLM(inner_lm, fst, K=50, max_expansions=500,
-                           method='sir', seed=42)
-        state = tlm >> 'a'
-
-        assert state.logp < 0.0, "Prefix prob should be < 1"
-        assert state.logp > -np.inf, "Prefix prob should be > 0"
-
-    def test_sir_prefix_prob_unbiased(self):
-        """SIR prefix probability estimate should be approximately correct.
-
-        Run many independent SIR estimates and check that the mean is close
-        to the true value (from brute force).
-        """
-        inner_lm = TinyLM()
-        fst = copy_fst(['a', 'b'])
-
-        bf = brute_force_pushforward(inner_lm, fst, '', max_source_len=8)
-        Z = logsumexp(list(bf.values()))
-        a_strings = {k: v for k, v in bf.items() if k.startswith('a')}
-        true_logp_a = logsumexp(list(a_strings.values())) if a_strings else -np.inf
-
-        # Run many SIR estimates
-        estimates = []
-        for seed in range(50):
-            tlm = TransducedLM(inner_lm, fst, K=20, max_expansions=200,
-                               method='sir', seed=seed)
-            state = tlm >> 'a'
-            estimates.append(state.logp)
-
-        mean_estimate = logsumexp(estimates) - np.log(len(estimates))
-
-        # Should be in the right ballpark (within ~0.5 nats)
-        assert abs(mean_estimate - true_logp_a) < 1.0, \
-            f"SIR mean={mean_estimate:.3f}, true={true_logp_a:.3f}"
-
+        for y in advance:
+            scores = dict(state.logp_next.items())
+            if y in scores and scores[y] > -20:
+                state = state >> y
+                _check_no_duplicate_dfa_states(state)
+            else:
+                break

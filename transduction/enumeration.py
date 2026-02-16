@@ -160,7 +160,10 @@ class importance_sampling:
             keys = list(q.keys())
             vals = np.array(list(q.values()))
             Z = logsumexp(vals)
-            vals = np.exp(vals - Z)
+            if np.isfinite(Z):
+                vals = np.exp(vals - Z)
+            else:
+                vals = np.ones(len(vals))
             x_t = keys[sample(vals)]
 
             if x_t == EOS:
@@ -214,7 +217,10 @@ class crude_importance_sampling:
             keys = list(q.keys())
             vals = np.array(list(q.values()))
             Z = logsumexp(vals)
-            vals = np.exp(vals - Z)
+            if np.isfinite(Z):
+                vals = np.exp(vals - Z)
+            else:
+                vals = np.ones(len(vals))
             x_t = keys[sample(vals)]
 
             if x_t == EOS:

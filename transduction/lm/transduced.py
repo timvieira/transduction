@@ -18,11 +18,6 @@ expanded.  Top K candidates form the next beam.  Beam search terminates when:
     only decrease with source-symbol depth, no descendant can displace the
     current top-K carry-forward set.
 
-Two inference modes:
-  'beam_sum' -- deterministic top-K pruning; consistent as K -> inf.
-  'sir'      -- sequential importance resampling; provides unbiased estimates
-                of the target prefix probability p(y_{1:t}) for any K.
-
 Usage:
     from transduction import examples
     from transduction.lm.ngram import CharNgramLM
@@ -71,6 +66,30 @@ def _format_source_path(lm_state):
         return ''.join(str(s) for s in path)
 
 
+def _format_nfa_element(fst_state, buf, truncated):
+    """Format a single NFA element (fst_state, buffer, truncated) compactly."""
+    if not buf:
+        buf_str = 'ε'
+    elif all(isinstance(b, str) and len(b) == 1 for b in buf):
+        s = ''.join(buf)
+        buf_str = repr(s) if len(s) <= 6 else repr(s[:5]) + '…'
+    else:
+        items = [str(b) for b in buf[:4]]
+        buf_str = '(' + ','.join(items) + ('…' if len(buf) > 4 else '') + ')'
+    trunc = '†' if truncated else ''
+    return f'({fst_state}, {buf_str}{trunc})'
+
+
+def _format_nfa_set(decoded_set):
+    """Format a decoded NFA state set for compact display."""
+    elements = sorted(decoded_set, key=lambda x: (repr(x[0]), x[1]))
+    parts = [_format_nfa_element(*e) for e in elements]
+    MAX = 4
+    if len(parts) <= MAX:
+        return '{' + ', '.join(parts) + '}'
+    return '{' + ', '.join(parts[:MAX]) + f', \u2026+{len(parts)-MAX}' + '}'
+
+
 # ---------------------------------------------------------------------------
 # Particle
 # ---------------------------------------------------------------------------
@@ -98,7 +117,8 @@ class Particle:
 
 # Backward-compat alias for FusedTransducedLM and benchmarks.
 class BeamItem:
-    __slots__ = ('dfa_state', 'lm_state', 'weight')
+    # NOTE: intentionally no __slots__ — autoreload + __slots__ causes
+    # "descriptor doesn't apply" errors when cross-module reload.
     def __init__(self, dfa_state, lm_state, weight):
         self.dfa_state = dfa_state
         self.lm_state = lm_state
@@ -108,7 +128,7 @@ class BeamItem:
 
 
 # ---------------------------------------------------------------------------
-# Selection / resampling
+# Selection
 # ---------------------------------------------------------------------------
 
 def _select_top_k(particles, k):
@@ -122,27 +142,6 @@ def _select_top_k(particles, k):
     return [particles[i] for i in indices]
 
 
-def _resample(particles, k, rng):
-    """Multinomial resampling: draw k particles proportional to exp(weight).
-
-    Returns (resampled_particles, log_normalizer) where log_normalizer =
-    logsumexp(weights), the total evidence before normalization.
-    """
-    if not particles:
-        return [], -np.inf
-    weights = np.array([p.log_weight for p in particles])
-    log_Z = logsumexp(weights)
-    if log_Z == -np.inf:
-        return [], -np.inf
-    probs = np.exp(weights - log_Z)
-    probs = np.maximum(probs, 0.0)
-    probs /= probs.sum()
-    indices = rng.choice(len(particles), size=k, replace=True, p=probs)
-    resampled = [
-        Particle(particles[i].dfa_state, particles[i].lm_state, 0.0)
-        for i in indices
-    ]
-    return resampled, log_Z
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +174,6 @@ class TransducedState(LMState):
         self.history = history
         self._logp_next_cache = None
         self._carry_forward_cache = None
-        self._raw_scores_cache = None
 
     def _ensure_computed(self):
         if self._logp_next_cache is None:
@@ -203,19 +201,8 @@ class TransducedState(LMState):
         cf_particles = self._carry_forward_cache.get(y, [])
 
         K = self.tlm.K
-
-        if self.tlm.method == 'sir':
-            # SIR prefix probability:
-            #   log p-hat(y_t | y_{<t}) = log[ (1/K) * sum_k C_k(y_t) ]
-            #                           = raw_score(y_t) - log(K_input)
-            K_input = max(len(self._particles), 1)
-            raw_y = self._raw_scores_cache.get(y, -np.inf)
-            new_logp = self.logp + raw_y - np.log(K_input)
-            new_particles, _ = _resample(cf_particles, K, self.tlm._rng)
-        else:
-            # Beam-sum prefix probability: product of normalized conditionals
-            new_logp = self.logp + lp_y
-            new_particles = _select_top_k(cf_particles, K)
+        new_logp = self.logp + lp_y
+        new_particles = _select_top_k(cf_particles, K)
 
         return TransducedState(
             self.tlm, new_peekaboo, new_particles,
@@ -229,8 +216,9 @@ class TransducedState(LMState):
         1. Classify all beam particles: Q particles score and exit (exact
            marginalization), R particles score (weight * P(EOS)), preimage
            particles score outer EOS.
-        2. Carry-forward: particles at Q/R/resume_frontier states are saved
-           (deduplicated by object identity to prevent double-counting).
+        2. Carry-forward: particles at Q/R/resume_frontier states are saved.
+           Root-family tracking ensures at most one entry per (root, symbol)
+           pair — deeper descendants are redundant (DFA determinism).
         3. Expand non-Q particles by source symbols.
         4. Select top K candidates -> new beam.
         5. Terminate when beam is empty or monotone weight bound is met:
@@ -267,14 +255,35 @@ class TransducedState(LMState):
         # --- Accumulators ---
         scores = {}          # y -> [log-weights]
         eos_scores = []      # [log-weights] for outer EOS
-        # carry_forward: y -> {id(particle): particle}
-        # Dict-keyed by id() to prevent the same particle object from being
-        # added multiple times (a state can be Q(y) AND resume_frontier(y)).
-        carry_forward = {}
+        carry_forward = {}   # y -> [particle, ...]
+
+        # Root-family tracking for carry-forward deduplication.
+        #
+        # Each initial particle (from self._particles) defines a "root
+        # family".  Within a single BFS, prefix-dominated carry-forward
+        # entries can only arise among descendants of the same root:
+        # initial particles have non-prefix source paths (guaranteed by the
+        # previous step's invariant), and the DFA is deterministic with a
+        # single start state, so particles from different roots can never
+        # reach the same DFA state.
+        #
+        # For each (root_id, y), only the shallowest descendant needs to be
+        # carried forward — deeper ones will be reproduced when the shallow
+        # particle is expanded in the next step's BFS.  Since BFS processes
+        # layers shallowest-first, the first entry for a (root_id, y) pair
+        # is always the shallowest, so "first one wins" is sufficient.
+        root_of = {}               # id(particle) -> root index
+        carried = set()            # (root_id, y) pairs already added
+
+        for i, p in enumerate(self._particles):
+            root_of[id(p)] = i
 
         def _add_carry(y, particle):
-            cf = carry_forward.setdefault(y, {})
-            cf[id(particle)] = particle
+            rid = root_of[id(particle)]
+            if (rid, y) in carried:
+                return
+            carried.add((rid, y))
+            carry_forward.setdefault(y, []).append(particle)
 
         # Top-K carry-forward weight tracker (min-heap of size K).
         # cf_top_k[0] is the K-th highest carry-forward weight when full.
@@ -320,8 +329,7 @@ class TransducedState(LMState):
                         scores.setdefault(y, []).append(eos_w)
 
             # Carry-forward: save particle at resume_frontier / Q / R states.
-            # The id()-keyed dict ensures each particle is saved at most once
-            # per symbol, even when a state is in multiple sets.
+            # _add_carry enforces the no-prefix-domination invariant.
             carry_syms = set()
             rf = resume_of.get(d)
             if rf is not None:
@@ -378,15 +386,18 @@ class TransducedState(LMState):
             # Expand beam particles by source symbols.
             candidates = []
             for particle in beam:
+                rid = root_of[id(particle)]
                 lm_logp = particle.lm_state.logp_next
                 for x, next_dfa_state in dfa.arcs(particle.dfa_state):
                     child_w = particle.log_weight + lm_logp[x]
                     if child_w > -np.inf:
-                        candidates.append(Particle(
+                        child = Particle(
                             next_dfa_state,
                             particle.lm_state >> x,
                             child_w,
-                        ))
+                        )
+                        root_of[id(child)] = rid
+                        candidates.append(child)
 
         # --- Normalize ---
         raw_scores = {}
@@ -402,11 +413,7 @@ class TransducedState(LMState):
             normalized[y] = raw - Z
 
         self._logp_next_cache = LogpNext(normalized)
-        self._raw_scores_cache = raw_scores
-        # Convert carry_forward id-dicts to lists
-        self._carry_forward_cache = {
-            y: list(d.values()) for y, d in carry_forward.items()
-        }
+        self._carry_forward_cache = carry_forward
 
     def path(self):
         tokens = []
@@ -418,6 +425,7 @@ class TransducedState(LMState):
         return tokens
 
     def _repr_html_(self):
+        import html as _html
         from transduction.viz import format_table
         particles = self._particles
         target = self.path()
@@ -436,6 +444,23 @@ class TransducedState(LMState):
             r_states.update(d.remainder)
         log_weights = np.array([p.log_weight for p in particles])
         log_Z = logsumexp(log_weights)
+
+        # Check if state decoding is available
+        can_decode = hasattr(self._peekaboo_state, 'decode_dfa_state')
+
+        # Cache decoded state names
+        decode_cache = {}
+        def decode_state(dfa_state):
+            if not can_decode:
+                return str(dfa_state)
+            if dfa_state not in decode_cache:
+                try:
+                    decoded = self._peekaboo_state.decode_dfa_state(dfa_state)
+                    decode_cache[dfa_state] = _format_nfa_set(decoded)
+                except Exception:
+                    decode_cache[dfa_state] = str(dfa_state)
+            return decode_cache[dfa_state]
+
         groups = {}
         for p in particles:
             source = _format_source_path(p.lm_state)
@@ -455,14 +480,75 @@ class TransducedState(LMState):
         table_rows.sort(key=lambda r: -r[5])
         rows = []
         for source, dfa_state, role, count, log_w, posterior in table_rows:
-            rows.append([repr(source), str(dfa_state), role, str(count),
-                         f'{log_w:.2f}', f'{posterior:.4f}'])
-        return header + format_table(
+            rows.append([repr(source), decode_state(dfa_state), role,
+                         str(count), f'{log_w:.2f}', f'{posterior:.4f}'])
+        result = header + format_table(
             rows,
             headings=['Source prefix', 'DFA state', 'Role', 'Count',
                       'log w', 'p(x|y)'],
             column_styles={0: 'text-align:left'},
         )
+
+        # Add collapsible Q/R FSA visualizations
+        if can_decode and hasattr(self._peekaboo_state, 'build_qr_fsa'):
+            particle_states = {p.dfa_state for p in particles}
+
+            def sty_node(state):
+                if state in particle_states:
+                    return {'fillcolor': '#ADD8E6',
+                            'style': 'filled,rounded'}
+                return {}
+
+            def fmt_node(state):
+                return decode_state(state)
+
+            # Only show Q/R for symbols relevant to current particles
+            relevant_syms = set()
+            for y, d in decomp.items():
+                if d.quotient & particle_states or \
+                   d.remainder & particle_states:
+                    relevant_syms.add(y)
+
+            MAX_QR = 10
+            shown = 0
+            for y in sorted(relevant_syms, key=repr):
+                if shown >= MAX_QR:
+                    rest = len(relevant_syms) - shown
+                    result += (f'<details><summary>\u2026 and {rest} more '
+                               f'Q/R sections</summary></details>')
+                    break
+                try:
+                    q_fsa, r_fsa = self._peekaboo_state.build_qr_fsa(y)
+                except Exception:
+                    continue
+                if not q_fsa.states and not r_fsa.states:
+                    continue
+
+                parts = []
+                y_label = _html.escape(repr(y))
+                if q_fsa.states:
+                    try:
+                        g = q_fsa.graphviz(fmt_node=fmt_node,
+                                           sty_node=sty_node)
+                        svg = g._repr_image_svg_xml()
+                        parts.append(f'<b>Q({y_label})</b><br>{svg}')
+                    except Exception:
+                        pass
+                if r_fsa.states:
+                    try:
+                        g = r_fsa.graphviz(fmt_node=fmt_node,
+                                           sty_node=sty_node)
+                        svg = g._repr_image_svg_xml()
+                        parts.append(f'<b>R({y_label})</b><br>{svg}')
+                    except Exception:
+                        pass
+                if parts:
+                    content = '<br>'.join(parts)
+                    result += (f'<details><summary>Q/R for y={y_label}'
+                               f'</summary>{content}</details>')
+                    shown += 1
+
+        return result
 
     def __repr__(self):
         return (f'TransducedState(target={self._peekaboo_state.target!r},'
@@ -501,11 +587,8 @@ class TransducedLM(LM):
             weight bound (automatic); this is a safety valve for pathological
             FSTs where weight decay is very slow.
         eos: Outer EOS token.
-        method: 'beam_sum' (deterministic top-K, consistent) or 'sir'
-            (sequential importance resampling, unbiased prefix probability).
         decomp_state_cls: Incremental decomposition class (default: PeekabooState).
         univ_cls: Universality precomputation class (default: FstUniversality).
-        seed: Random seed for SIR resampling.
         max_beam: Backward-compat alias for K.
         max_steps: Accepted for backward compat (unused).
         max_expansions: Accepted for backward compat (unused).
@@ -513,8 +596,7 @@ class TransducedLM(LM):
 
     def __init__(self, inner_lm, fst, K=100, max_layers=100,
                  max_expansions=None, eos='<EOS>',
-                 method='beam_sum', decomp_state_cls=None, univ_cls=None,
-                 seed=None,
+                 decomp_state_cls=None, univ_cls=None,
                  max_beam=None, max_steps=None):
         self.inner_lm = inner_lm
         self.fst = fst
@@ -523,11 +605,9 @@ class TransducedLM(LM):
         # Backward-compat attribute (no longer controls beam search).
         self.max_expansions = max_steps or max_expansions or 1000
         self.eos = eos
-        self.method = method
         self._decomp_state_cls = decomp_state_cls or _DefaultDecompState
         self._univ_cls = univ_cls or _DefaultUniv
         self._univ = self._univ_cls(fst)
-        self._rng = np.random.default_rng(seed)
 
     def initial(self):
         """Return the initial TransducedState (empty target prefix)."""
@@ -544,5 +624,4 @@ class TransducedLM(LM):
         return TransducedState(self, peekaboo, particles, 0.0)
 
     def __repr__(self):
-        return (f'TransducedLM(inner={self.inner_lm!r},'
-                f' K={self.K}, method={self.method!r})')
+        return f'TransducedLM(inner={self.inner_lm!r}, K={self.K})'

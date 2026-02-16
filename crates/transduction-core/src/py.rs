@@ -561,6 +561,20 @@ impl RustDirtyPeekabooDecomp {
         self.persistent.arcs_from(state_id).to_vec()
     }
 
+    /// Decode a DFA state ID to its NFA constituents.
+    /// Returns list of (fst_state, buf_len, extra_sym_idx, truncated) tuples.
+    fn decode_state(&self, state_id: u32) -> Vec<(u32, u16, u16, bool)> {
+        self.persistent.arena_sets(state_id)
+            .iter()
+            .map(|&packed| peekaboo::unpack_peekaboo(packed))
+            .collect()
+    }
+
+    /// Return the idx→symbol mapping for decoding extra_sym_idx values.
+    fn idx_to_sym_map(&self) -> Vec<u32> {
+        self.persistent.idx_to_sym().to_vec()
+    }
+
     /// Decompose the FST for the given target, returning per-symbol Q/R.
     #[pyo3(signature = (target, minimize=false))]
     fn decompose(&mut self, py: Python<'_>, target: Vec<u32>, minimize: bool) -> PyResult<PeekabooDecompResult> {
@@ -651,6 +665,147 @@ impl PeekabooBeamView {
     /// Per-symbol resume frontier states: Vec<(output_sym_u32, frontier_sids)>.
     fn resume_frontiers(&self) -> Vec<(u32, Vec<u32>)> {
         self.resume_frontiers.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RustFusedHelper: lazy DFA for FusedTransducedLM
+// ---------------------------------------------------------------------------
+
+/// Result of classifying a DFA state for the fused search.
+#[pyclass]
+pub struct FusedClassifyResult {
+    #[pyo3(get)]
+    pub quotient_sym: Option<u32>,
+    #[pyo3(get)]
+    pub remainder_syms: Vec<u32>,
+    #[pyo3(get)]
+    pub is_preimage: bool,
+    #[pyo3(get)]
+    pub has_truncated: bool,
+    #[pyo3(get)]
+    pub trunc_output_syms: Vec<u32>,
+}
+
+/// Rust-backed lazy DFA helper for FusedTransducedLM.
+///
+/// Per-FST data is precomputed in `new()`.  Each target step creates a fresh
+/// lazy DFA via `new_step()`.  The DFA only materializes states on demand
+/// through `arcs()` and `classify()`.
+#[pyclass(unsendable)]
+pub struct RustFusedHelper {
+    fst: Py<RustFst>,
+    sym_to_idx: rustc_hash::FxHashMap<u32, u16>,
+    idx_to_sym: Vec<u32>,
+    ip_universal_states: Vec<bool>,
+    num_source_symbols: usize,
+    lazy_dfa: Option<peekaboo::LazyPeekabooDFA>,
+}
+
+#[pymethods]
+impl RustFusedHelper {
+    #[new]
+    fn new(py: Python<'_>, fst: Py<RustFst>) -> Self {
+        use rustc_hash::{FxHashMap, FxHashSet};
+        use crate::fst::EPSILON;
+
+        // Scope the borrow so `fst` can be moved into the struct afterward
+        let (sym_to_idx, idx_to_sym, ip_universal_states, num_source_symbols) = {
+            let inner = &fst.borrow(py).inner;
+
+            let mut output_alphabet: Vec<u32> = Vec::new();
+            {
+                let mut seen = FxHashSet::default();
+                for arc in &inner.arcs {
+                    if arc.output != EPSILON && seen.insert(arc.output) {
+                        output_alphabet.push(arc.output);
+                    }
+                }
+                output_alphabet.sort_unstable();
+            }
+
+            let mut sym_to_idx: FxHashMap<u32, u16> = FxHashMap::default();
+            let mut idx_to_sym: Vec<u32> = Vec::new();
+            for &sym in &output_alphabet {
+                let idx = idx_to_sym.len() as u16;
+                sym_to_idx.insert(sym, idx);
+                idx_to_sym.push(sym);
+            }
+
+            let ip_universal_states = compute_ip_universal_states(inner);
+            let num_source_symbols = inner.source_alphabet.len();
+
+            (sym_to_idx, idx_to_sym, ip_universal_states, num_source_symbols)
+        };
+
+        RustFusedHelper {
+            fst,
+            sym_to_idx,
+            idx_to_sym,
+            ip_universal_states,
+            num_source_symbols,
+            lazy_dfa: None,
+        }
+    }
+
+    /// Reset the lazy DFA for the given target prefix.  The arena is
+    /// preserved across steps so carry-forward u32 state IDs remain valid.
+    fn new_step(&mut self, py: Python<'_>, target: Vec<u32>) {
+        let inner = &self.fst.borrow(py).inner;
+        if self.lazy_dfa.is_none() {
+            self.lazy_dfa = Some(peekaboo::LazyPeekabooDFA::new(
+                self.sym_to_idx.clone(),
+                self.idx_to_sym.clone(),
+                self.ip_universal_states.clone(),
+                self.num_source_symbols,
+            ));
+        }
+        self.lazy_dfa.as_mut().unwrap().new_step(inner, target);
+    }
+
+    /// Return the start state IDs for the current step.
+    fn start_ids(&self) -> Vec<u32> {
+        self.lazy_dfa.as_ref().expect("call new_step first").start_ids().to_vec()
+    }
+
+    /// Lazily compute and return arcs from a DFA state.
+    /// Returns Vec<(input_label_u32, dest_sid)>.
+    fn arcs(&mut self, py: Python<'_>, sid: u32) -> Vec<(u32, u32)> {
+        let inner = &self.fst.borrow(py).inner;
+        self.lazy_dfa.as_mut().expect("call new_step first").get_arcs(inner, sid)
+    }
+
+    /// Lazily compute and return classification of a DFA state.
+    fn classify(&mut self, py: Python<'_>, sid: u32) -> FusedClassifyResult {
+        let inner = &self.fst.borrow(py).inner;
+        let dfa = self.lazy_dfa.as_mut().expect("call new_step first");
+
+        // ensure_classify also calls ensure_meta internally
+        dfa.ensure_classify(inner, sid);
+
+        // Clone idx_to_sym to avoid holding an immutable borrow on dfa
+        let idx_to_sym = dfa.idx_to_sym().to_vec();
+
+        // Extract classify result
+        let cls = dfa.get_classify(inner, sid);
+        let quotient_sym = cls.quotient_sym.map(|idx| idx_to_sym[idx as usize]);
+        let remainder_syms: Vec<u32> = cls.remainder_syms
+            .iter().map(|&idx| idx_to_sym[idx as usize]).collect();
+
+        // Extract meta
+        let meta = dfa.get_meta(inner, sid);
+        let is_preimage = meta.is_preimage;
+        let has_truncated = meta.has_truncated;
+        let trunc_output_syms: Vec<u32> = meta.trunc_output_syms
+            .iter().map(|&idx| idx_to_sym[idx as usize]).collect();
+
+        FusedClassifyResult {
+            quotient_sym,
+            remainder_syms,
+            is_preimage,
+            has_truncated,
+            trunc_output_syms,
+        }
     }
 }
 
