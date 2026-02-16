@@ -1,14 +1,14 @@
 # Documentation & Naming TODO
 
+- [ ] Improve code coverage
+
 ## Inline TODOs/XXXs from source
 
 ### fst.py
 
 - [ ] Refactor `delta` data structure to separate input/output labels (line 66)
-- [ ] Guard against state-renaming collisions in `make_total()` (line 271)
-- [ ] Add assertions for bad epsilon cases in `_compose()` (line 321)
-- [ ] Convert `_compose()` to lazy machine pattern (line 322)
-- [ ] Convert `_augment_epsilon_transitions()` to lazy pattern (line 373)
+- [ ] Convert `_compose()` to lazy machine pattern (line 320)
+- [ ] Convert `_augment_epsilon_transitions()` to lazy pattern (line 379)
 
 ### peekaboo_incremental.py
 
@@ -49,7 +49,6 @@
 
 ### lm/statelm.py
 
-- [ ] Add documentation for `decode_hf_tokenizer` assumptions (line 38)
 - [ ] Handle tokenizers with multiple byte representations for the same token
-  (line 164)
-- [ ] Implement immutable-tuple KV cache fix (line 225)
+  (line 185)
+- [ ] Implement immutable-tuple KV cache fix (line 246)
