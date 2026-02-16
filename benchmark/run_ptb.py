@@ -48,7 +48,7 @@ from transduction.fst import FST
 from transduction.rust_bridge import RustDecomp
 from transduction.dfa_decomp_nonrecursive import NonrecursiveDFADecomp
 from transduction.peekaboo_incremental import Peekaboo
-from transduction.eager_nonrecursive import Precover
+from transduction.precover import Precover
 
 # Methods that take (fst, target) directly
 DIRECT_METHODS = {

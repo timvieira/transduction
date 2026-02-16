@@ -24,7 +24,7 @@ including those with infinite quotient/remainder languages.
 
 | Algorithm | Language | File | Incremental | Notes |
 |-----------|----------|------|:-----------:|-------|
-| `Precover` | Python | `eager_nonrecursive.py` | No | Reference implementation |
+| `Precover` | Python | `precover.py` | No | Reference implementation |
 | `NonrecursiveDFADecomp` | Python | `dfa_decomp_nonrecursive.py` | No | Same algorithm, cleaner interface |
 | `TruncatedIncrementalDFADecomp` | Python | `dfa_decomp_incremental_truncated.py` | Yes | Dirty-state incremental DFA decomp |
 | `PeekabooState` | Python | `peekaboo_incremental.py` | Yes | **Recommended.** Batched next-symbol |

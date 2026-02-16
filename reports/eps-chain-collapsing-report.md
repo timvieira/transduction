@@ -201,7 +201,7 @@ indefinitely to completing in ~0.7s.
 
 ## Optimization 5: `arcs_x` Methods (Python)
 
-**Files**: `eager_nonrecursive.py`, `peekaboo_nonrecursive.py`, `peekaboo_incremental.py`
+**Files**: `precover.py`, `peekaboo_nonrecursive.py`, `peekaboo_incremental.py`
 
 Added `arcs_x(state, x)` methods to lazy NFA/DFA wrapper classes. These return
 only successor states for a specific input symbol x, avoiding the overhead of

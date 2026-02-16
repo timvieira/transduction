@@ -16,7 +16,7 @@ resource.setrlimit(resource.RLIMIT_AS, (4 * 1024**3, 4 * 1024**3))
 from graphviz import Digraph
 
 from transduction import examples
-from transduction.eager_nonrecursive import Precover
+from transduction.precover import Precover
 from transduction.viz import visualize_automaton
 
 IMAGES_DIR = Path(__file__).resolve().parent.parent / "images"

@@ -169,7 +169,7 @@ class Peekaboo:
 
     def check(self, target):
         from transduction.util import colors
-        from transduction.eager_nonrecursive import Precover
+        from transduction.precover import Precover
         from transduction import display_table
         from IPython.display import HTML
 

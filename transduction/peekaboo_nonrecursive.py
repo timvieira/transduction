@@ -1,5 +1,5 @@
 from transduction.base import DecompositionResult
-from transduction.eager_nonrecursive import Precover
+from transduction.precover import Precover
 from transduction.lazy import Lazy
 from transduction.fsa import FSA
 from transduction.fst import EPSILON

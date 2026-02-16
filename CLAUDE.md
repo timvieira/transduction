@@ -12,7 +12,8 @@
 - `transduction/peekaboo_incremental.py` — Peekaboo algorithm (recommended for autoregressive decoding)
 - `transduction/peekaboo_nonrecursive.py` — Non-incremental peekaboo
 - `transduction/peekaboo_dirty.py` — DirtyPeekaboo (dirty-state incremental peekaboo)
-- `transduction/eager_nonrecursive.py` — Reference Precover implementation
+- `transduction/precover.py` — Precover (reference decomposition implementation)
+- `transduction/eager_nonrecursive.py` — EagerNonrecursive algorithm
 - `transduction/dfa_decomp_nonrecursive.py` — NonrecursiveDFADecomp
 - `transduction/dfa_decomp_incremental_truncated.py` — TruncatedIncrementalDFADecomp (dirty-state incremental with truncation)
 - `transduction/lazy_incremental.py` — LazyIncremental decomposition (finite-language FSTs only; diverges on infinite quotients)

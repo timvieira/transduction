@@ -2,7 +2,8 @@ from transduction.util import *
 from transduction.viz import display_table, format_table
 from transduction.base import AbstractAlgorithm, DecompositionResult
 PrecoverDecomp = DecompositionResult   # backward compat alias for notebooks
-from transduction.eager_nonrecursive import Precover, EagerNonrecursive
+from transduction.precover import Precover
+from transduction.eager_nonrecursive import EagerNonrecursive
 from transduction import examples
 
 from transduction.util import colors

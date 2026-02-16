@@ -145,7 +145,7 @@ sample = sampler.sample(max_length=50)
 
 | Algorithm | Module | Incremental | Notes |
 |-----------|--------|:-----------:|-------|
-| `Precover` | `eager_nonrecursive.py` | No | Reference implementation; full powerset determinization |
+| `Precover` | `precover.py` | No | Reference implementation; full powerset determinization |
 | `NonrecursiveDFADecomp` | `dfa_decomp_nonrecursive.py` | No | Clean reference; rebuilds from scratch each call |
 | `TruncatedIncrementalDFADecomp` | `dfa_decomp_incremental_truncated.py` | Yes | Incremental DFA decomp with target-buffer truncation and dirty-state tracking |
 | `PeekabooState` | `peekaboo_incremental.py` | Yes | **Recommended.** Batches all next-symbol decompositions; truncation ensures termination |
@@ -174,7 +174,8 @@ transduction/                Python package
   peekaboo_incremental.py    Peekaboo algorithm (recommended for autoregressive decoding)
   peekaboo_nonrecursive.py   Non-incremental peekaboo
   peekaboo_dirty.py          Dirty-state incremental peekaboo
-  eager_nonrecursive.py      Reference Precover implementation
+  precover.py                Reference Precover implementation
+  eager_nonrecursive.py      EagerNonrecursive algorithm
   dfa_decomp_nonrecursive.py Non-incremental DFA decomposition
   dfa_decomp_incremental_truncated.py  Incremental DFA decomp with truncation
   token_decompose.py         BPE-optimized fast path
