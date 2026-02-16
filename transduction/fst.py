@@ -7,9 +7,15 @@ from transduction.fsa import FSA, EPSILON
 from transduction.util import Integerizer
 
 
-# TODO: technically, we need to ensure that these are unique objects.
-ε_1 = f'{EPSILON}₁'
-ε_2 = f'{EPSILON}₂'
+class _EpsilonVariant:
+    """Unique sentinel for composition epsilon filters (cannot collide with user labels)."""
+    def __init__(self, name):
+        self._name = name
+    def __repr__(self):
+        return self._name
+
+ε_1 = _EpsilonVariant('ε₁')
+ε_2 = _EpsilonVariant('ε₂')
 
 
 eps = EPSILON
@@ -50,17 +56,6 @@ class FST:
                 output.append(f'    {a}: {q}')
         output.append('}')
         return '\n'.join(output)
-
-    # TODO: test this method
-    def dump(self):
-        print('m = FST()')
-        for i in self.start:
-            print(f'm.add_start({i!r})')
-        for i in self.stop:
-            print(f'm.add_stop({i!r})')
-        for i in self.states:
-            for x, y, j in self.arcs(i):
-                print(f'm.add_arc({i!r}, {x!r}, {y!r}, {j!r})')
 
     def is_final(self, i):
         return i in self.stop
@@ -265,7 +260,6 @@ class FST:
             A.add_stop(i)
         return A
 
-    # TODO: this function needs testing
     def make_total(self, marker):
         "If `self` is a partial function, this method will make it total by extending the range with a failure `marker`."
         assert marker not in self.B
@@ -750,8 +744,6 @@ class FST:
 
         return result.trim()
 
-    # TODO: we can tighten up the code for reachable and coreachable
-    # (e.g., no need to materialize `adj`).
     def reachable(self):
         reachable = set()
         dq = deque(self.start)
@@ -765,7 +757,6 @@ class FST:
                     dq.append(t)
         return reachable
 
-    # TODO: should we just use `self.reverse().reachable()`?
     def coreachable(self):
         radj = defaultdict(set)
         for q in self.states:

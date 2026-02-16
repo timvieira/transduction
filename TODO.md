@@ -4,18 +4,11 @@
 
 ### fst.py
 
-- [ ] Ensure epsilon sentinel objects (`ε_1`, `ε_2`) are truly unique (line 10)
-- [ ] Add tests for `dump()` method (line 54)
-- [ ] Refactor `delta` data structure to separate input/output labels (line 71)
-- [ ] Add tests for `make_total()` (line 268)
-- [ ] Guard against state-renaming collisions in `make_total()` (line 276)
-- [ ] Add assertions for bad epsilon cases in `_compose()` (line 326)
-- [ ] Convert `_compose()` to lazy machine pattern (line 327)
-- [ ] Convert `_augment_epsilon_transitions()` to lazy pattern (line 378)
-- [ ] Tighten `reachable()`/`coreachable()` — no need to materialize `adj`
-  (line 753)
-- [ ] Consider implementing `coreachable()` as `self.reverse().reachable()`
-  (line 768)
+- [ ] Refactor `delta` data structure to separate input/output labels (line 66)
+- [ ] Guard against state-renaming collisions in `make_total()` (line 271)
+- [ ] Add assertions for bad epsilon cases in `_compose()` (line 321)
+- [ ] Convert `_compose()` to lazy machine pattern (line 322)
+- [ ] Convert `_augment_epsilon_transitions()` to lazy pattern (line 373)
 
 ### peekaboo_incremental.py
 
