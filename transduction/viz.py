@@ -196,7 +196,7 @@ def _as_html_cell(x):
     return f'<pre>{_html.escape(str(x))}</pre>'
 
 
-def format_table(rows, headings=None):
+def format_table(rows, headings=None, column_styles=None):
     """Build an HTML ``<table>`` string from a list of rows.
 
     Each element in a row is converted to HTML via ``_as_html_cell``, so cells
@@ -206,7 +206,13 @@ def format_table(rows, headings=None):
     Args:
         rows: Iterable of row iterables.  Each element becomes one ``<td>``.
         headings: Optional column header labels.
+        column_styles: Optional dict mapping column index to a CSS style string
+            (e.g. ``{0: "text-align:left"}``).  Styles are merged with the
+            default ``vertical-align:top`` on each ``<td>``.
     """
+    if column_styles is None:
+        column_styles = {}
+
     head_html = ""
     if headings:
         head_cells = "".join(f"<th>{h}</th>" for h in headings)
@@ -214,8 +220,14 @@ def format_table(rows, headings=None):
 
     body_rows = []
     for row in rows:
-        cells = "".join(f'<td style="vertical-align:top">{_as_html_cell(x)}</td>' for x in row)
-        body_rows.append(f"<tr>{cells}</tr>")
+        cells = []
+        for i, x in enumerate(row):
+            style = "vertical-align:top"
+            extra = column_styles.get(i)
+            if extra:
+                style += ";" + extra
+            cells.append(f'<td style="{style}">{_as_html_cell(x)}</td>')
+        body_rows.append(f'<tr>{"".join(cells)}</tr>')
     body_html = "<tbody>" + "".join(body_rows) + "</tbody>"
 
     return (

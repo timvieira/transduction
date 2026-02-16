@@ -60,6 +60,16 @@ def logsumexp(arr):
     return out
 
 
+def _format_source_path(lm_state):
+    """Format an LM state's source path for display."""
+    path = lm_state.path()
+    if not path:
+        return '(empty)'
+    try:
+        return bytes(path).decode('utf-8', errors='replace')
+    except TypeError:
+        return ''.join(str(s) for s in path)
+
 
 # ---------------------------------------------------------------------------
 # Particle
@@ -406,6 +416,53 @@ class TransducedState(LMState):
             tokens.append(token)
         tokens.reverse()
         return tokens
+
+    def _repr_html_(self):
+        from transduction.viz import format_table
+        particles = self._particles
+        target = self.path()
+        target_str = ''.join(str(y) for y in target) if target else '(empty)'
+        header = (f'<b>TransducedState</b> '
+                  f'target={target_str!r}, K={len(particles)}, '
+                  f'logp={self.logp:.4f}<br>')
+        if not particles:
+            return header
+        # Classify DFA states from current decomposition
+        decomp = self._peekaboo_state.decomp
+        q_states = set()
+        r_states = set()
+        for d in decomp.values():
+            q_states.update(d.quotient)
+            r_states.update(d.remainder)
+        log_weights = np.array([p.log_weight for p in particles])
+        log_Z = logsumexp(log_weights)
+        groups = {}
+        for p in particles:
+            source = _format_source_path(p.lm_state)
+            key = (source, p.dfa_state)
+            groups.setdefault(key, []).append(p.log_weight)
+        table_rows = []
+        for (source, dfa_state), lws in groups.items():
+            group_log_w = logsumexp(np.array(lws))
+            posterior = np.exp(group_log_w - log_Z)
+            is_q = dfa_state in q_states
+            is_r = dfa_state in r_states
+            role = ('Q+R' if is_q and is_r else
+                    'Q' if is_q else
+                    'R' if is_r else 'frontier')
+            table_rows.append((source, dfa_state, role, len(lws),
+                               group_log_w, posterior))
+        table_rows.sort(key=lambda r: -r[5])
+        rows = []
+        for source, dfa_state, role, count, log_w, posterior in table_rows:
+            rows.append([repr(source), str(dfa_state), role, str(count),
+                         f'{log_w:.2f}', f'{posterior:.4f}'])
+        return header + format_table(
+            rows,
+            headings=['Source prefix', 'DFA state', 'Role', 'Count',
+                      'log w', 'p(x|y)'],
+            column_styles={0: 'text-align:left'},
+        )
 
     def __repr__(self):
         return (f'TransducedState(target={self._peekaboo_state.target!r},'

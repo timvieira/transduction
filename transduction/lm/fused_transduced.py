@@ -39,7 +39,7 @@ import numpy as np
 from dataclasses import dataclass
 
 from transduction.lm.base import LM, LMState, LogpNext
-from transduction.lm.transduced import logsumexp, BeamItem
+from transduction.lm.transduced import logsumexp, BeamItem, _format_source_path
 from transduction.fst import EPSILON
 from transduction.precover_nfa import PeekabooLookaheadNFA as PeekabooPrecover
 from transduction.peekaboo_incremental import FstUniversality, TruncatedDFA
@@ -346,6 +346,38 @@ class FusedTransducedState(LMState):
             tokens.append(token)
         tokens.reverse()
         return tokens
+
+    def _repr_html_(self):
+        from transduction.viz import format_table
+        beam = self._beam
+        target_str = ''.join(str(y) for y in self._target) if self._target else '(empty)'
+        header = (f'<b>FusedTransducedState</b> '
+                  f'target={target_str!r}, K={len(beam)}, '
+                  f'logp={self.logp:.4f}<br>')
+        if not beam:
+            return header
+        log_weights = np.array([b.weight for b in beam])
+        log_Z = logsumexp(log_weights)
+        groups = {}
+        for b in beam:
+            source = _format_source_path(b.lm_state)
+            key = (source, b.dfa_state)
+            groups.setdefault(key, []).append(b.weight)
+        table_rows = []
+        for (source, dfa_state), lws in groups.items():
+            group_log_w = logsumexp(np.array(lws))
+            posterior = np.exp(group_log_w - log_Z)
+            table_rows.append((source, dfa_state, len(lws), group_log_w, posterior))
+        table_rows.sort(key=lambda r: -r[4])
+        rows = []
+        for source, dfa_state, count, log_w, posterior in table_rows:
+            rows.append([repr(source), str(dfa_state), str(count),
+                         f'{log_w:.2f}', f'{posterior:.4f}'])
+        return header + format_table(
+            rows,
+            headings=['Source prefix', 'DFA state', 'Count', 'log w', 'p(x|y)'],
+            column_styles={0: 'text-align:left'},
+        )
 
     def __repr__(self):
         return f'FusedTransducedState(target={self._target!r})'
