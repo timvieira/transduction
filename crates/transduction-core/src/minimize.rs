@@ -5,13 +5,14 @@ use std::collections::VecDeque;
 /// Minimize a DFA represented as an FsaResult.
 ///
 /// Performs trim (remove unreachable/dead states) followed by
-/// partition refinement (Moore's algorithm) to merge equivalent states.
+/// Hopcroft's partition-refinement algorithm (O(kn log n)) to merge
+/// equivalent states.
 pub fn minimize(fsa: &FsaResult) -> FsaResult {
     let trimmed = trim(fsa);
     if trimmed.num_states <= 1 {
         return trimmed;
     }
-    partition_refine(&trimmed)
+    hopcroft_refine(&trimmed)
 }
 
 /// Remove states not reachable from start or not co-reachable to any final state.
@@ -134,8 +135,13 @@ fn trim(fsa: &FsaResult) -> FsaResult {
     }
 }
 
-/// Partition refinement (Moore's algorithm) to merge equivalent DFA states.
-fn partition_refine(fsa: &FsaResult) -> FsaResult {
+/// Hopcroft's partition-refinement algorithm for DFA minimization.
+///
+/// O(kn log n) where k = |alphabet|, n = |states|.  Uses a `find` index
+/// for O(1) block lookup and groups pre-images by block to turn the
+/// superset check into an O(1) length comparison (matching the Python
+/// `min_faster` implementation).
+fn hopcroft_refine(fsa: &FsaResult) -> FsaResult {
     let n = fsa.num_states as usize;
 
     // Collect alphabet
@@ -143,13 +149,10 @@ fn partition_refine(fsa: &FsaResult) -> FsaResult {
     for &lbl in &fsa.arc_lbl {
         alphabet_set.insert(lbl);
     }
-    let mut alphabet: Vec<u32> = alphabet_set.into_iter().collect();
-    alphabet.sort_unstable();
-    let k = alphabet.len();
+    let alphabet: Vec<u32> = alphabet_set.into_iter().collect();
 
-    if k == 0 {
+    if alphabet.is_empty() {
         // No transitions — after trim, all remaining states are start∩stop.
-        // Collapse to a single state.
         return FsaResult {
             num_states: 1,
             start: vec![0],
@@ -160,63 +163,158 @@ fn partition_refine(fsa: &FsaResult) -> FsaResult {
         };
     }
 
+    // Build reverse transition index: inv[(j, sym_idx)] = {i : i --a--> j}
     let sym_to_idx: FxHashMap<u32, usize> =
         alphabet.iter().enumerate().map(|(i, &s)| (s, i)).collect();
-
-    // Build transition table: delta[state * k + sym_idx] -> dest (or SINK)
-    const SINK: u32 = u32::MAX;
-    let mut delta = vec![SINK; n * k];
-    for i in 0..fsa.arc_src.len() {
-        let s = fsa.arc_src[i] as usize;
-        let sym_idx = sym_to_idx[&fsa.arc_lbl[i]];
-        delta[s * k + sym_idx] = fsa.arc_dst[i];
+    let k = alphabet.len();
+    // inv is stored as a flat Vec of Vecs: inv[j * k + sym_idx] = predecessors
+    let mut inv: Vec<Vec<u32>> = vec![vec![]; n * k];
+    for arc_i in 0..fsa.arc_src.len() {
+        let s = fsa.arc_src[arc_i];
+        let d = fsa.arc_dst[arc_i] as usize;
+        let sym_idx = sym_to_idx[&fsa.arc_lbl[arc_i]];
+        inv[d * k + sym_idx].push(s);
     }
 
     // Initial partition: final vs non-final
     let final_set: FxHashSet<u32> = fsa.stop.iter().copied().collect();
-    let mut class = vec![0u32; n];
-    let has_non_final = (0..n).any(|i| !final_set.contains(&(i as u32)));
-    if has_non_final {
-        for i in 0..n {
-            class[i] = if final_set.contains(&(i as u32)) { 0 } else { 1 };
+    let mut final_block: Vec<u32> = Vec::new();
+    let mut nonfinal_block: Vec<u32> = Vec::new();
+    for i in 0..n {
+        if final_set.contains(&(i as u32)) {
+            final_block.push(i as u32);
+        } else {
+            nonfinal_block.push(i as u32);
         }
     }
 
-    // Iterative refinement
-    loop {
-        let prev_num_classes = *class.iter().max().unwrap() + 1;
+    // P[block_id] = list of states in that block
+    let mut blocks: Vec<Vec<u32>> = Vec::new();
+    // find[state] = block_id
+    let mut find: Vec<u32> = vec![0; n];
+    // in_worklist[block_id] = whether this block is in W
+    let mut in_worklist: Vec<bool> = Vec::new();
 
-        let mut new_class = vec![0u32; n];
-        let mut next_id = 0u32;
-        let mut sig_to_class: FxHashMap<Vec<u32>, u32> = FxHashMap::default();
+    // Set up initial blocks
+    let final_id = 0u32;
+    blocks.push(final_block.clone());
+    in_worklist.push(true);
+    for &s in &final_block {
+        find[s as usize] = final_id;
+    }
 
-        for s in 0..n {
-            // Signature: (current_class, class[delta[s][a0]], class[delta[s][a1]], ...)
-            let mut sig = Vec::with_capacity(k + 1);
-            sig.push(class[s]);
-            for sym_idx in 0..k {
-                let dest = delta[s * k + sym_idx];
-                if dest == SINK {
-                    sig.push(SINK);
-                } else {
-                    sig.push(class[dest as usize]);
+    // Worklist
+    let mut worklist: Vec<u32> = vec![final_id];
+
+    if !nonfinal_block.is_empty() {
+        let nonfinal_id = 1u32;
+        for &s in &nonfinal_block {
+            find[s as usize] = nonfinal_id;
+        }
+        blocks.push(nonfinal_block);
+        in_worklist.push(true);
+        worklist.push(nonfinal_id);
+    }
+
+    // Temporary storage reused across iterations
+    let mut block_members: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
+
+    while let Some(a_id) = worklist.pop() {
+        in_worklist[a_id as usize] = false;
+        let a_block = std::mem::take(&mut blocks[a_id as usize]);
+
+        for sym_idx in 0..k {
+            // Group pre-images of a_block on this symbol by their current block
+            block_members.clear();
+            for &j in &a_block {
+                for &i in &inv[j as usize * k + sym_idx] {
+                    block_members
+                        .entry(find[i as usize])
+                        .or_default()
+                        .push(i);
                 }
             }
 
-            let cls = *sig_to_class.entry(sig).or_insert_with(|| {
-                let id = next_id;
-                next_id += 1;
-                id
-            });
-            new_class[s] = cls;
+            for (&block_id, y_and_x) in &block_members {
+                let y = &blocks[block_id as usize];
+                // Deduplicate y_and_x (pre-images may have duplicates)
+                // Use a bitset approach: mark which states in Y are in X
+                let y_len = y.len();
+                if y_len == 0 {
+                    continue;
+                }
+
+                // Count distinct elements of y_and_x that are actually in this block
+                // (states may have moved to other blocks between iterations,
+                //  but find[] is kept current so this is already correct)
+                let mut seen: FxHashSet<u32> = FxHashSet::default();
+                for &s in y_and_x {
+                    if find[s as usize] == block_id {
+                        seen.insert(s);
+                    }
+                }
+                let yx_count = seen.len();
+
+                if yx_count == 0 || yx_count == y_len {
+                    // No overlap or X >= Y — no split needed
+                    continue;
+                }
+
+                // Split: YX stays in block_id, Y_X goes to a new block
+                let mut yx = Vec::with_capacity(yx_count);
+                let mut y_minus_x = Vec::with_capacity(y_len - yx_count);
+                for &s in y {
+                    if seen.contains(&s) {
+                        yx.push(s);
+                    } else {
+                        y_minus_x.push(s);
+                    }
+                }
+
+                // Replace block_id with YX (find[] stays correct for YX elements)
+                blocks[block_id as usize] = yx;
+
+                // Create new block for Y \ X
+                let new_id = blocks.len() as u32;
+                for &s in &y_minus_x {
+                    find[s as usize] = new_id;
+                }
+                blocks.push(y_minus_x);
+                in_worklist.push(false);
+
+                // Add the smaller half to the worklist (Hopcroft's trick)
+                let yx_len = blocks[block_id as usize].len();
+                let ymx_len = blocks[new_id as usize].len();
+                if in_worklist[block_id as usize] {
+                    // block_id already in worklist — add new_id too
+                    in_worklist[new_id as usize] = true;
+                    worklist.push(new_id);
+                } else if yx_len <= ymx_len {
+                    in_worklist[block_id as usize] = true;
+                    worklist.push(block_id);
+                } else {
+                    in_worklist[new_id as usize] = true;
+                    worklist.push(new_id);
+                }
+            }
         }
 
-        class = new_class;
+        // Restore a_block
+        blocks[a_id as usize] = a_block;
+    }
 
-        if next_id == prev_num_classes {
-            // No new splits — partition is stable
-            break;
+    // Build class assignment from find[]
+    // Renumber blocks contiguously (some may be empty after splits replaced them)
+    let mut block_to_class: Vec<u32> = vec![u32::MAX; blocks.len()];
+    let mut next_class = 0u32;
+    let mut class = vec![0u32; n];
+    for i in 0..n {
+        let bid = find[i] as usize;
+        if block_to_class[bid] == u32::MAX {
+            block_to_class[bid] = next_class;
+            next_class += 1;
         }
+        class[i] = block_to_class[bid];
     }
 
     build_minimized(fsa, &class)

@@ -38,13 +38,9 @@
 - [ ] Color active vs inactive nodes in graphviz (line 119)
 - [ ] Add output ports between graphviz plates (line 125)
 
-### peekaboo_nonrecursive.py
-
-- [ ] Hook up `Peekaboo`/`PeekabooStrings` to the finite test suite (line 15)
 
 ### fsa.py
 
-- [ ] Use indexing to find nonempty set difference in `min_fast()` (line 398)
 - [ ] Support NFA/epsilon arcs in `epsremove()` (line 553)
 
 ### lm/statelm.py

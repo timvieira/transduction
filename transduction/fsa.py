@@ -386,26 +386,20 @@ class FSA:
             A = W.pop()
             for a in self.syms:
 
-                X = {i for j in A for i in inv[j,a]}
+                # Group pre-images by their current block; this lets us
+                # replace the O(|Y|) superset check `X >= Y` with an
+                # O(1) length comparison.
+                block_members = defaultdict(set)
+                for j in A:
+                    for i in inv[j, a]:
+                        block_members[find[i]].add(i)
 
-                blocks = {find[i] for i in X}
-
-                for block in blocks:
+                for block, YX in block_members.items():
                     Y = P[block]
 
-                    if X >= Y: continue
+                    if len(YX) == len(Y): continue
 
-                    # TODO: use indexing to find nonempty (Y-X).
-                    # Some notes:
-                    #  - To be nonempty we need to find an element i* that is in Y
-                    #    but not in X.  We already have an element i that is in Y
-                    #    and X.
-                    #  - We know that X and Y overlap (thanks to our indexing
-                    #    trick).  Now, we want to filter out cases where X >= Y
-                    #    because they do not need to be split.
-
-                    YX = Y & X
-                    Y_X = Y - X
+                    Y_X = Y - YX
 
                     # we will replace block with the intersection case (no
                     # need to update `find` index for YX elements)
