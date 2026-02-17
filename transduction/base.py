@@ -166,6 +166,7 @@ class AbstractAlgorithm(DecompositionFunction):
         self.max_steps = max_steps
 
     def __call__(self, target):
+        """Compute the Q/R decomposition for ``target`` via BFS over source strings."""
         precover = DecompositionResult(set(), set())
         worklist = deque()
         for xs in self.initialize(target):
@@ -187,13 +188,21 @@ class AbstractAlgorithm(DecompositionFunction):
         return precover
 
     @abstractmethod
-    def initialize(self, target): ...
+    def initialize(self, target):
+        """Return the initial seed strings for the BFS worklist."""
+        ...
 
     @abstractmethod
-    def candidates(self, xs, target): ...
+    def candidates(self, xs, target):
+        """Return source-string extensions of ``xs`` to add to the worklist."""
+        ...
 
     @abstractmethod
-    def discontinuity(self, xs, target): ...
+    def discontinuity(self, xs, target):
+        """Return True if ``xs`` belongs in the remainder R(target)."""
+        ...
 
     @abstractmethod
-    def continuity(self, xs, target): ...
+    def continuity(self, xs, target):
+        """Return True if ``xs`` belongs in the quotient Q(target)."""
+        ...

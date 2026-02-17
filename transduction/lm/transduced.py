@@ -308,10 +308,12 @@ class TransducedState(LMState):
 
     @property
     def logp_next(self):
+        """Log-probability distribution over next target symbols."""
         self._ensure_computed()
         return self._logp_next_cache
 
     def __rshift__(self, y):
+        """Advance by target symbol ``y``, returning a new TransducedState."""
         if y == self.eos or y not in self.tlm.fst.B:
             raise ValueError(f"Out of vocabulary: {y!r}")
         self._ensure_computed()
@@ -543,6 +545,7 @@ class TransducedState(LMState):
         self._carry_forward_cache = carry_forward
 
     def path(self):
+        """Return the list of target symbols consumed so far."""
         tokens = []
         h = self.history
         while h:

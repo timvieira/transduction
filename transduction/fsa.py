@@ -24,6 +24,24 @@ class frozenset(frozenset):
 
 
 class FSA:
+    """Finite-state automaton (acceptor) over a symbolic alphabet.
+
+    An FSA is a directed graph whose arcs carry single labels.  A path
+    from a start state to a stop state spells out a string; the set of
+    all such strings is the FSA's language.
+
+    Supports regular-language operations: union (``+`` / ``|``),
+    concatenation (``*``), intersection (``&``), difference (``-``),
+    complement (``invert``), Kleene star (``star``), left/right
+    quotient (``//`` / ``/``), determinization (``det``),
+    minimization (``min``), and language equivalence (``equal``).
+
+    Attributes:
+        states: Set of all states.
+        start: Set of initial states.
+        stop: Set of final (accepting) states.
+        syms: Set of arc labels observed.
+    """
 
     def __init__(self, start=(), arcs=(), stop=()):
         self.states = set()
@@ -76,6 +94,12 @@ class FSA:
         return self.graphviz()._repr_mimebundle_(*args, **kwargs)
 
     def graphviz(self, fmt_node=lambda x: x, sty_node=lambda x: {}, fmt_edge=lambda i,a,j: 'ε' if a == EPSILON else a):
+        """Return a Graphviz digraph for visualization.
+
+        Optional callbacks customize rendering: ``fmt_node(state)`` formats
+        node labels, ``sty_node(state)`` returns a dict of Graphviz
+        attributes, and ``fmt_edge(i, a, j)`` formats edge labels.
+        """
         from transduction.viz import _render_graphviz
         return _render_graphviz(
             self.states, self.start, self.stop,
@@ -84,7 +108,7 @@ class FSA:
         )
 
     def D(self, x):
-        "left derivative"
+        """Left derivative: the language of strings ``y`` such that ``x·y`` is accepted."""
         e = self.epsremove()
         m = FSA(start = set(e.start), stop = set(e.stop))
         for i,a,j in e.arcs():
@@ -95,6 +119,7 @@ class FSA:
         return m
 
     def add(self, i, a, j):
+        """Add arc from state ``i`` to state ``j`` with label ``a``. Creates states implicitly."""
         self.edges[i][a].add(j)
         self.states.add(i); self.syms.add(a); self.states.add(j)
         return self
@@ -102,19 +127,28 @@ class FSA:
     add_arc = add
 
     def add_start(self, i):
+        """Mark state ``i`` as an initial state (creates it if needed)."""
         self.start.add(i)
         self.states.add(i)
         return self
 
     def add_stop(self, i):
+        """Mark state ``i`` as a final (accepting) state (creates it if needed)."""
         self.stop.add(i)
         self.states.add(i)
         return self
 
     def is_final(self, i):
+        """Return True if state ``i`` is a final (accepting) state."""
         return i in self.stop
 
     def arcs(self, i=None, a=None):
+        """Iterate over arcs.
+
+        - ``arcs()`` → yields all ``(i, a, j)`` triples.
+        - ``arcs(i)`` → yields ``(a, j)`` pairs for arcs from state ``i``.
+        - ``arcs(i, a)`` → yields destination states ``j`` for arcs ``i --a--> j``.
+        """
         if i is None and a is None:
 
             for i in self.edges:
@@ -137,9 +171,11 @@ class FSA:
             raise NotImplementedError()
 
     def arcs_x(self, i, x):
+        """Return the set of destination states for arcs ``i --x--> *``."""
         return self.edges[i][x]
 
     def reverse(self):
+        """Return the reversal: arcs are flipped, start and stop states are swapped."""
         m = FSA()
         for i in self.start:
             m.add_stop(i)
@@ -153,9 +189,11 @@ class FSA:
         return dfs(start, self.arcs).states
 
     def accessible(self):
+        """Return the set of states reachable from any start state."""
         return self._accessible(self.start)
 
     def trim(self):
+        """Return a copy keeping only states on some start-to-stop path."""
         c = self.accessible() & self.reverse().accessible()
         m = FSA()
         for i in self.start & c:
@@ -168,10 +206,14 @@ class FSA:
         return m
 
     def renumber(self):
+        """Return a copy with states relabeled as consecutive integers."""
         return self.rename(Integerizer())
 
     def rename(self, f):
-        "Note: if f is not bijective, states may merge."
+        """Return a new FSA with states relabeled by ``f(state)``.
+
+        If ``f`` is not injective, distinct states may merge.
+        """
         m = FSA()
         for i in self.start:
             m.add_start(f(i))
@@ -193,6 +235,7 @@ class FSA:
         return m
 
     def rename_apart(self, other):
+        """Rename states of ``self`` and ``other`` so their state sets are disjoint."""
         f = Integerizer()
         self = self.rename(lambda i: f((0, i)))
         other = other.rename(lambda i: f((1, i)))
@@ -200,6 +243,7 @@ class FSA:
         return (self, other)
 
     def __mul__(self, other):
+        """Concatenation: ``self * other`` accepts strings ``xy`` where ``x in self`` and ``y in other``."""
         self, other = self.rename_apart(other)
         m = FSA(
             start = self.start,
@@ -215,6 +259,7 @@ class FSA:
         return m
 
     def __add__(self, other):
+        """Union: ``self + other`` accepts strings in either language."""
         m = FSA()
         [self, other] = self.rename_apart(other)
         m.start = self.start | other.start
@@ -226,7 +271,7 @@ class FSA:
         return m
 
     def p(self):
-        "self^+"
+        """Kleene plus: one or more repetitions of ``self``."""
         m = FSA()
         m.start = set(self.start)
         m.stop = set(self.stop)
@@ -239,11 +284,11 @@ class FSA:
         return m
 
     def star(self):
-        "self^*"
+        """Kleene star: zero or more repetitions of ``self``."""
         return one + self.p()
 
     def epsremove(self):
-
+        """Return an equivalent FSA with all epsilon transitions removed."""
         eps_m = FSA()
         for i,a,j in self.arcs():
             if a == eps:
@@ -272,7 +317,7 @@ class FSA:
         return m
 
     def det(self):
-
+        """Determinize via the powerset (subset) construction. Returns a DFA."""
         self = self.epsremove()
 
         def powerarcs(Q):
@@ -417,6 +462,7 @@ class FSA:
     min = min_faster
 
     def equal(self, other):
+        """Test language equivalence via minimal-DFA isomorphism."""
         if isinstance(other, (frozenset, list, set, tuple)):
             other = FSA.from_strings(other)
         return self.min()._dfa_isomorphism(other.min())
@@ -473,7 +519,7 @@ class FSA:
         return self.rename(iso.get) == other
 
     def __and__(self, other):
-        "intersection"
+        """Intersection: ``self & other`` accepts strings in both languages."""
 
         self = self.epsremove().renumber()
         other = other.epsremove().renumber()
@@ -495,7 +541,7 @@ class FSA:
         return m
 
     def add_sink(self, syms):
-        "constructs a complete FSA"
+        """Make the FSA complete over ``syms`` by adding a non-accepting sink state for missing transitions."""
 
         syms = set(syms)
 
@@ -514,6 +560,7 @@ class FSA:
         return self
 
     def __sub__(self, other):
+        """Set difference: ``self - other`` accepts strings in ``self`` but not in ``other``."""
         return self & other.invert(self.syms | other.syms)
 
     __or__ = __add__
@@ -523,7 +570,7 @@ class FSA:
         return (self | other) - (self & other)
 
     def invert(self, syms):
-        "create the complement of the machine"
+        """Complement over alphabet ``syms``: accepts all strings not in the language."""
 
         self = self.det().add_sink(syms)
 
@@ -589,12 +636,14 @@ class FSA:
 
     @classmethod
     def lift(cls, x):
+        """Build a single-arc FSA accepting exactly the one-symbol string ``x``."""
         m = cls()
         m.add_start(0); m.add_stop(1); m.add(0,x,1)
         return m
 
     @classmethod
     def from_string(cls, xs):
+        """Build a linear FSA accepting exactly the string ``xs``."""
         m = cls()
         m.add_start(xs[:0])
         for i in range(len(xs)):
@@ -604,6 +653,7 @@ class FSA:
 
     @classmethod
     def from_strings(cls, Xs):
+        """Build an FSA accepting the union of the given strings (trie structure)."""
         m = cls()
         for xs in Xs:
             m.add_start(xs[:0])
@@ -613,6 +663,7 @@ class FSA:
         return m
 
     def __contains__(self, xs):
+        """Test if string ``xs`` is in the language: ``xs in fsa``."""
         d = self.det()
         [s] = d.start
         for x in xs:
@@ -623,7 +674,7 @@ class FSA:
         return (s in d.stop)
 
     def merge(self, S, name=None):
-        "merge states in `S` into a single state."
+        """Merge all states in ``S`` into a single state (default name: ``min(S)``)."""
         if name is None: name = min(S)
         def f(s):
             return name if s in S else s
@@ -638,6 +689,7 @@ class FSA:
 
     @staticmethod
     def universal(alphabet):
+        """Build a single-state FSA accepting all strings over ``alphabet`` (Σ*)."""
         u = FSA()
         u.add_start(0)
         for a in alphabet:

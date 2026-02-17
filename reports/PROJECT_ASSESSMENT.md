@@ -102,11 +102,6 @@ via `_repr_html_` with unified visualization.
 
 ## Open Issues
 
-### High: No End-to-End Example
-
-No standalone script showing: load LM, build FST, create TransducedLM,
-decode a sentence.
-
 ### Medium: No Batched LM Inference
 
 `TransducedLM` processes one sequence at a time. The LM state advance
@@ -147,7 +142,6 @@ documented in the user-facing API.
 
 | Item | Severity | Location | Effort |
 |------|----------|----------|--------|
-| No end-to-end example | High | — | Small |
 | No batched LM calls | Medium | `lm/transduced.py` | Medium |
 | K/max_expansions coupling undocumented | Low | `lm/transduced.py` | Small |
 | No type annotations | Medium | Public API modules | Large |
@@ -156,6 +150,7 @@ documented in the user-facing API.
 
 | Item | Date | Notes |
 |------|------|-------|
+| No end-to-end example | 2026-02-16 | Added `examples/hello_world.py`: n-gram LM + lowercase FST + TransducedLM decode |
 | Carry-forward prefix-domination bug | 2026-02-16 | Fixed in TransducedLM and FusedTransducedLM; regression tests added |
 | fst.py low test coverage (59%) | 2026-02-16 | Raised to 99% with 50 tests in test_fst.py |
 | TransducedLM used Python decomposition | 2026-02-16 | Now defaults to Rust `RustPeekabooState` |
@@ -177,8 +172,7 @@ documented in the user-facing API.
    `lm_state >> x` calls into a single forward pass. This is the biggest
    remaining performance win for GPU-backed LMs.
 
-3. **Write a "hello world" example.** A single script showing: load n-gram LM,
-   build FST, create TransducedLM, decode a sentence.
+3. ~~**Write a "hello world" example.**~~ Done. See `examples/hello_world.py`.
 
 ### Phase 2: Make It Usable by Others
 
@@ -215,7 +209,7 @@ documented in the user-facing API.
 | **Architecture** | A- | Clean layering, no circular deps, optional Rust, self-contained LM module |
 | **Testing** | A+ | 660 tests across 13 files, fst.py at 99% coverage, carry-forward regression tests |
 | **End-to-End Product** | A- | Particle-based beam-sum inference; quotient exact marginalization; rich notebook display |
-| **API/Packaging** | B+ | Exports correct; Rust default; `_repr_html_`; no end-to-end example yet |
+| **API/Packaging** | A- | Exports correct; Rust default; `_repr_html_`; end-to-end example in `examples/` |
 | **Documentation** | B- | Core concepts documented; function-level docs still sparse |
 
 **Bottom line:** The hard parts — fast, correct FST decomposition AND a working

@@ -22,6 +22,22 @@ eps = EPSILON
 
 
 class FST:
+    """Finite-state transducer mapping source strings to target strings.
+
+    An FST is a directed graph whose arcs carry input:output label pairs.
+    A path from a start state to a stop state spells out a source string
+    (concatenation of input labels) and a target string (concatenation of
+    output labels).  The relation of the FST is the set of all such
+    (source, target) pairs.
+
+    Attributes:
+        A: Set of input (source) symbols observed on arcs.
+        B: Set of output (target) symbols observed on arcs.
+        states: Set of all states.
+        start: Set of initial states.
+        stop: Set of final (accepting) states.
+    """
+
     def __init__(self, start=(), arcs=(), stop=()):
         self.A = set()
         self.B = set()
@@ -58,9 +74,16 @@ class FST:
         return '\n'.join(output)
 
     def is_final(self, i):
+        """Return True if state ``i`` is a final (accepting) state."""
         return i in self.stop
 
     def add_arc(self, i, a, b, j):  # pylint: disable=arguments-renamed
+        """Add arc from state ``i`` to state ``j`` with input label ``a`` and output label ``b``.
+
+        Use ``EPSILON`` (the empty string ``''``) for either label to create
+        epsilon transitions that consume no input or produce no output.
+        States are created implicitly if they don't already exist.
+        """
         self.states.add(i)
         self.states.add(j)
         self.delta[i][a][b].add(j)   # TODO: change this data structure to separate a and b.
@@ -69,10 +92,12 @@ class FST:
         self._arcs_i = None   # invalidate arc indexes
 
     def add_start(self, q):
+        """Mark state ``q`` as an initial state (creates it if needed)."""
         self.states.add(q)
         self.start.add(q)
 
     def add_stop(self, q):
+        """Mark state ``q`` as a final (accepting) state (creates it if needed)."""
         self.states.add(q)
         self.stop.add(q)
 
@@ -138,7 +163,10 @@ class FST:
             return self._arcs_ix.get((i, x), ())
 
     def rename(self, f):
-        "Note: If `f` is not bijective, states may merge."
+        """Return a new FST with states relabeled by ``f(state)``.
+
+        If ``f`` is not injective, distinct states may merge.
+        """
         m = self.spawn()
         for i in self.start:
             m.add_start(f(i))
@@ -159,9 +187,11 @@ class FST:
         return m
 
     def renumber(self):
+        """Return a copy with states relabeled as consecutive integers."""
         return self.rename(Integerizer())
 
     def spawn(self, *, keep_init=False, keep_arcs=False, keep_stop=False):
+        """Create a new empty FST, optionally copying start states, arcs, and/or stop states."""
         m = self.__class__()
         if keep_init:
             for q in self.start:
@@ -222,6 +252,11 @@ class FST:
 
     @classmethod
     def from_string(cls, xs):
+        """Build a linear identity FST that accepts exactly the string ``xs``.
+
+        Each arc copies one symbol (input = output).  The resulting FST
+        accepts ``xs`` as both its input and output language.
+        """
         m = cls()
         m.add_start(xs[:0])
         for i in range(len(xs)):
@@ -231,6 +266,11 @@ class FST:
 
     @staticmethod
     def from_pairs(pairs):
+        """Build an FST whose relation is the union of the given (input, output) pairs.
+
+        Each ``(xs, ys)`` pair becomes a separate path.  Inputs and outputs
+        of different lengths are padded with epsilon.
+        """
         p = FST()
         p.add_start(0)
         p.add_stop(1)
@@ -747,6 +787,7 @@ class FST:
         return result.trim()
 
     def reachable(self):
+        """Return the set of states reachable from any start state."""
         reachable = set()
         dq = deque(self.start)
         while dq:
@@ -760,6 +801,7 @@ class FST:
         return reachable
 
     def coreachable(self):
+        """Return the set of states from which some stop state is reachable."""
         radj = defaultdict(set)
         for q in self.states:
             for _, _, dst in self.arcs(q):
