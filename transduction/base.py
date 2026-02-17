@@ -136,6 +136,13 @@ class IncrementalDecomposition(DecompositionResult):
     @abstractmethod
     def __rshift__(self, y) -> 'IncrementalDecomposition': ...
 
+    def __call__(self, ys):
+        """Advance state by a sequence of target symbols. Returns the final state."""
+        s = self
+        for y in ys:
+            s = s >> y
+        return s
+
 
 class AbstractAlgorithm(DecompositionFunction):
 

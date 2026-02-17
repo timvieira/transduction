@@ -39,6 +39,10 @@ Note: `Peekaboo` exists in two files. The nonrecursive variant in `peekaboo_nonr
 extends `DecompositionResult`. The helper class in `peekaboo_incremental.py` is used
 internally by `PeekabooState`. The `__init__.py` exports the latter.
 
+All implementations now support the `>>` operator: incremental algorithms provide
+optimized `__rshift__`; non-incremental implementations inherit `DecompositionResult.__rshift__`
+which constructs a fresh decomposition for the extended target.
+
 ### Finite-Only Decomposition Algorithms
 
 These algorithms lack target-buffer truncation and may diverge on FSTs with infinite
@@ -156,13 +160,20 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 
 ## Test Status
 
-- **`test_general.py`**: 352 passed, 36 skipped
-- **`test_finite.py`**: 113 passed
+- **`test_general.py`**: 353 passed, 0 skipped
+- **`test_finite.py`**: 119 passed
+- **`test_fst.py`**: 57 passed
 - **`test_enumeration.py`**: 55 passed
-- **`test_push_labels.py`**: 35 passed
 - **`test_transduced.py`**: 55 passed
-- **`test_fst.py`**: 50 passed
-- **Total**: 660 tests across 13 test files, all passing
+- **`test_push_labels.py`**: 35 passed
+- **`test_is_functional.py`**: 26 passed
+- **`test_lazy_peekaboo_dfa.py`**: 23 passed
+- **`test_ngram.py`**: 22 passed
+- **`test_lazy.py`**: 100 passed
+- **`test_ptb_nltk.py`**: 4 passed
+- **`test_make_total.py`**: 3 passed
+- **`test_statelm_kv_cache.py`**: 3 passed
+- **Total**: 855 tests across 13 test files, all passing, 0 skipped
 
 ---
 

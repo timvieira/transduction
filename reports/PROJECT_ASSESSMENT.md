@@ -15,12 +15,12 @@ per-step costs on production-scale FSTs. The user-facing `TransducedLM`
 now defaults to the Rust backend (`RustPeekabooState`) and implements
 particle-based beam-sum approximate inference (deterministic top-K, consistent
 as K -> inf). Quotient states provide exact marginalization over infinitely many
-source continuations — the key variance reduction mechanism. A carry-forward
-prefix-domination bug was fixed in both `TransducedLM` and `FusedTransducedLM`.
+source continuations — the key variance reduction mechanism. All decomposition
+implementations now support the `>>` operator via `DecompositionResult.__rshift__`.
 Rich notebook display (`_repr_html_`) enables interactive exploration.
-Test coverage expanded significantly (660 tests, up from 493). CI, exports,
-and core documentation are in place. The remaining path to production readiness:
-batch LM calls for GPU utilization.
+Test coverage is comprehensive: 855 tests across 13 files, all passing with
+0 skipped. The remaining path to production readiness: batch LM calls for
+GPU utilization.
 
 ---
 
@@ -40,8 +40,9 @@ Each variant serves a distinct niche:
 | Rust | `RustDecomp`, `RustDirtyState`, `RustDirtyPeekaboo` | 3-25x over Python |
 | Finite-only | `LazyIncremental`, `LazyNonrecursive`, `PrioritizedLazy` | Finite-language FSTs |
 
-The parametrized test suite (`test_general.py`: 352 tests) ensures all
-general-case algorithms agree.
+The parametrized test suite (`test_general.py`: 353 tests) ensures all
+general-case algorithms agree. All 353 tests now pass with 0 skipped after
+adding `DecompositionResult.__rshift__` so every implementation supports `>>`.
 
 ### 2. Optimizations With Measured Impact
 
@@ -54,7 +55,7 @@ general-case algorithms agree.
 
 ### 3. Clean Internal Architecture
 
-~11K lines of Python across 32 modules. No circular dependencies. Well-layered:
+~11.5K lines of Python across 31 modules. No circular dependencies. Well-layered:
 
 ```
 FST / FSA  (data structures)
@@ -71,13 +72,13 @@ is self-contained with no pollution of core algorithms.
 
 ### 4. Solid Test Infrastructure
 
-- **660 tests** across 13 test files, all passing (36 skipped for optional deps)
+- **855 tests** across 13 test files, all passing, 0 skipped
 - Parametrized cross-algorithm validation catches disagreements automatically
 - Reference implementations (`Precover`) serve as correctness oracles
 - Real-model integration tests (GPT-2 + BPE FST in `test_enumeration.py`)
 - TransducedLM tests: multi-state FSTs, brute-force comparison, consistency
   convergence, carry-forward prefix-domination regression tests
-- `test_fst.py`: 50 tests covering FST methods (99% coverage)
+- `test_fst.py`: 57 tests covering FST methods (99% coverage)
 - `test_lazy_peekaboo_dfa.py`: Rust lazy DFA integration tests
 - Clear general vs. finite-only test separation
 - CI via GitHub Actions (`.github/workflows/test.yml`)
@@ -129,14 +130,14 @@ documented in the user-facing API.
 
 | Component | Files | Lines | Notes |
 |-----------|-------|-------|-------|
-| Core (FST/FSA/base) | 4 | ~2,000 | Stable, well-tested (precover.py split out) |
-| Algorithms | 9 | ~2,900 | Active development |
-| LM integration | 6 | ~1,700 | Self-contained (includes FusedTransducedLM) |
-| Rust backend | 9 | ~5,500 | Well-optimized (expanded py.rs bindings) |
-| Applications | 3 | ~590 | BPE, PTB, WikiText |
-| Utilities | 3 | ~2,400 | viz, examples, lazy |
-| **Total Python** | **33** | **~11,600** | |
-| Tests | 13 | ~4,650 | 660 tests |
+| Core (FST/FSA/base) | 4 | ~1,920 | Stable, well-tested (precover.py split out) |
+| Algorithms | 12 | ~3,790 | Active development |
+| LM integration | 6 | ~1,880 | Self-contained (includes FusedTransducedLM) |
+| Rust backend | 9 | ~5,480 | Well-optimized (expanded py.rs bindings) |
+| Applications | 3 | ~580 | BPE, PTB, WikiText |
+| Utilities | 6 | ~3,320 | viz, examples, lazy, util, rust_bridge, enumeration |
+| **Total Python** | **31** | **~11,480** | |
+| Tests | 13 | ~4,820 | 855 tests |
 
 ### Technical Debt
 
@@ -150,9 +151,10 @@ documented in the user-facing API.
 
 | Item | Date | Notes |
 |------|------|-------|
+| `>>` not supported by all implementations | 2026-02-16 | Added `DecompositionResult.__rshift__`; 0 skipped in test_general.py |
 | No end-to-end example | 2026-02-16 | Added `examples/hello_world.py`: n-gram LM + lowercase FST + TransducedLM decode |
 | Carry-forward prefix-domination bug | 2026-02-16 | Fixed in TransducedLM and FusedTransducedLM; regression tests added |
-| fst.py low test coverage (59%) | 2026-02-16 | Raised to 99% with 50 tests in test_fst.py |
+| fst.py low test coverage (59%) | 2026-02-16 | Raised to 99% with 57 tests in test_fst.py |
 | TransducedLM used Python decomposition | 2026-02-16 | Now defaults to Rust `RustPeekabooState` |
 | No rich notebook display | 2026-02-16 | `_repr_html_` on TransducedState and FusedTransducedState |
 | Precover mixed into fst.py | 2026-02-16 | Split into dedicated `precover.py` module |
@@ -207,14 +209,15 @@ documented in the user-facing API.
 | **Algorithms** | A | 11 implementations, well-tested, genuine innovations (Peekaboo, dirty-state) |
 | **Performance** | A | 25x Rust acceleration, 0.1ms per-step dirty-state; Rust now default backend |
 | **Architecture** | A- | Clean layering, no circular deps, optional Rust, self-contained LM module |
-| **Testing** | A+ | 660 tests across 13 files, fst.py at 99% coverage, carry-forward regression tests |
+| **Testing** | A+ | 855 tests across 13 files, 0 skipped; fst.py at 99% coverage; carry-forward regression tests |
 | **End-to-End Product** | A- | Particle-based beam-sum inference; quotient exact marginalization; rich notebook display |
-| **API/Packaging** | A- | Exports correct; Rust default; `_repr_html_`; end-to-end example in `examples/` |
+| **API/Packaging** | A- | Exports correct; Rust default; `_repr_html_`; all impls support `>>`; end-to-end example |
 | **Documentation** | B- | Core concepts documented; function-level docs still sparse |
 
 **Bottom line:** The hard parts — fast, correct FST decomposition AND a working
 `TransducedLM` with particle-based approximate inference — are done. Multi-character
 symbol support is complete (tuple-based buffers throughout). TransducedLM now defaults
-to Rust acceleration. A carry-forward prefix-domination bug was found and fixed in both
-TransducedLM and FusedTransducedLM. Test coverage jumped from 493 to 660 tests.
-The remaining work is performance (batched LM calls) and usability (examples, types).
+to Rust acceleration. All decomposition implementations now support the `>>` operator
+via `DecompositionResult.__rshift__`, eliminating test skips. Test coverage stands at
+855 tests with 0 skipped. The remaining work is performance (batched LM calls) and
+usability (types, benchmarks).
