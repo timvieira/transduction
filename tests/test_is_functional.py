@@ -22,8 +22,8 @@ class TestIsFunctional:
         ok, witness = r.is_functional()
         assert not ok
         x, y1, y2 = witness
-        assert x == 'a'
-        assert {y1, y2} == {'x', 'y'}
+        assert x == ('a',)
+        assert {y1, y2} == {('x',), ('y',)}
 
     def test_identity_cyclic(self):
         """Identity on {a,b}* — functional with infinite input language."""
@@ -43,8 +43,8 @@ class TestIsFunctional:
         ok, witness = r.is_functional()
         assert not ok
         x, y1, y2 = witness
-        assert x == 'a'
-        assert {y1, y2} == {'xy', 'xz'}
+        assert x == ('a',)
+        assert {y1, y2} == {('x', 'y'), ('x', 'z')}
 
     def test_nondeterministic_but_functional(self):
         """Multiple paths, same output — still functional."""
@@ -84,8 +84,8 @@ class TestIsFunctional:
         ok, witness = r.is_functional()
         assert not ok
         x, y1, y2 = witness
-        assert x == ''
-        assert {y1, y2} == {'a', 'b'}
+        assert x == ()
+        assert {y1, y2} == {('a',), ('b',)}
 
     def test_longer_divergence(self):
         """Outputs agree on a prefix then diverge."""
@@ -97,8 +97,8 @@ class TestIsFunctional:
         ok, witness = r.is_functional()
         assert not ok
         x, y1, y2 = witness
-        assert x == 'ab'
-        assert {y1, y2} == {'xy', 'xz'}
+        assert x == ('a', 'b')
+        assert {y1, y2} == {('x', 'y'), ('x', 'z')}
 
     def test_multiple_start_states(self):
         """Two start states, same behavior — functional."""
@@ -117,8 +117,8 @@ class TestIsFunctional:
         ok, witness = r.is_functional()
         assert not ok
         x, y1, y2 = witness
-        assert x == 'a'
-        assert {y1, y2} == {'x', 'y'}
+        assert x == ('a',)
+        assert {y1, y2} == {('x',), ('y',)}
 
 
 class TestIsFunctionalExamples:

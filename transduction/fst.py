@@ -514,9 +514,8 @@ class FST:
         for s1 in t.start:
             for s2 in t.start:
                 pair = (s1, s2)
-                if pair not in fwd:
-                    fwd.add(pair)
-                    queue.append(pair)
+                fwd.add(pair)
+                queue.append(pair)
 
         while queue:
             q1, q2 = pair = queue.popleft()
@@ -564,11 +563,7 @@ class FST:
         # meaning a cycle is pumping.  Since every state in
         # trimmed_product is co-accessible, that cycle lies on a path
         # to acceptance → non-functional.
-        M = max(
-            (len(b) for q in t.states for _, b, _ in t.arcs(q) if b != EPSILON),
-            default=1,
-        )
-        delay_bound = len(trimmed_product) * max(M, 1)
+        delay_bound = max(len(trimmed_product), 1)
 
         visited = set()
         worklist = deque()
@@ -577,15 +572,13 @@ class FST:
             for s2 in t.start:
                 if (s1, s2) not in trimmed_product:
                     continue
-                key = (s1, s2, 0, '')
-                if key not in visited:
-                    visited.add(key)
-                    worklist.append((s1, s2, 0, '', '', '', ''))
+                visited.add((s1, s2, 0, ()))
+                worklist.append((s1, s2, 0, (), (), (), ()))
 
         while worklist:
             q1, q2, side, buf, x, y1, y2 = worklist.popleft()
 
-            if (q1, q2) in product_final and (side != 0 or buf != ''):
+            if (q1, q2) in product_final and (side != 0 or buf != ()):
                 return (False, (x, y1, y2))
 
             # Delay cannot exceed the bound: any divergence at product state P
@@ -604,8 +597,11 @@ class FST:
                 if key in visited:
                     continue
                 visited.add(key)
+                na = () if a == EPSILON else (a,)
+                nb1 = () if b1 == EPSILON else (b1,)
+                nb2 = () if b2 == EPSILON else (b2,)
                 worklist.append((j1, j2, new_side, new_buf,
-                                 x + a, y1 + b1, y2 + b2))
+                                 x + na, y1 + nb1, y2 + nb2))
 
         return (True, None)
 
@@ -836,21 +832,24 @@ class FST:
 def _advance_buf(side, buf, b1, b2):
     """Update the output-buffer difference after copy-1 emits b1 and copy-2 emits b2.
 
-    The buffer tracks what one copy has emitted beyond the other:
-      side=0, buf='' means the two copies are in sync.
-      side=1, buf=s   means copy-1 is ahead by suffix s.
-      side=2, buf=s   means copy-2 is ahead by suffix s.
+    The buffer tracks what one copy has emitted beyond the other as a tuple
+    of output labels:
+      side=0, buf=() means the two copies are in sync.
+      side=1, buf=s  means copy-1 is ahead by suffix s.
+      side=2, buf=s  means copy-2 is ahead by suffix s.
     """
-    # Build the full "ahead" string for each side
+    # Build the full "ahead" tuple for each side
     if side == 0:
-        ahead1, ahead2 = '', ''
+        ahead1, ahead2 = (), ()
     elif side == 1:
-        ahead1, ahead2 = buf, ''
+        ahead1, ahead2 = buf, ()
     else:
-        ahead1, ahead2 = '', buf
+        ahead1, ahead2 = (), buf
 
-    ahead1 += b1
-    ahead2 += b2
+    if b1 != EPSILON:
+        ahead1 = ahead1 + (b1,)
+    if b2 != EPSILON:
+        ahead2 = ahead2 + (b2,)
 
     # Cancel common prefix
     n = min(len(ahead1), len(ahead2))
@@ -868,7 +867,7 @@ def _advance_buf(side, buf, b1, b2):
     elif ahead2:
         return (2, ahead2)
     else:
-        return (0, '')
+        return (0, ())
 
 
 def _lcp_pair(a, b):
