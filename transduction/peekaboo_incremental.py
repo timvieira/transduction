@@ -295,12 +295,17 @@ class PeekabooState(IncrementalDecomposition):
 
         worklist = deque()
         incoming = {}
-        if parent is not None:
-            for state in parent.resume_frontiers.get(target[-1], set()):
+        seeds = (parent.resume_frontiers.get(target[-1], set())
+                 if parent is not None else None)
+        if seeds:
+            for state in seeds:
                 assert not any(truncated for _, _, truncated in state)
                 worklist.append(state)
                 incoming[state] = set()
         else:
+            # Either root state (no parent) or parent had no resume_frontiers
+            # for this symbol (e.g. BPE-style FSTs where all Q/R states are
+            # truncated).  Fall back to full BFS from DFA start states.
             for state in dfa.start():
                 worklist.append(state)
                 incoming[state] = set()
