@@ -31,7 +31,7 @@ Do not auto-commit after finishing work.
 - `transduction/applications/bpe.py` — BPE WFST builder (`bpe_wfst`)
 - `transduction/applications/ptb.py` — PTB tokenizer FST built with pynini
 - `transduction/applications/wikitext.py` — WikiText data loading (`load_wikitext`, `wikitext_detokenize`)
-- `transduction/rust_bridge.py` — Python ↔ Rust conversion layer
+- `transduction/rust_bridge.py` — Python ↔ Rust conversion layer; also provides `RustPeekabooState`, `RustLazyPeekabooDFA`
 - `transduction/examples.py` — Example FSTs for testing
 
 ### LM Integration (`transduction/lm/`)
@@ -48,7 +48,8 @@ Self-contained language model interface for use with enumeration/sampling:
   - `state.eos` returns the EOS token (bytes)
   - Includes inlined dependencies: `decode_hf_tokenizer`, `LazyProb`, `flatten`/`unflatten`
   - External deps: `torch`, `transformers`, `arsenal`
-- `transduction/lm/transduced.py` — `TransducedLM`, `TransducedState` (pushforward of an inner LM through an FST)
+- `transduction/lm/transduced.py` — `TransducedLM`, `TransducedState` (pushforward of an inner LM through an FST; defaults to Rust backend)
+- `transduction/lm/fused_transduced.py` — `FusedTransducedLM`, `FusedTransducedState` (single-pass interleaved decomposition + LM search)
 
 ### Rust Acceleration (`crates/transduction-core/`)
 
@@ -91,11 +92,12 @@ Eliminated deps (previously external, now inlined):
 
 ## Test Status
 
-- `test_general.py`: 286 passed, 30 skipped
-- `test_finite.py`: 70 pass
+- `test_general.py`: 352 passed, 36 skipped
+- `test_finite.py`: 113 pass
 - `test_enumeration.py`: 55 pass
 - `test_push_labels.py`: 35 pass
-- `test_transduced.py`: 47 pass
+- `test_transduced.py`: 55 pass
+- `test_fst.py`: 50 pass
 - `test_general.py` tests the **general-case** algorithms (handle infinite quotients/remainders):
   NonrecursiveDFADecomp, TruncatedIncrementalDFADecomp, PeekabooState, PeekabooNonrecursive,
   DirtyPeekaboo, TokenDecompose, RustDecomp, RustDirtyState, RustDirtyPeekaboo.

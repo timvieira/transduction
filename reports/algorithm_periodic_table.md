@@ -23,6 +23,7 @@
 | `RustDecomp` | | | | N | ✓ | ✓ | ✓ | ✓ | rust ext |
 | `RustDirtyState` | ✓ | | ✓ | N | ✓ | ✓ | ✓ | ✓ | rust ext |
 | `RustDirtyPeekaboo` | ✓ | ✓ | ✓ | N+K | ✓ | ✓ | ✓ | ✓ | rust ext |
+| `RustLazyPeekabooDFA` | ✓ | ✓ | ✓ | N+K | ✓ | ✓ | ✓ | ✓ | rust ext; lazy DFA for TransducedLM |
 
 †`TruncatedIncrementalDFADecomp.decompose_next()` creates per-symbol overlay children sharing the parent's clean arcs — batched via overlays, not via a single BFS pass like Peekaboo.
 

@@ -67,8 +67,10 @@ quotients. Tested separately in `test_finite.py`.
 | `ByteNgramLM` / `CharNgramLM` | `lm/ngram.py` | Lightweight n-gram LMs for testing |
 | `StateLM` / `TokenizedLLM` | `lm/statelm.py` | Incremental LM state with KV-cache; wraps HuggingFace causal LMs |
 | `load_model_by_name` | `lm/statelm.py` | Load `'gpt2'`, `'meta-llama/...'`, etc. |
-| `TransducedLM` | `lm/transduced.py` | Pushforward of an inner LM through an FST (beam-sum or SIR inference) |
+| `TransducedLM` | `lm/transduced.py` | Pushforward of an inner LM through an FST (beam-sum inference; defaults to Rust backend) |
 | `FusedTransducedLM` | `lm/fused_transduced.py` | Single-pass interleaved decomposition + LM search |
+| `RustPeekabooState` | `rust_bridge.py` | Rust-backed incremental peekaboo state (default for TransducedLM) |
+| `RustLazyPeekabooDFA` | `rust_bridge.py` | Rust-backed lazy DFA interface for TransducedLM beam search |
 
 Self-contained (no external tokenization deps). Example:
 ```python
@@ -176,12 +178,13 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 
 ## Test Status
 
-- **`test_general.py`**: 316 tests collected
-- **`test_finite.py`**: 70 tests collected
-- **`test_enumeration.py`**: 55 tests collected
-- **`test_push_labels.py`**: 35 tests collected
-- **`test_transduced.py`**: 47 tests collected
-- **Total**: 672 tests across 10 test files
+- **`test_general.py`**: 352 passed, 36 skipped
+- **`test_finite.py`**: 113 passed
+- **`test_enumeration.py`**: 55 passed
+- **`test_push_labels.py`**: 35 passed
+- **`test_transduced.py`**: 55 passed
+- **`test_fst.py`**: 50 passed
+- **Total**: 660 tests across 13 test files, all passing
 
 ---
 
