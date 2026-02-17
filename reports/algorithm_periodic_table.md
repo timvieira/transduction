@@ -13,8 +13,6 @@
 | `PeekabooState` | ✓ | ✓ | resume-frontiers | N+K | ✓ | ✓ | ✓ | | |
 | `Peekaboo` (nonrecursive) | | ✓ | | N+1 | ✓ | | ✓ | | |
 | `DirtyPeekaboo` | ✓ | ✓ | skip-steps | N+K | ✓ | ✓ | ✓ | | |
-| **Specialized** | | | | | | | | | |
-| `TokenDecompose` | | | | position-set | ✓ | structural | ✓ | | `all_input_universal` |
 | **String-enumerating** | | | | | | | | | |
 | `LazyIncremental` | ✓ | | | | | BFS | **no** | | finite-only |
 | `PrioritizedLazyIncremental` | ✓ | | | | | BFS+mono | **no** | | finite-only; heuristic |

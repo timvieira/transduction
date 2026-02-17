@@ -24,7 +24,6 @@ Do not auto-commit after finishing work.
 - `transduction/lazy_incremental.py` — LazyIncremental decomposition (finite-language FSTs only; diverges on infinite quotients)
 - `transduction/lazy_nonrecursive.py` — LazyNonrecursive decomposition (finite-language FSTs only)
 - `transduction/prioritized_lazy_incremental.py` — PrioritizedLazyIncremental (finite-language, heuristic BFS)
-- `transduction/token_decompose.py` — BPE-optimized fast path
 - `transduction/viz.py` — Visualization/display utilities for automata (used in notebooks)
 - `transduction/enumeration.py` — LM-weighted path enumeration (prioritized_enumeration, importance_sampling)
 - `transduction/lazy.py` — Lazy automaton framework (LazyDeterminize, EpsilonRemove)
@@ -100,7 +99,7 @@ Eliminated deps (previously external, now inlined):
 - `test_fst.py`: 50 pass
 - `test_general.py` tests the **general-case** algorithms (handle infinite quotients/remainders):
   NonrecursiveDFADecomp, TruncatedIncrementalDFADecomp, PeekabooState, PeekabooNonrecursive,
-  DirtyPeekaboo, TokenDecompose, RustDecomp, RustDirtyState, RustDirtyPeekaboo.
+  DirtyPeekaboo, RustDecomp, RustDirtyState, RustDirtyPeekaboo.
 - **Finite-only algorithms are excluded from test_general.py** and tested in
   `test_finite.py`. These diverge on FSTs with infinite quotients because they
   don't truncate the target buffer:

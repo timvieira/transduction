@@ -16,8 +16,6 @@ from transduction import examples, EPSILON, Precover
 from transduction.fst import FST
 from transduction.dfa_decomp_nonrecursive import NonrecursiveDFADecomp
 from transduction.dfa_decomp_incremental_truncated import TruncatedIncrementalDFADecomp
-from transduction.token_decompose import TokenDecompose
-from transduction.universality import check_all_input_universal
 from transduction.peekaboo_nonrecursive import Peekaboo as PeekabooNonrecursive
 from transduction.peekaboo_incremental import PeekabooState
 from transduction.peekaboo_dirty import DirtyPeekaboo
@@ -27,12 +25,6 @@ try:
     HAS_RUST = True
 except ImportError:
     HAS_RUST = False
-
-
-def _token_decompose_or_skip(fst, target=''):
-    if not check_all_input_universal(fst):
-        pytest.skip("TokenDecompose requires all_input_universal")
-    return TokenDecompose(fst, target)
 
 
 def run_test(cls, fst, target, depth, verbosity=0):
@@ -69,7 +61,6 @@ IMPLEMENTATIONS = [
     pytest.param(NonrecursiveDFADecomp, id="nonrecursive_dfa_decomp"),
     pytest.param(PeekabooState, id="peekaboo_incremental"),
     pytest.param(PeekabooNonrecursive, id="peekaboo_nonrecursive"),
-    pytest.param(_token_decompose_or_skip, id="token_decompose"),
     pytest.param(DirtyPeekaboo, id="dirty_peekaboo"),
 ]
 

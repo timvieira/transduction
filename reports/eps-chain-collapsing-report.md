@@ -208,16 +208,3 @@ only successor states for a specific input symbol x, avoiding the overhead of
 generating all arcs and then filtering. This is the Python-side analogue of
 `index_ix_j` in the Rust FST.
 
----
-
-## Known Issue: `extract_token_bytes` Structural Mismatch
-
-`token_decompose.py`'s `extract_token_bytes` assumes non-epsilon input arcs
-emanate FROM the hub state (start state), but `bpe_wfst()` constructs FSTs with
-the opposite structure: epsilon-input arcs FROM the hub to trie nodes, and
-token-input arcs FROM leaf states back TO the hub.
-
-This means `TokenDecompose` produces trivially empty results (DFA=1 state, 0 arcs)
-on BPE FSTs from `bpe_wfst()` that don't match its expected hub structure. This is
-a pre-existing issue not introduced by these optimizations. The `TokenDecompose`
-fast path remains correct for FSTs that do match the expected structure.

@@ -150,7 +150,6 @@ sample = sampler.sample(max_length=50)
 | `TruncatedIncrementalDFADecomp` | `dfa_decomp_incremental_truncated.py` | Yes | Incremental DFA decomp with target-buffer truncation and dirty-state tracking |
 | `PeekabooState` | `peekaboo_incremental.py` | Yes | **Recommended.** Batches all next-symbol decompositions; truncation ensures termination |
 | `Peekaboo` | `peekaboo_nonrecursive.py` | No | Simpler peekaboo variant without `>>` |
-| `TokenDecompose` | `token_decompose.py` | No | BPE-optimized fast path (requires `all_input_universal` FST) |
 | `RustDecomp` | `rust_bridge.py` | No | Rust generic decomposition |
 | `DirtyPeekaboo` | `peekaboo_dirty.py` | Yes | Dirty-state incremental peekaboo |
 | `RustDirtyState` | `rust_bridge.py` | Yes | Rust incremental decomposition with dirty-state tracking |
@@ -159,7 +158,6 @@ sample = sampler.sample(max_length=50)
 ### Choosing an algorithm
 
 - **Autoregressive decoding (token by token):** Use `RustDirtyPeekaboo` or `RustDirtyState` for best performance, or `PeekabooState` / `DirtyPeekaboo` (Python) if the Rust extension is unavailable. The dirty-state variants persist DFA state across decoding steps, avoiding redundant recomputation.
-- **BPE tokenizers:** Check `check_all_input_universal(fst)` first — if true, `TokenDecompose` gives massive speedups (5000x+).
 - **One-shot decomposition:** Use `RustDecomp` or `Precover`.
 
 ## Project structure
@@ -178,7 +176,6 @@ transduction/                Python package
   eager_nonrecursive.py      EagerNonrecursive algorithm
   dfa_decomp_nonrecursive.py Non-incremental DFA decomposition
   dfa_decomp_incremental_truncated.py  Incremental DFA decomp with truncation
-  token_decompose.py         BPE-optimized fast path
   enumeration.py             LM-weighted path enumeration
   lazy.py                    Lazy automaton framework (on-demand determinization)
   lazy_incremental.py        LazyIncremental decomposition (finite-language FSTs only)

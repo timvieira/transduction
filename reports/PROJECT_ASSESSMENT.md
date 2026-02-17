@@ -9,7 +9,7 @@
 The transduction library efficiently computes next-symbol probabilities for a
 language model composed with a finite-state transducer — enabling constrained
 and transformed autoregressive generation. The algorithmic core is strong:
-Peekaboo decomposition, dirty-state persistence, BPE-specific fast paths, and
+Peekaboo decomposition, dirty-state persistence, and
 Rust acceleration form a layered optimization stack that achieves real-time
 per-step costs on production-scale FSTs. The user-facing `TransducedLM`
 now defaults to the Rust backend (`RustPeekabooState`) and implements
@@ -20,8 +20,7 @@ prefix-domination bug was fixed in both `TransducedLM` and `FusedTransducedLM`.
 Rich notebook display (`_repr_html_`) enables interactive exploration.
 Test coverage expanded significantly (660 tests, up from 493). CI, exports,
 and core documentation are in place. The remaining path to production readiness:
-wire in the BPE fast path (TokenDecompose) and batch LM calls for GPU
-utilization.
+batch LM calls for GPU utilization.
 
 ---
 
@@ -29,16 +28,15 @@ utilization.
 
 ### 1. Algorithmic Depth
 
-12 decomposition algorithms spanning the full design space: reference
-implementations, incremental variants, batched variants, BPE-specific fast
-paths, and Rust backends. Each variant serves a distinct niche:
+11 decomposition algorithms spanning the full design space: reference
+implementations, incremental variants, batched variants, and Rust backends.
+Each variant serves a distinct niche:
 
 | Layer | Algorithm | Purpose |
 |-------|-----------|---------|
 | Reference | `Precover`, `NonrecursiveDFADecomp` | Correctness oracle |
 | Batched | `PeekabooState`, `Peekaboo` (nonrecursive) | Amortize DFA across all next symbols |
 | Incremental | `DirtyPeekaboo`, `TruncatedIncrementalDFADecomp` | Reuse DFA state across decode steps |
-| BPE fast path | `TokenDecompose` | Exploit hub structure (5000x speedup) |
 | Rust | `RustDecomp`, `RustDirtyState`, `RustDirtyPeekaboo` | 3-25x over Python |
 | Finite-only | `LazyIncremental`, `LazyNonrecursive`, `PrioritizedLazy` | Finite-language FSTs |
 
@@ -50,7 +48,6 @@ general-case algorithms agree.
 | Optimization | Impact | Mechanism |
 |-------------|--------|-----------|
 | `all_input_universal` | 11,500x on BPE | Skip universality BFS entirely |
-| Token-level position tracking | 5000x on BPE | Collapse FST-state x position to just position |
 | Peekaboo batching | ~\|Y\|x amortization | One DFA for all next symbols |
 | Dirty-state persistence | Per-step -> 0.1ms | Reuse clean DFA states across steps |
 | Rust backend | 3-25x | Packed u64 NFA states, interned DFA states |
@@ -64,7 +61,7 @@ FST / FSA  (data structures)
    |
 base.py  (DecompositionResult, abstract interfaces)
    |
-algorithm implementations  (peekaboo, dirty, token_decompose, ...)
+algorithm implementations  (peekaboo, dirty, ...)
    |
 lm/transduced.py  (TransducedLM — user-facing)
 ```
@@ -104,12 +101,6 @@ via `_repr_html_` with unified visualization.
 ---
 
 ## Open Issues
-
-### High: TokenDecompose Not Wired Into TransducedLM
-
-`TransducedLM` does not automatically use the BPE fast path when
-`check_all_input_universal(fst)` is true. The 5000x speedup requires manual
-dispatch.
 
 ### High: No End-to-End Example
 
@@ -157,7 +148,6 @@ documented in the user-facing API.
 | Item | Severity | Location | Effort |
 |------|----------|----------|--------|
 | No end-to-end example | High | — | Small |
-| TokenDecompose not wired into TransducedLM | High | `lm/transduced.py` | Small |
 | No batched LM calls | Medium | `lm/transduced.py` | Medium |
 | K/max_expansions coupling undocumented | Low | `lm/transduced.py` | Small |
 | No type annotations | Medium | Public API modules | Large |
@@ -180,18 +170,14 @@ documented in the user-facing API.
 
 **Goal:** TransducedLM with GPT-2 + BPE FST runs at interactive speed.
 
-1. **Wire TokenDecompose into TransducedLM.** When
-   `check_all_input_universal(fst)` is true, use the BPE fast path
-   automatically. The 5000x speedup should be transparent to the user.
-
-2. **Profile the TransducedLM hot loop with a neural LM.** Establish a
+1. **Profile the TransducedLM hot loop with a neural LM.** Establish a
    baseline and identify the current bottleneck.
 
-3. **Batch source-symbol expansions.** Group particles by DFA state, batch
+2. **Batch source-symbol expansions.** Group particles by DFA state, batch
    `lm_state >> x` calls into a single forward pass. This is the biggest
    remaining performance win for GPU-backed LMs.
 
-4. **Write a "hello world" example.** A single script showing: load n-gram LM,
+3. **Write a "hello world" example.** A single script showing: load n-gram LM,
    build FST, create TransducedLM, decode a sentence.
 
 ### Phase 2: Make It Usable by Others
@@ -224,8 +210,8 @@ documented in the user-facing API.
 
 | Dimension | Grade | Key Finding |
 |-----------|-------|-------------|
-| **Algorithms** | A | 12 implementations, well-tested, genuine innovations (Peekaboo, dirty-state) |
-| **Performance** | A | 5000x BPE speedup, 25x Rust acceleration, 0.1ms per-step dirty-state; Rust now default backend |
+| **Algorithms** | A | 11 implementations, well-tested, genuine innovations (Peekaboo, dirty-state) |
+| **Performance** | A | 25x Rust acceleration, 0.1ms per-step dirty-state; Rust now default backend |
 | **Architecture** | A- | Clean layering, no circular deps, optional Rust, self-contained LM module |
 | **Testing** | A+ | 660 tests across 13 files, fst.py at 99% coverage, carry-forward regression tests |
 | **End-to-End Product** | A- | Particle-based beam-sum inference; quotient exact marginalization; rich notebook display |
@@ -237,5 +223,4 @@ documented in the user-facing API.
 symbol support is complete (tuple-based buffers throughout). TransducedLM now defaults
 to Rust acceleration. A carry-forward prefix-domination bug was found and fixed in both
 TransducedLM and FusedTransducedLM. Test coverage jumped from 493 to 660 tests.
-The remaining work is performance (TokenDecompose integration, batched LM calls) and
-usability (examples, types).
+The remaining work is performance (batched LM calls) and usability (examples, types).

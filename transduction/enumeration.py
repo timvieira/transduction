@@ -38,7 +38,7 @@ class prioritized_enumeration:
             decompose: A callable ``(fst, target) -> DecompositionResult`` returning
                 an object with ``.quotient`` and ``.remainder`` FSAs.  Defaults
                 to ``Precover``.  Examples: ``NonrecursiveDFADecomp``,
-                ``RustDecomp``, ``TokenDecompose``.
+                ``RustDecomp``.
         """
 
         if decompose is None:
@@ -112,7 +112,7 @@ class importance_sampling:
             decompose: A callable ``(fst, target) -> DecompositionResult`` returning
                 an object with ``.quotient`` and ``.remainder`` FSAs.  Defaults
                 to ``Precover``.  Examples: ``NonrecursiveDFADecomp``,
-                ``RustDecomp``, ``TokenDecompose``.
+                ``RustDecomp``.
         """
 
         if decompose is None:

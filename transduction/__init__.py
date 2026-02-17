@@ -14,7 +14,6 @@ from transduction.fsa import FSA
 # Recommended algorithms
 from transduction.peekaboo_incremental import PeekabooState, Peekaboo
 from transduction.peekaboo_dirty import DirtyPeekaboo
-from transduction.token_decompose import TokenDecompose
 from transduction.lm.transduced import TransducedLM
 
 # Finite-only algorithms (diverge on infinite quotients)
