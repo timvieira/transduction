@@ -201,11 +201,8 @@ def test_infinite_quotient2(impl):
 
 def test_rshift_chain(impl):
     """>> chain must produce same Q/R as decompose_next() chain."""
-    from transduction.base import IncrementalDecomposition
     fst = examples.small()
     state = impl(fst, '')
-    if not isinstance(state, IncrementalDecomposition):
-        pytest.skip("non-incremental implementation")
     # >> path
     via_rshift = state >> 'x'
     # decompose_next path (fresh instance)

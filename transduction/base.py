@@ -87,10 +87,14 @@ class DecompositionResult:
     def __repr__(self):
         return f'DecompositionResult({self.quotient!r}, {self.remainder!r})'
 
+    def __rshift__(self, y):
+        """Advance the target by one symbol, returning a new decomposition."""
+        return type(self)(self.fst, self.target + (y,))
+
     def decompose_next(self):
         """Decompose for every next target symbol, returning a dict {y: DecompositionResult}."""
         target_alphabet = self.fst.B - {EPSILON}
-        return {y: type(self)(self.fst, self.target + (y,)) for y in target_alphabet}
+        return {y: self >> y for y in target_alphabet}
 
 
 class DecompositionFunction(ABC):
@@ -115,8 +119,9 @@ class DecompositionFunction(ABC):
 class IncrementalDecomposition(DecompositionResult):
     """Interface for incremental (symbol-by-symbol) decomposition.
 
-    Extends DecompositionResult with the ``>>`` operator to advance the
-    target by one symbol, reusing computation from the previous step.
+    Extends DecompositionResult with an optimized ``>>`` operator that
+    reuses computation from the previous step rather than decomposing
+    from scratch.
 
     Usage::
 
@@ -130,18 +135,6 @@ class IncrementalDecomposition(DecompositionResult):
     """
     @abstractmethod
     def __rshift__(self, y) -> 'IncrementalDecomposition': ...
-
-    def decompose_next(self):
-        """Decompose for every next target symbol, returning a dict {y: IncrementalDecomposition}."""
-        target_alphabet = self.fst.B - {EPSILON}
-        return {y: self >> y for y in target_alphabet}
-
-    def __call__(self, ys):
-        """Advance state by a sequence of target symbols. Returns the final state."""
-        s = self
-        for y in ys:
-            s = s >> y
-        return s
 
 
 class AbstractAlgorithm(DecompositionFunction):

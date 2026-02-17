@@ -168,6 +168,9 @@ class Peekaboo(DecompositionResult):
         p = Peekaboo(self.fst, target)
         return {y: DecompositionResult(*qr) for y, qr in p._results.items()}
 
+    def __rshift__(self, y):
+        return self.decompose_next()[y]
+
     def decompose_next(self):
         return {y: Peekaboo(self.fst, self.target + (y,), _parent=self, _symbol=y)
                 for y in self.target_alphabet}

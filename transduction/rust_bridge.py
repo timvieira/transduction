@@ -226,6 +226,9 @@ class RustDirtyPeekaboo(DecompositionResult):
             self._rust_state = (transduction_core.RustDirtyPeekabooDecomp(rust_fst),
                                 sym_map)
 
+    def __rshift__(self, y):
+        return self.decompose_next()[y]
+
     def decompose_next(self):
         state, sym_map = self._rust_state
         target_u32 = [sym_map(y) for y in self.target]
