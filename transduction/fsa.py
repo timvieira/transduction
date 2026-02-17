@@ -661,16 +661,18 @@ class FSA:
             m.add_stop(xs)
         return m
 
+    def run(self, xs):
+        """Run string ``xs`` from start states, returning the set of reached states."""
+        states = set(self.start)
+        for x in xs:
+            states = {t for s in states for t in self.edges[s][x]}
+            if not states:
+                break
+        return states
+
     def __contains__(self, xs):
         """Test if string ``xs`` is in the language: ``xs in fsa``."""
-        d = self.det()
-        [s] = d.start
-        for x in xs:
-            t = d.edges[s][x]
-            if not t:
-                return False
-            [s] = t
-        return (s in d.stop)
+        return bool(self.run(xs) & self.stop)
 
     def merge(self, S, name=None):
         """Merge all states in ``S`` into a single state (default name: ``min(S)``)."""

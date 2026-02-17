@@ -39,7 +39,7 @@ class ReferenceTransducedLM(LM):
         self.inner_lm = inner_lm
         self.fst = fst
         self.eos = eos
-        self._ref = Precover.factory(fst)
+        self._decomp = Precover.factory(fst)
         self._target_alphabet = sorted(fst.B - {EPSILON})
 
     def initial(self):
@@ -62,6 +62,7 @@ class ReferenceTransducedState(LMState):
         self._target = target
         self.logp = logp
 
+    # Note: this is independent of the state
     def _score(self, prefix):
         """Compute log P(output starts with prefix).
 
@@ -69,7 +70,9 @@ class ReferenceTransducedState(LMState):
         - Q strings contribute prefix probability (marginalized over continuations).
         - R strings contribute exact string probability (with EOS).
         """
-        result = self.tlm._ref(prefix)
+        # TODO: these strings could be structured into a trie to reduce the number 
+        # of inner LM state updates
+        result = self.tlm._decomp(prefix)
         inner_eos = self.tlm.inner_lm.eos
         parts = []
         for src in result.quotient.language():

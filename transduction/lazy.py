@@ -74,6 +74,19 @@ class Lazy:
         """Return True if ``state`` is an accepting state."""
         raise NotImplementedError()
 
+    def run(self, source_path):
+        """Run a source path from start, returning the reached DFA state (or None for dead).
+
+        Assumes the automaton is deterministic (at most one successor per label).
+        """
+        [state] = self.start()
+        for x in source_path:
+            successors = list(self.arcs_x(state, x))
+            if not successors:
+                return None
+            [state] = successors
+        return state
+
     #____________________________________________________________
     # Abstract class provides the methods below
 

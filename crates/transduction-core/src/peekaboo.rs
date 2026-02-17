@@ -110,10 +110,17 @@ impl<'a> PeekabooNFAMapped<'a> {
             || (self.fst.is_final[fst_state as usize]
                 && buf_len == self.step_n + 1
                 && extra_sym != NO_EXTRA)
-            // Is-preimage: output buffer matches target at a final state
+            // Is-preimage: output buffer effectively matches target at a final state.
+            // Canonical: buf_len == step_n, extra == NO_EXTRA.
+            // Non-canonical: buf_len == step_n, extra == sym_to_idx[target[step_n-1]].
             || (self.fst.is_final[fst_state as usize]
                 && buf_len == self.step_n
-                && extra_sym == NO_EXTRA)
+                && (extra_sym == NO_EXTRA
+                    || (self.step_n > 0
+                        && (self.step_n - 1) < self.full_target.len() as u16
+                        && self.sym_to_idx
+                            .get(&self.full_target[(self.step_n - 1) as usize])
+                            .map_or(false, |&idx| extra_sym == idx))))
             // Truncated: carries truncation metadata
             || truncated
     }
@@ -892,6 +899,23 @@ impl DirtyPeekaboo {
         }
     }
 
+    /// Follow a single arc labeled `x` from `sid`. Returns `Some(dest)` or `None`.
+    pub fn step(&self, sid: u32, x: u32) -> Option<u32> {
+        self.arcs_from(sid).iter()
+            .find(|&&(lbl, _)| lbl == x)
+            .map(|&(_, dst)| dst)
+    }
+
+    /// Run a source path from the global start state, returning the reached
+    /// DFA state or `None` if any arc is missing.
+    pub fn run(&self, source_path: &[u32]) -> Option<u32> {
+        let mut state = self.global_start_id;
+        for &x in source_path {
+            state = self.step(state, x)?;
+        }
+        Some(state)
+    }
+
     pub fn idx_to_sym(&self) -> &[u32] {
         &self.idx_to_sym
     }
@@ -912,10 +936,27 @@ impl DirtyPeekaboo {
         &self.arena.sets[sid as usize]
     }
 
-    /// Compute preimage stop states: DFA states where any NFA element has
-    /// buf_len == step_n, extra_sym == NO_EXTRA, and fst_state is final.
+    /// Compute preimage stop states: DFA states where any NFA element
+    /// effectively has buf == target[:step_n] and fst_state is final.
     /// These represent source strings that produce exactly the current target.
+    ///
+    /// An NFA element matches preimage in two encodings:
+    /// - Canonical: buf_len == step_n, extra_sym == NO_EXTRA
+    /// - Non-canonical: buf_len == step_n, extra_sym == sym_to_idx[target[step_n-1]]
+    ///   (i.e. buffer = target[:step_n-1] + target[step_n-1] = target[:step_n])
+    ///
+    /// The non-canonical case arises for resume-frontier states carried from a
+    /// parent step where the extra symbol was beyond the parent's target but
+    /// now matches the extended target.
     pub fn compute_preimage_stops(&self, fst: &Fst, step_n: u16) -> Vec<u32> {
+        // Pre-compute the non-canonical extra_sym that also matches preimage.
+        let non_canonical_extra: Option<u16> = if step_n > 0 {
+            let last_target_sym = self.prev_target[(step_n - 1) as usize];
+            self.sym_to_idx.get(&last_target_sym).copied()
+        } else {
+            None
+        };
+
         let mut stops = Vec::new();
         for &sid in &self.reachable {
             let sid_usize = sid as usize;
@@ -925,7 +966,19 @@ impl DirtyPeekaboo {
             let nfa_set = &self.arena.sets[sid_usize];
             let is_preimage = nfa_set.iter().any(|&packed| {
                 let (fst_state, buf_len, extra_sym, _truncated) = unpack_peekaboo(packed);
-                buf_len == step_n && extra_sym == NO_EXTRA && fst.is_final[fst_state as usize]
+                if buf_len != step_n || !fst.is_final[fst_state as usize] {
+                    return false;
+                }
+                // Canonical encoding
+                if extra_sym == NO_EXTRA {
+                    return true;
+                }
+                // Non-canonical: extra_sym matches target[step_n - 1]
+                if let Some(expected) = non_canonical_extra {
+                    extra_sym == expected
+                } else {
+                    false
+                }
             });
             if is_preimage {
                 stops.push(sid);
@@ -1757,6 +1810,27 @@ impl LazyPeekabooDFA {
     pub fn get_arcs(&mut self, fst: &Fst, sid: u32) -> Vec<(u32, u32)> {
         self.ensure_arcs(fst, sid);
         self.arcs_from[sid as usize].clone()
+    }
+
+    /// Follow a single arc labeled `x` from `sid`. Lazily computes arcs.
+    pub fn step(&mut self, fst: &Fst, sid: u32, x: u32) -> Option<u32> {
+        self.ensure_arcs(fst, sid);
+        self.arcs_from[sid as usize].iter()
+            .find(|&&(lbl, _)| lbl == x)
+            .map(|&(_, dst)| dst)
+    }
+
+    /// Run a source path from the start state, returning the reached
+    /// DFA state or `None` if any arc is missing. Lazily computes arcs.
+    pub fn run(&mut self, fst: &Fst, source_path: &[u32]) -> Option<u32> {
+        if self.start_ids.is_empty() {
+            return None;
+        }
+        let mut state = self.start_ids[0];
+        for &x in source_path {
+            state = self.step(fst, state, x)?;
+        }
+        Some(state)
     }
 
     pub fn get_classify(&mut self, fst: &Fst, sid: u32) -> &ClassifyResult {

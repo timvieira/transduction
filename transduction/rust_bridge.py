@@ -288,16 +288,22 @@ class RustDirtyPeekaboo(DecompositionResult):
 class _RustDFAAdapter:
     """Wraps Rust DFA arc queries for beam search in TransducedLM."""
 
-    __slots__ = ('_rust_decomp', '_inv', '_start_id')
+    __slots__ = ('_rust_decomp', '_inv', '_fwd', '_start_id')
 
     def __init__(self, rust_decomp, inv_sym_map, start_id):
         self._rust_decomp = rust_decomp
         self._inv = inv_sym_map
+        self._fwd = {v: k for k, v in inv_sym_map.items()}
         self._start_id = start_id
 
     def arcs(self, state_id):
         raw = self._rust_decomp.arcs_for(state_id)
         return [(self._inv[lbl], dst) for lbl, dst in raw]
+
+    def run(self, source_path):
+        """Run a source path from start, returning the reached DFA state (or None for dead)."""
+        path_u32 = [self._fwd[x] for x in source_path]
+        return self._rust_decomp.run(path_u32)
 
     def start(self):
         return [self._start_id]

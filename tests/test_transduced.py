@@ -116,7 +116,7 @@ class TestTransducedLM:
         fst_alpha = [s for s in alphabet if s != '<EOS>']
         fst = copy_fst(fst_alpha)
 
-        tlm = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
+        tlm = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
         state = tlm.initial()
 
         # Check that logp_next distribution roughly matches the inner LM
@@ -137,7 +137,7 @@ class TestTransducedLM:
         fst_alpha = [s for s in alphabet if s != '<EOS>']
         fst = copy_fst(fst_alpha)
 
-        tlm = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
+        tlm = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
         state = tlm >> 'a'
 
         inner_state = char_ngram_lm >> 'a'
@@ -154,7 +154,7 @@ class TestTransducedLM:
         """logp after >> y1 >> y2 equals sum of logp_next[y_i] from successive states."""
         fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
         fst = copy_fst(fst_alpha)
-        tlm = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
+        tlm = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
 
         state0 = tlm.initial()
         lp1 = state0.logp_next['a']
@@ -170,7 +170,7 @@ class TestTransducedLM:
     def test_small_fst_nontrivial(self, char_ngram_lm):
         """TransducedLM with examples.small() produces valid distributions."""
         fst = examples.small()
-        tlm = TransducedLM(char_ngram_lm, fst, max_steps=1000, max_beam=200)
+        tlm = TransducedLM(char_ngram_lm, fst, K=200, max_expansions=1000)
         state = tlm.initial()
 
         # The small FST maps {a,b} → {x,a,b}, so 'x' should be reachable
@@ -185,7 +185,7 @@ class TestTransducedLM:
     def test_lowercase_fst(self, char_ngram_lm):
         """TransducedLM with the lowercase FST produces a valid distribution."""
         fst = examples.lowercase()
-        tlm = TransducedLM(char_ngram_lm, fst, max_steps=1000, max_beam=200)
+        tlm = TransducedLM(char_ngram_lm, fst, K=200, max_expansions=1000)
         state = tlm.initial()
 
         lp = state.logp_next
@@ -198,7 +198,7 @@ class TestTransducedLM:
         # Copy FST over {a, b}
         fst = copy_fst(['a', 'b'])
 
-        tlm = TransducedLM(inner_lm, fst, max_steps=5000, max_beam=500)
+        tlm = TransducedLM(inner_lm, fst, K=500, max_expansions=5000)
         state = tlm.initial()
 
         # Brute force: P(empty target, then next symbol y)
@@ -227,16 +227,16 @@ class TestTransducedLM:
         """Path recovery returns the correct sequence of target symbols."""
         fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
         fst = copy_fst(fst_alpha)
-        tlm = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
+        tlm = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
 
         state = tlm >> 'a' >> 'b' >> 'a'
-        assert state.path() == ['a', 'b', 'a']
+        assert list(state.path) == ['a', 'b', 'a']
 
     def test_logp_starts_at_zero(self, char_ngram_lm):
         """Initial state has logp = 0."""
         fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
         fst = copy_fst(fst_alpha)
-        tlm = TransducedLM(char_ngram_lm, fst)
+        tlm = TransducedLM(char_ngram_lm, fst, K=100)
         state = tlm.initial()
         assert state.logp == 0.0
 
@@ -244,7 +244,7 @@ class TestTransducedLM:
         """Repr doesn't crash."""
         fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
         fst = copy_fst(fst_alpha)
-        tlm = TransducedLM(char_ngram_lm, fst)
+        tlm = TransducedLM(char_ngram_lm, fst, K=100)
         state = tlm.initial()
         assert 'TransducedState' in repr(state)
         assert 'TransducedLM' in repr(tlm)
@@ -278,7 +278,7 @@ class TestTransducedLM:
         inner_lm = TinyLM()
         fst = copy_fst(['a', 'b'])
 
-        tlm = TransducedLM(inner_lm, fst, max_steps=5000, max_beam=500)
+        tlm = TransducedLM(inner_lm, fst, K=500, max_expansions=5000)
         state = tlm.initial()
 
         # With copy FST, the transduced EOS probability should match the
@@ -302,7 +302,7 @@ class TestTransducedLM:
         from the initial state should be non-trivial.
         """
         fst = examples.small()
-        tlm = TransducedLM(char_ngram_lm, fst, max_steps=1000, max_beam=200)
+        tlm = TransducedLM(char_ngram_lm, fst, K=200, max_expansions=1000)
         state = tlm.initial()
 
         eos_lp = state.logp_next[state.eos]
@@ -314,7 +314,7 @@ class TestTransducedLM:
         inner_lm = TinyLM()
         fst = copy_fst(['a', 'b'])
 
-        tlm = TransducedLM(inner_lm, fst, max_steps=5000, max_beam=500)
+        tlm = TransducedLM(inner_lm, fst, K=500, max_expansions=5000)
         state = tlm.initial()
 
         lp = state.logp_next
@@ -361,7 +361,7 @@ class TestLMState:
         """TransducedState.greedy_decode returns a list of string tokens."""
         fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
         fst = copy_fst(fst_alpha)
-        tlm = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
+        tlm = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
         state = tlm.initial()
         tokens = state.greedy_decode(max_len=10)
         assert isinstance(tokens, list)
@@ -373,7 +373,7 @@ class TestLMState:
         """TransducedState.sample_decode returns a list of string tokens."""
         fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
         fst = copy_fst(fst_alpha)
-        tlm = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
+        tlm = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
         state = tlm.initial()
         tokens = state.sample_decode(max_len=10)
         assert isinstance(tokens, list)
@@ -407,7 +407,7 @@ class TestLMState:
         """__call__ on TransducedState matches sequential >>."""
         fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
         fst = copy_fst(fst_alpha)
-        tlm = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
+        tlm = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
         state = tlm.initial()
         s1 = state >> 'a' >> 'b'
         s2 = state(['a', 'b'])
@@ -428,7 +428,7 @@ class TestFusedTransducedLM:
         fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
         fst = copy_fst(fst_alpha)
 
-        orig = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
+        orig = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
         fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
 
         orig_state = orig.initial()
@@ -446,7 +446,7 @@ class TestFusedTransducedLM:
         fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
         fst = copy_fst(fst_alpha)
 
-        orig = TransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
+        orig = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
         fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
 
         orig_state = orig >> 'a'
@@ -463,7 +463,7 @@ class TestFusedTransducedLM:
         """Fused matches original on examples.small()."""
         fst = examples.small()
 
-        orig = TransducedLM(char_ngram_lm, fst, max_steps=1000, max_beam=200)
+        orig = TransducedLM(char_ngram_lm, fst, K=200, max_expansions=1000)
         fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=1000, max_beam=200)
 
         orig_state = orig.initial()
@@ -483,7 +483,7 @@ class TestFusedTransducedLM:
         """Fused matches original on examples.lowercase()."""
         fst = examples.lowercase()
 
-        orig = TransducedLM(char_ngram_lm, fst, max_steps=1000, max_beam=200)
+        orig = TransducedLM(char_ngram_lm, fst, K=200, max_expansions=1000)
         fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=1000, max_beam=200)
 
         orig_state = orig.initial()
@@ -593,14 +593,14 @@ class TestParticleInfrastructure:
 
     def test_select_top_k_basic(self):
         """_select_top_k returns the k highest-weight particles."""
-        particles = [Particle(None, None, w) for w in [1.0, 3.0, 2.0, 5.0, 4.0]]
+        particles = [Particle(None, None, w, ()) for w in [1.0, 3.0, 2.0, 5.0, 4.0]]
         top3 = _select_top_k(particles, 3)
         weights = sorted([p.log_weight for p in top3])
         assert weights == [3.0, 4.0, 5.0]
 
     def test_select_top_k_fewer_than_k(self):
         """When n < k, return all."""
-        particles = [Particle(None, None, 1.0), Particle(None, None, 2.0)]
+        particles = [Particle(None, None, 1.0, ()), Particle(None, None, 2.0, ())]
         result = _select_top_k(particles, 10)
         assert len(result) == 2
 
@@ -826,31 +826,6 @@ _CARRY_FORWARD_TEST_CASES = [
 ]
 
 
-class TestCarryForwardNoDuplicates:
-    """Tests root-family dedup for TransducedLM (layered BFS)."""
-
-    @pytest.mark.parametrize(
-        'name,fst_factory,lm_factory,advance',
-        _CARRY_FORWARD_TEST_CASES,
-        ids=[t[0] for t in _CARRY_FORWARD_TEST_CASES],
-    )
-    def test_no_duplicate_dfa_states(self, name, fst_factory, lm_factory, advance):
-        inner_lm = lm_factory()
-        fst = fst_factory()
-        tlm = TransducedLM(inner_lm, fst, K=50, max_expansions=500)
-
-        state = tlm.initial()
-        _check_no_duplicate_dfa_states(state)
-
-        for y in advance:
-            scores = dict(state.logp_next.items())
-            if y in scores and scores[y] > -20:
-                state = state >> y
-                _check_no_duplicate_dfa_states(state)
-            else:
-                break
-
-
 class TestFusedCarryForwardNoDuplicates:
     """Tests root-family dedup for FusedTransducedLM (best-first search)."""
 
@@ -910,7 +885,7 @@ class TestBPEStyleFST:
         """TransducedLM can decode all 4 output symbols on BPE-style FST."""
         fst = _bpe_style_fst()
         inner_lm = CharNgramLM.train(list('xxyxy') * 5, n=2, alpha=0.5)
-        tlm = TransducedLM(inner_lm, fst, K=50, max_layers=100)
+        tlm = TransducedLM(inner_lm, fst, K=50, max_expansions=100)
 
         target = ('a', 'a', 'b', 'b')
         state = tlm.initial()
@@ -942,7 +917,7 @@ class TestBPEStyleFST:
         """TransducedLM on BPE FST produces normalized distributions at each step."""
         fst = _bpe_style_fst()
         inner_lm = CharNgramLM.train(list('xxyxy') * 5, n=2, alpha=0.5)
-        tlm = TransducedLM(inner_lm, fst, K=50, max_layers=100)
+        tlm = TransducedLM(inner_lm, fst, K=50, max_expansions=100)
 
         state = tlm.initial()
         for y in ('a', 'a'):
@@ -957,7 +932,7 @@ class TestBPEStyleFST:
         """TransducedLM can decode two full BPE tokens (x then y)."""
         fst = _bpe_style_fst()
         inner_lm = CharNgramLM.train(list('xyxyxy') * 5, n=2, alpha=0.5)
-        tlm = TransducedLM(inner_lm, fst, K=100, max_layers=100)
+        tlm = TransducedLM(inner_lm, fst, K=100, max_expansions=100)
 
         state = tlm.initial()
         for y in ('a', 'a', 'b', 'b'):

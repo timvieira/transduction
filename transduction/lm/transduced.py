@@ -8,15 +8,15 @@ Each particle tracks a DFA state (powerset of precover NFA states) and an
 inner LM state; at quotient states, exact marginalization sums over infinitely
 many source continuations, providing dramatic variance reduction.
 
-Per-step expansion uses beam search through the decomposition's DFA with beam
-width K.  Layers proceed by source-symbol depth: at each layer, all beam
-particles are classified (Q/R/preimage), scored, and non-Q particles are
-expanded.  Top K candidates form the next beam.  Beam search terminates when:
-  - The beam is empty (all particles absorbed by Q/R), or
-  - The monotone weight bound is satisfied: the best expandable particle has
-    weight <= the K-th highest carry-forward weight.  Since particle weights
-    only decrease with source-symbol depth, no descendant can displace the
-    current top-K carry-forward set.
+Per-step computation uses best-first search through the decomposition's DFA.
+The search pops the highest-weight particle and classifies its DFA state:
+  - Quotient for symbol y: full weight contributes to y's score (exact
+    marginalization over all continuations).  Particle is absorbed.
+  - Remainder for symbol y: weight * P_inner(EOS) contributes to y's score.
+  - Preimage: weight * P_inner(EOS) contributes to outer EOS score.
+  - Otherwise: expand by source symbols weighted by P_inner.
+Carry-forward passes particles at Q/R/resume-frontier states to the next
+target step; top-K pruning controls approximation quality.
 
 Usage:
     from transduction import examples
@@ -34,7 +34,9 @@ Usage:
 
 import heapq
 import numpy as np
+from collections import defaultdict
 
+from transduction import EPSILON
 from transduction.lm.base import LM, LMState, LogpNext
 from transduction.util import logsumexp
 from transduction.viz import _format_nfa_set, render_particles_html
@@ -54,19 +56,20 @@ class Particle:
     Tracks a DFA state (powerset of precover NFA states) that captures the
     transducer's progress, the inner LM state, and a log importance weight.
     """
-    __slots__ = ('dfa_state', 'lm_state', 'log_weight')
+    __slots__ = ('dfa_state', 'lm_state', 'log_weight', 'source_path')
 
-    def __init__(self, dfa_state, lm_state, log_weight):
+    def __init__(self, dfa_state, lm_state, log_weight, source_path):
         self.dfa_state = dfa_state
         self.lm_state = lm_state
         self.log_weight = log_weight
+        self.source_path = source_path
 
     def __lt__(self, other):
         # max-heap: higher weight = higher priority
         return self.log_weight > other.log_weight
 
     def __repr__(self):
-        return f'Particle(w={self.log_weight:.3f})'
+        return f'Particle(w={self.log_weight:.3f}, {self.source_path})'
 
 
 # ---------------------------------------------------------------------------
@@ -84,8 +87,6 @@ def _select_top_k(particles, k):
     return [particles[i] for i in indices]
 
 
-
-
 # ---------------------------------------------------------------------------
 # TransducedState
 # ---------------------------------------------------------------------------
@@ -99,21 +100,20 @@ class TransducedState(LMState):
         state.logp         -> cumulative log probability
         state.eos          -> EOS token
 
-    Each state holds K particles (source-prefix hypotheses). Computing
-    logp_next runs beam search (width K) through the decomposition's DFA:
-    at each layer, particles are classified, scored at Q/R/preimage states,
-    and non-Q particles are expanded by source symbols. The carry-forward
-    mechanism passes particles at Q/R/resume_frontier states to the next
-    target step.
+    Each state holds K particles (source-prefix hypotheses).  Computing
+    logp_next runs best-first search through the decomposition's DFA:
+    particles are popped by weight, classified (Q/R/preimage), scored,
+    and expanded if not absorbed by a quotient state.  Carry-forward
+    passes particles at Q/R/resume-frontier states to the next target step.
     """
 
-    def __init__(self, tlm, peekaboo_state, particles, logp, history=()):
+    def __init__(self, tlm, peekaboo_state, particles, logp, path=()):
         self.tlm = tlm
         self.eos = tlm.eos
         self._peekaboo_state = peekaboo_state
         self._particles = particles
         self.logp = logp
-        self.history = history
+        self.path = path
         self._logp_next_cache = None
         self._carry_forward_cache = None
 
@@ -129,60 +129,45 @@ class TransducedState(LMState):
 
     def __rshift__(self, y):
         """Advance by target symbol ``y``, returning a new TransducedState."""
-        if y == self.eos or y not in self.tlm.fst.B:
+        if y not in self.tlm.fst.B:
             raise ValueError(f"Out of vocabulary: {y!r}")
         self._ensure_computed()
-
-        if y not in self._logp_next_cache:
-            raise ValueError(f"Out of vocabulary: {y!r}")
-
-        lp_y = self._logp_next_cache[y]
 
         # Advance peekaboo decomposition state
         new_peekaboo = self._peekaboo_state >> y
 
         cf_particles = self._carry_forward_cache.get(y, [])
 
-        # Resolve sentinel particles: dfa_state=None means the particle came
-        # from a truncated Q/R state whose DFA state is a dead end.  Replace
-        # with the child DFA's start states, preserving LM state and weight.
-        if any(p.dfa_state is None for p in cf_particles):
-            new_starts = list(new_peekaboo.dfa.start())
-            resolved = []
-            for p in cf_particles:
-                if p.dfa_state is None:
-                    for s in new_starts:
-                        resolved.append(Particle(s, p.lm_state, p.log_weight))
-                else:
-                    resolved.append(p)
-            cf_particles = resolved
+        # Translate carry-forward particles into the new DFA.
+        # Resume-frontier states persist directly; others are replayed
+        # through the child DFA using the source path from the LM state.
+        resume = self._peekaboo_state.resume_frontiers.get(y, set())
+        new_dfa = new_peekaboo.dfa
 
-        K = self.tlm.K
-        new_logp = self.logp + lp_y
-        new_particles = _select_top_k(cf_particles, K)
+        new_particles = []
+        for p in cf_particles:
+            if p.dfa_state in resume:
+                new_particles.append(p)
+            else:
+                s = new_dfa.run(p.source_path)
+                assert s is not None
+                new_particles.append(Particle(s, p.lm_state, p.log_weight, p.source_path))
 
         return TransducedState(
-            self.tlm, new_peekaboo, new_particles,
-            new_logp, history=(self.history, y),
+            self.tlm,
+            peekaboo_state = new_peekaboo,
+            particles = _select_top_k(new_particles, self.tlm.K),
+            logp = self.logp + self._logp_next_cache[y],
+            path = self.path + (y,),
         )
 
     def _compute_logp_next(self):
-        """Beam search through the DFA to score next target symbols.
+        """Best-first search through the DFA to score next target symbols.
 
-        Layer-by-layer beam search with beam width K:
-        1. Classify all beam particles: Q particles score and exit (exact
-           marginalization), R particles score (weight * P(EOS)), preimage
-           particles score outer EOS.
-        2. Carry-forward: particles at Q/R/resume_frontier states are saved.
-           Root-family tracking ensures at most one entry per (root, symbol)
-           pair — deeper descendants are redundant (DFA determinism).
-        3. Expand non-Q particles by source symbols.
-        4. Select top K candidates -> new beam.
-        5. Terminate when beam is empty or monotone weight bound is met:
-           best expandable weight <= K-th highest carry-forward weight.
-           Since weights only decrease with depth, no descendant can
-           displace the current top-K carry-forward set.
-        6. Normalize scores -> conditional distribution.
+        Pops the highest-weight particle, classifies its DFA state, scores
+        Q/R/preimage contributions, and expands non-quotient particles by
+        source symbols.  After the expansion budget is exhausted, remaining
+        queued items are scored without expansion.
         """
         decomp = self._peekaboo_state.decomp
         dfa = self._peekaboo_state.dfa
@@ -201,200 +186,74 @@ class TransducedState(LMState):
             for state in states:
                 resume_of.setdefault(state, set()).add(y)
 
-        preimage_stops = self._peekaboo_state.preimage_stops
-
-        # Inner LM EOS token
-        EOS = (self.tlm.inner_lm.eos if hasattr(self.tlm.inner_lm, 'eos')
-               else self.tlm.inner_lm.initial().eos)
-
-        K = self.tlm.K
-
         # --- Accumulators ---
-        scores = {}          # y -> [log-weights]
-        eos_scores = []      # [log-weights] for outer EOS
-        carry_forward = {}   # y -> [particle, ...]
+        scores = defaultdict(lambda: -np.inf)
+        carry_forward = defaultdict(list)   # y -> [particle, ...]
 
-        # Root-family tracking for carry-forward deduplication.
-        #
-        # Each initial particle (from self._particles) defines a "root
-        # family".  Within a single BFS, prefix-dominated carry-forward
-        # entries can only arise among descendants of the same root:
-        # initial particles have non-prefix source paths (guaranteed by the
-        # previous step's invariant), and the DFA is deterministic with a
-        # single start state, so particles from different roots can never
-        # reach the same DFA state.
-        #
-        # For each (root_id, y), only the shallowest descendant needs to be
-        # carried forward — deeper ones will be reproduced when the shallow
-        # particle is expanded in the next step's BFS.  Since BFS processes
-        # layers shallowest-first, the first entry for a (root_id, y) pair
-        # is always the shallowest, so "first one wins" is sufficient.
-        root_of = {}               # id(particle) -> root index
-        carried = set()            # (root_id, y) pairs already added
+        def _update(particle):
+            """Classify particle, accumulate scores, save carry-forward.
 
-        for i, p in enumerate(self._particles):
-            root_of[id(p)] = i
-
-        def _add_carry(y, particle):
-            rid = root_of[id(particle)]
-            if (rid, y) in carried:
-                return
-            carried.add((rid, y))
-            carry_forward.setdefault(y, []).append(particle)
-
-        # Top-K carry-forward weight tracker (min-heap of size K).
-        # cf_top_k[0] is the K-th highest carry-forward weight when full.
-        cf_top_k = []
-
-        def classify_and_score(particle):
-            """Classify particle's DFA state, accumulate scores, save carry-forward.
-
-            Returns True if the particle is at a quotient state (skip expansion).
+            Returns True if the particle is at a quotient state (absorbed).
             """
             d = particle.dfa_state
             w = particle.log_weight
 
-            q_syms = q_of.get(d)
-            r_syms = r_of.get(d)
-            is_preimage = d in preimage_stops
-            is_quotient = q_syms is not None
+            q_syms = q_of.get(d, set())
+            r_syms = r_of.get(d, set())
 
-            # Only trigger an LM forward pass (logp_next[EOS]) when needed:
-            # preimage scoring, or remainder for symbols not covered by quotient.
-            needs_eos = is_preimage or (
-                r_syms is not None
-                and (not is_quotient or not r_syms.issubset(q_syms))
-            )
-            eos_lp = None
-            if needs_eos:
-                eos_lp = particle.lm_state.logp_next[EOS]
+            # Quotient: 
+            for y in q_syms:
+                scores[y] = np.logaddexp(scores[y], w)
 
-            # Preimage: source produced exactly the target prefix at a final state
-            if is_preimage and eos_lp is not None and eos_lp > -np.inf:
-                eos_scores.append(w + eos_lp)
+            eos_lp = particle.lm_state.logp_next[self.tlm.inner_lm.eos]
 
-            # Quotient: full weight contributes (exact marginalization over futures)
-            if is_quotient:
-                for y in q_syms:
-                    scores.setdefault(y, []).append(w)
-
-            # Remainder: weight * P(EOS), skipping symbols covered by quotient
-            if r_syms is not None and eos_lp is not None and eos_lp > -np.inf:
+            if eos_lp > -np.inf:
                 eos_w = w + eos_lp
-                for y in r_syms:
-                    if not is_quotient or y not in q_syms:
-                        scores.setdefault(y, []).append(eos_w)
 
-            # Carry-forward: save particle at resume_frontier states
-            # (non-truncated Q/R + truncation boundary).
-            carry_syms = resume_of.get(d)
-            if carry_syms is not None:
-                for y in carry_syms:
-                    _add_carry(y, particle)
+                # preimage (EOS)
+                if d in self._peekaboo_state.preimage_stops:
+                    scores[self.eos] = np.logaddexp(scores[self.eos], eos_w)
 
-            # Truncated Q/R states are not in resume_frontiers because their
-            # DFA state becomes a dead end in the next step (all NFA elements
-            # are truncated and can never reach new Q/R states).  However, the
-            # particle's LM state is still valuable — it encodes the source
-            # prefix consumed so far.  Carry these forward with dfa_state=None
-            # (sentinel); __rshift__ resolves this to the child DFA's actual
-            # start states, preserving LM incrementality.
-            if d not in resume_of:
-                trunc_syms = set()
-                if q_syms:
-                    trunc_syms.update(q_syms)
-                if r_syms:
-                    trunc_syms.update(r_syms)
-                if trunc_syms:
-                    remap = Particle(None, particle.lm_state, w)
-                    root_of[id(remap)] = root_of[id(particle)]
-                    for y in trunc_syms:
-                        _add_carry(y, remap)
+                # Remainder
+                for y in r_syms - q_syms:
+                    scores[y] = np.logaddexp(scores[y], eos_w)
 
-            # Track carry-forward weights for early termination.
-            carried = carry_syms or (d not in resume_of and (q_syms or r_syms))
-            if carried:
-                if len(cf_top_k) < K:
-                    heapq.heappush(cf_top_k, w)
-                elif w > cf_top_k[0]:
-                    heapq.heapreplace(cf_top_k, w)
+            # Carry forward at any relevant state (Q, R, or resume frontier).
+            for y in q_syms | r_syms | resume_of.get(d, set()):
+                carry_forward[y].append(particle)
 
-            return is_quotient
+            return len(q_syms) > 0
 
-        # --- Beam search ---
-        # Each iteration: classify candidates -> prune non-Q to K -> expand.
-        # Initial "candidates" are the carry-forward particles from the parent.
-        # Classification happens BEFORE pruning so that all Q/R candidates
-        # are scored regardless of beam width.
-        candidates = list(self._particles)
+        # --- Best-first search ---
+        queue = list(self._particles)
+        heapq.heapify(queue)
 
-        for _ in range(self.tlm.max_layers):
-            if not candidates:
-                break
+        expansions = 0
+        while queue and expansions < self.tlm.max_expansions:
+            expansions += 1
 
-            # Classify all candidates: Q/R score and exit, non-Q continue.
-            to_expand = []
-            for particle in candidates:
-                is_q = classify_and_score(particle)
-                if not is_q:
-                    to_expand.append(particle)
+            particle = heapq.heappop(queue)
+            if _update(particle): continue  # absorbed by quotient
 
-            if not to_expand:
-                break
+            lm_logp = particle.lm_state.logp_next
+            for x, next_dfa_state in dfa.arcs(particle.dfa_state):
+                child_w = particle.log_weight + lm_logp[x]
+                if child_w > -np.inf:
+                    heapq.heappush(queue, Particle(
+                        next_dfa_state,
+                        particle.lm_state >> x,
+                        child_w,
+                        particle.source_path + (x,),
+                    ))
 
-            # Early termination: monotone weight bound.
-            # Particle weights only decrease with source-symbol depth, so if
-            # the best non-Q candidate can't beat the K-th highest carry-
-            # forward weight, no descendant can either.
-            if len(cf_top_k) >= K:
-                best_w = max(p.log_weight for p in to_expand)
-                if best_w <= cf_top_k[0]:
-                    break
+        # Budget exhausted — score remaining items without expanding
+        while queue:
+            _update(heapq.heappop(queue))
 
-            # Prune non-Q candidates to K (beam width).
-            beam = _select_top_k(to_expand, K)
+        Z = logsumexp(list(scores.values()))
 
-            # Expand beam particles by source symbols.
-            candidates = []
-            for particle in beam:
-                rid = root_of[id(particle)]
-                lm_logp = particle.lm_state.logp_next
-                for x, next_dfa_state in dfa.arcs(particle.dfa_state):
-                    child_w = particle.log_weight + lm_logp[x]
-                    if child_w > -np.inf:
-                        child = Particle(
-                            next_dfa_state,
-                            particle.lm_state >> x,
-                            child_w,
-                        )
-                        root_of[id(child)] = rid
-                        candidates.append(child)
-
-        # --- Normalize ---
-        raw_scores = {}
-        for y, w_list in scores.items():
-            raw_scores[y] = logsumexp(w_list)
-        raw_scores[EOS] = logsumexp(eos_scores)
-
-        Z_parts = list(raw_scores.values())
-        Z = logsumexp(Z_parts)
-
-        normalized = {}
-        for y, raw in raw_scores.items():
-            normalized[y] = raw - Z
-
-        self._logp_next_cache = LogpNext(normalized)
+        self._logp_next_cache = LogpNext({y: raw - Z for y, raw in scores.items()})
         self._carry_forward_cache = carry_forward
-
-    def path(self):
-        """Return the list of target symbols consumed so far."""
-        tokens = []
-        h = self.history
-        while h:
-            h, token = h
-            tokens.append(token)
-        tokens.reverse()
-        return tokens
 
     def _repr_html_(self):
         decomp = self._peekaboo_state.decomp
@@ -420,7 +279,7 @@ class TransducedState(LMState):
         qr_builder = ps.build_qr_fsa if can_decode and hasattr(ps, 'build_qr_fsa') else None
 
         result = render_particles_html(
-            'TransducedState', self._particles, self.path(), self.logp,
+            'TransducedState', self._particles, self.path, self.logp,
             decode_fn=decode_fn,
             q_states=q_states, r_states=r_states,
             qr_builder=qr_builder, decomp=decomp,
@@ -428,7 +287,7 @@ class TransducedState(LMState):
 
         from transduction.viz import render_logp_next_html
         result += render_logp_next_html(
-            'TransducedState', self.path(), self.logp, self.logp_next,
+            'TransducedState', self.path, self.logp, self.logp_next,
         )
         return result
 
@@ -449,56 +308,46 @@ class TransducedLM(LM):
     states) and an inner LM state.  At quotient states, exact marginalization
     sums over infinitely many source continuations.
 
-    Per-step expansion uses beam search with beam width K through the
-    decomposition's DFA.  Layers proceed by source-symbol depth: at each
-    layer, all beam particles are classified (Q/R/preimage), scored, and
-    non-Q particles are expanded.  Top K candidates form the next beam.
-    Termination is by the monotone weight bound: since particle weights only
-    decrease with depth, expansion stops when no beam particle can displace
-    the current top-K carry-forward set.
+    Per-step computation uses best-first search through the decomposition's
+    DFA with an expansion budget.  Each popped particle is classified
+    (Q/R/preimage) and scored; non-quotient particles are expanded by source
+    symbols.  Quotient particles are absorbed (exact marginalization) without
+    counting against the budget.
 
     Args:
         inner_lm: LM with StateLM interface (has .initial(), state >> x,
             state.logp_next).
         fst: FST instance mapping source -> target.
-        K: Beam width — number of particles maintained during both per-step
-            expansion and carry-forward between target steps.  This is the
-            primary knob controlling approximation quality.
-        max_layers: Maximum beam search depth (source-symbol layers) per
-            target step.  The primary termination criterion is the monotone
-            weight bound (automatic); this is a safety valve for pathological
-            FSTs where weight decay is very slow.
+        max_expansions: Best-first search budget -- maximum number of non-
+            quotient particles expanded per target step.
         eos: Outer EOS token.
-        decomp_state_cls: Incremental decomposition class (default: PeekabooState).
-        univ_cls: Universality precomputation class (default: FstUniversality).
-        max_beam: Backward-compat alias for K.
-        max_steps: Accepted for backward compat (unused).
+        decomp_state_cls: Incremental decomposition class (default: RustPeekabooState).
+        univ_cls: Universality precomputation class (default: _RustPeekabooUniv).
     """
 
-    def __init__(self, inner_lm, fst, K=100, max_layers=100,
-                 max_expansions=None, eos='<EOS>',
-                 decomp_state_cls=None, univ_cls=None,
-                 max_beam=None, max_steps=None):
+    def __init__(self, inner_lm, fst, K, max_expansions=1000, eos='<EOS>',
+                 decomp_state_cls=None, univ_cls=_DefaultUniv):
         self.inner_lm = inner_lm
         self.fst = fst
-        self.K = max_beam if max_beam is not None else K
-        self.max_layers = max_layers
-        # Backward-compat attribute (no longer controls beam search).
-        self.max_expansions = max_steps or max_expansions or 1000
+        self.max_expansions = max_expansions
+        self.K = K
         self.eos = eos
         self._decomp_state_cls = decomp_state_cls or _DefaultDecompState
-        self._univ_cls = univ_cls or _DefaultUniv
-        self._univ = self._univ_cls(fst)
+        self._univ = univ_cls(fst)
 
     def initial(self):
         """Return the initial TransducedState (empty target prefix)."""
         peekaboo = self._decomp_state_cls(self.fst, '', parent=None, univ=self._univ)
         inner_initial = self.inner_lm.initial()
-        particles = [
-            Particle(s, inner_initial, 0.0)
-            for s in peekaboo.dfa.start()
-        ]
-        return TransducedState(self, peekaboo, particles, 0.0)
+        return TransducedState(
+            self,
+            peekaboo_state = peekaboo,
+            logp = 0.0,
+            particles = [
+                Particle(s, inner_initial, 0.0, ())
+                for s in peekaboo.dfa.start()
+            ],
+        )
 
     def __repr__(self):
-        return f'TransducedLM(inner={self.inner_lm!r}, K={self.K})'
+        return f'TransducedLM(inner={self.inner_lm!r})'

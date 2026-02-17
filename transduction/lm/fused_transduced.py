@@ -107,16 +107,18 @@ class _FusedSearch:
         )
 
         # Resolve sentinel particles: dfa_state=None means the particle came
-        # from a truncated Q/R state.  Replace with the new DFA's start states.
-        start_ids = tlm._rust_helper.start_ids()
+        # from a truncated Q/R state.  Replay source path through the new DFA
+        # to find the correct state (same strategy as TransducedLM).
         resolved = []
         for item in particles:
             if item.dfa_state is None:
-                for s in start_ids:
-                    p = Particle(dfa_state=s, lm_state=item.lm_state,
-                                 log_weight=item.log_weight)
-                    self._root_of[id(p)] = self._root_of[id(item)]
-                    resolved.append(p)
+                s = tlm.run(item.source_path)
+                assert s is not None
+                p = Particle(dfa_state=s, lm_state=item.lm_state,
+                             log_weight=item.log_weight,
+                             source_path=item.source_path)
+                self._root_of[id(p)] = self._root_of[id(item)]
+                resolved.append(p)
             else:
                 resolved.append(item)
         particles = resolved
@@ -144,6 +146,7 @@ class _FusedSearch:
             dfa_state=None,
             lm_state=item.lm_state,
             log_weight=item.log_weight,
+            source_path=item.source_path,
         )
         self._root_of[id(remap)] = rid
         self._add_carry(y, remap)
@@ -208,6 +211,7 @@ class _FusedSearch:
                 dfa_state=dest_sid,
                 lm_state=item.lm_state >> x,
                 log_weight=w,
+                source_path=item.source_path + (x,),
             )
             self._root_of[id(child)] = rid
             heapq.heappush(self._queue, child)
@@ -396,6 +400,11 @@ class FusedTransducedLM(LM):
 
         return frozenset(result)
 
+    def run(self, source_path):
+        """Run a source path through the current-step DFA. Returns state or None."""
+        path_u32 = [self._sym_map[x] for x in source_path]
+        return self._rust_helper.run(path_u32)
+
     def initial(self):
         """Return the initial FusedTransducedState (empty target prefix)."""
         self._rust_helper.new_step([])
@@ -407,6 +416,7 @@ class FusedTransducedLM(LM):
                 dfa_state=s,
                 lm_state=inner_initial,
                 log_weight=0.0,
+                source_path=(),
             )
             for s in start_ids
         ]

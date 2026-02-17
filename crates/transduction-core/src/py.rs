@@ -561,6 +561,12 @@ impl RustDirtyPeekabooDecomp {
         self.persistent.arcs_from(state_id).to_vec()
     }
 
+    /// Run a source path (sequence of u32 labels) from the global start state.
+    /// Returns the reached DFA state, or None if any arc is missing.
+    fn run(&self, source_path: Vec<u32>) -> Option<u32> {
+        self.persistent.run(&source_path)
+    }
+
     /// Decode a DFA state ID to its NFA constituents.
     /// Returns list of (fst_state, buf_len, extra_sym_idx, truncated) tuples.
     fn decode_state(&self, state_id: u32) -> Vec<(u32, u16, u16, bool)> {
@@ -773,6 +779,12 @@ impl RustLazyPeekabooDFA {
     fn arcs(&mut self, py: Python<'_>, sid: u32) -> Vec<(u32, u32)> {
         let inner = &self.fst.borrow(py).inner;
         self.lazy_dfa.as_mut().expect("call new_step first").get_arcs(inner, sid)
+    }
+
+    /// Run a source path from start, returning the reached DFA state or None.
+    fn run(&mut self, py: Python<'_>, source_path: Vec<u32>) -> Option<u32> {
+        let inner = &self.fst.borrow(py).inner;
+        self.lazy_dfa.as_mut().expect("call new_step first").run(inner, &source_path)
     }
 
     /// Lazily compute and return classification of a DFA state.
