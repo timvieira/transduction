@@ -326,9 +326,10 @@ class DirtyPeekaboo(IncrementalDecomposition):
         y = self.target[-1]
         q_stops = parent._q_stops.get(y, set())
         r_stops = parent._r_stops.get(y, set())
+        get_incoming = lambda s: parent._incoming.get(s, ())
         return (
-            _trimmed_fsa(parent._start_states, q_stops, parent._incoming),
-            _trimmed_fsa(parent._start_states, r_stops, parent._incoming),
+            _trimmed_fsa(parent._start_states, q_stops, get_incoming),
+            _trimmed_fsa(parent._start_states, r_stops, get_incoming),
         )
 
     @property
@@ -360,13 +361,13 @@ class _DirtyPeekabooChild(IncrementalDecomposition):
     def quotient(self):
         parent = self._parent_ref
         q_stops = parent._q_stops.get(self._symbol, set())
-        return _trimmed_fsa(parent._start_states, q_stops, parent._incoming)
+        return _trimmed_fsa(parent._start_states, q_stops, lambda s: parent._incoming.get(s, ()))
 
     @cached_property
     def remainder(self):
         parent = self._parent_ref
         r_stops = parent._r_stops.get(self._symbol, set())
-        return _trimmed_fsa(parent._start_states, r_stops, parent._incoming)
+        return _trimmed_fsa(parent._start_states, r_stops, lambda s: parent._incoming.get(s, ()))
 
     @cached_property
     def _full(self):

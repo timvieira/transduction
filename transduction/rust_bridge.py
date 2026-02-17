@@ -470,9 +470,10 @@ class RustPeekabooState:
         if d is None:
             return FSA(), FSA()
         incoming = self._collect_incoming()
+        get_incoming = lambda s: incoming.get(s, ())
         start_states = self.dfa.start()
-        q_fsa = _trimmed_fsa(start_states, d.quotient, incoming)
-        r_fsa = _trimmed_fsa(start_states, d.remainder, incoming)
+        q_fsa = _trimmed_fsa(start_states, d.quotient, get_incoming)
+        r_fsa = _trimmed_fsa(start_states, d.remainder, get_incoming)
         return q_fsa, r_fsa
 
     def __rshift__(self, y):

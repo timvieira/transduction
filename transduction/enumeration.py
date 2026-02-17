@@ -108,6 +108,30 @@ class prioritized_enumeration:
                 heapq.heappush(self.queue, next_item)
 
 
+def _sample_step(lm_logp_next, arcs, is_eos_eligible, EOS):
+    """One step of importance-sampling: build proposal, sample, return choice.
+
+    Returns (chosen_symbol, transitions_dict, log_normalizer).
+    If chosen_symbol is EOS, transitions_dict may not contain it.
+    """
+    q = {}
+    T = {}
+    if is_eos_eligible:
+        q[EOS] = lm_logp_next[EOS]
+    for x, next_state in arcs:
+        q[x] = lm_logp_next[x]
+        T[x] = next_state
+    keys = list(q.keys())
+    vals = np.array(list(q.values()))
+    Z = logsumexp(vals)
+    if np.isfinite(Z):
+        vals = np.exp(vals - Z)
+    else:
+        vals = np.ones(len(vals))
+    x_t = keys[sample(vals)]
+    return x_t, T, Z
+
+
 class importance_sampling:
 
     def __init__(self, lm, fst, target, decompose=None):
@@ -153,22 +177,8 @@ class importance_sampling:
             if item.state in self.Q:
                 return item
 
-            q = {}
-            T = {}
-            if item.state in self.R:
-                q[EOS] = lm_logp_next[EOS]
-            for x, next_state in self.dfa.arcs(item.state):
-                q[x] = lm_logp_next[x]
-                T[x] = next_state
-
-            keys = list(q.keys())
-            vals = np.array(list(q.values()))
-            Z = logsumexp(vals)
-            if np.isfinite(Z):
-                vals = np.exp(vals - Z)
-            else:
-                vals = np.ones(len(vals))
-            x_t = keys[sample(vals)]
+            x_t, T, Z = _sample_step(lm_logp_next, self.dfa.arcs(item.state),
+                                      item.state in self.R, EOS)
 
             if x_t == EOS:
                 return item
@@ -210,22 +220,8 @@ class crude_importance_sampling:
 
             lm_logp_next = item.source.logp_next
 
-            q = {}
-            T = {}
-            if self.dfa.is_final(item.state):
-                q[EOS] = lm_logp_next[EOS]
-            for x, next_state in self.dfa.arcs(item.state):
-                q[x] = lm_logp_next[x]
-                T[x] = next_state
-
-            keys = list(q.keys())
-            vals = np.array(list(q.values()))
-            Z = logsumexp(vals)
-            if np.isfinite(Z):
-                vals = np.exp(vals - Z)
-            else:
-                vals = np.ones(len(vals))
-            x_t = keys[sample(vals)]
+            x_t, T, Z = _sample_step(lm_logp_next, self.dfa.arcs(item.state),
+                                      self.dfa.is_final(item.state), EOS)
 
             if x_t == EOS:
                 return item

@@ -5,8 +5,6 @@ from transduction.precover import Precover
 from transduction.eager_nonrecursive import EagerNonrecursive
 from transduction import examples
 
-from transduction.util import colors
-
 from transduction.fst import FST, EPSILON
 from transduction.fsa import FSA
 

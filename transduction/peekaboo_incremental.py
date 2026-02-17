@@ -29,11 +29,15 @@ from functools import cached_property
 #_______________________________________________________________________________
 #
 
-def _trimmed_fsa(start_states, stop_states, incoming):
+def _trimmed_fsa(start_states, stop_states, get_incoming):
     """Build a trimmed FSA by backward BFS from stop states through the
-    reverse-arc graph.  All states in `incoming` are forward-reachable
+    reverse-arc graph.  All states in the incoming index are forward-reachable
     (guaranteed by the BFS that built them), so backward reachability
-    from stops gives exactly the trim (forward ∩ backward reachable) set."""
+    from stops gives exactly the trim (forward ∩ backward reachable) set.
+
+    Args:
+        get_incoming: callable(state) -> iterable of (symbol, predecessor) pairs.
+    """
     if not stop_states:
         return FSA()
     backward_reachable = set()
@@ -43,13 +47,13 @@ def _trimmed_fsa(start_states, stop_states, incoming):
         if state in backward_reachable:
             continue
         backward_reachable.add(state)
-        for _, pred in incoming.get(state, ()):
+        for _, pred in get_incoming(state):
             if pred not in backward_reachable:
                 worklist.append(pred)
     arcs = [
         (pred, x, state)
         for state in backward_reachable
-        for x, pred in incoming.get(state, ())
+        for x, pred in get_incoming(state)
         if pred in backward_reachable
     ]
     return FSA(
@@ -526,14 +530,15 @@ class PeekabooState(IncrementalDecomposition):
         _empty = DecompositionResult(set(), set())
         d = parent.decomp.get(y, _empty)
         merged_incoming = parent._merged_incoming()
+        get_incoming = lambda s: merged_incoming.get(s, ())
         # Walk to root for start states
         node = parent
         while node.parent is not None:
             node = node.parent
         start_states = set(node.dfa.start())
         return (
-            _trimmed_fsa(start_states, d.quotient, merged_incoming),
-            _trimmed_fsa(start_states, d.remainder, merged_incoming),
+            _trimmed_fsa(start_states, d.quotient, get_incoming),
+            _trimmed_fsa(start_states, d.remainder, get_incoming),
         )
 
     @property

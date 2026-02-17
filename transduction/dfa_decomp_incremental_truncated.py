@@ -6,6 +6,7 @@ from transduction.universality import (
     check_all_input_universal,
     compute_ip_universal_states,
 )
+from transduction.peekaboo_incremental import _trimmed_fsa
 from collections import deque
 from functools import cached_property
 from transduction.lazy import EpsilonRemove
@@ -49,37 +50,6 @@ def _make_filter(fst, target, dfa, source_alphabet, all_input_universal, ip_univ
         fst, target, dfa, source_alphabet,
         all_input_universal=all_input_universal,
         witnesses=witnesses,
-    )
-
-
-def _trimmed_fsa(start_states, stop_states, get_incoming):
-    """Build a trimmed FSA by backward BFS from stop states through reverse arcs.
-
-    All states in the incoming index are forward-reachable (built by BFS),
-    so backward reachability from stops gives exactly the trim set.
-    """
-    if not stop_states:
-        return FSA()
-    backward_reachable = set()
-    worklist = deque(stop_states)
-    while worklist:
-        state = worklist.popleft()
-        if state in backward_reachable:
-            continue
-        backward_reachable.add(state)
-        for _, pred in get_incoming(state):
-            if pred not in backward_reachable:
-                worklist.append(pred)
-    arcs = [
-        (pred, x, state)
-        for state in backward_reachable
-        for x, pred in get_incoming(state)
-        if pred in backward_reachable
-    ]
-    return FSA(
-        start={s for s in start_states if s in backward_reachable},
-        arcs=arcs,
-        stop=stop_states,
     )
 
 
