@@ -268,6 +268,180 @@ def render_logp_next_html(class_name, target, logp, logp_next, top_k=20):
     return header + format_table(rows, headings=['Token', 'logp', 'p'])
 
 
+# ---------------------------------------------------------------------------
+# Particle table rendering (shared by TransducedState / FusedTransducedState)
+# ---------------------------------------------------------------------------
+
+def _format_source_path(lm_state):
+    """Format an LM state's source path for display."""
+    path = lm_state.path()
+    if not path:
+        return 'ε'
+    try:
+        return bytes(path).decode('utf-8', errors='replace')
+    except TypeError:
+        return ''.join(str(s) for s in path)
+
+
+def _format_nfa_element(fst_state, buf, truncated):
+    """Format a single NFA element (fst_state, buffer, truncated) compactly."""
+    if not buf:
+        buf_str = 'ε'
+    elif all(isinstance(b, str) and len(b) == 1 for b in buf):
+        s = ''.join(buf)
+        buf_str = repr(s) if len(s) <= 6 else repr(s[:5]) + '…'
+    else:
+        items = [str(b) for b in buf[:4]]
+        buf_str = '(' + ','.join(items) + ('…' if len(buf) > 4 else '') + ')'
+    trunc = '†' if truncated else ''
+    return f'({fst_state}, {buf_str}{trunc})'
+
+
+def _format_nfa_set(decoded_set):
+    """Format a decoded NFA state set for compact display."""
+    elements = sorted(decoded_set, key=lambda x: (repr(x[0]), x[1]))
+    parts = [_format_nfa_element(*e) for e in elements]
+    MAX = 4
+    if len(parts) <= MAX:
+        return '{' + ', '.join(parts) + '}'
+    return '{' + ', '.join(parts[:MAX]) + f', …+{len(parts)-MAX}' + '}'
+
+
+def render_particles_html(
+    class_name,       # 'TransducedState' or 'FusedTransducedState'
+    items,            # Particle list with .dfa_state, .lm_state, .log_weight
+    target,           # list of target symbols
+    logp,             # float
+    *,
+    decode_fn=None,             # callable(dfa_state) -> str (formatted NFA set)
+    q_states=frozenset(),       # set of quotient DFA states
+    r_states=frozenset(),       # set of remainder DFA states
+    qr_builder=None,            # callable(y) -> (q_fsa, r_fsa)
+    decomp=None,                # decomp dict for Q/R filter
+):
+    """Render an HTML table for particles.
+
+    Shared by TransducedState and FusedTransducedState _repr_html_.
+    """
+    import numpy as np
+    from transduction.util import logsumexp
+
+    target_str = ''.join(str(y) for y in target) if target else 'ε'
+    header = (f'<b>{class_name}</b> '
+              f'target={target_str!r}, K={len(items)}, '
+              f'logp={logp:.4f}<br>')
+    if not items:
+        return header
+
+    log_weights = np.array([p.log_weight for p in items])
+    log_Z = logsumexp(log_weights)
+
+    show_role = bool(q_states or r_states)
+
+    # Group by (source_path, dfa_state)
+    groups = {}
+    for p in items:
+        source = _format_source_path(p.lm_state)
+        key = (source, p.dfa_state)
+        groups.setdefault(key, []).append(p.log_weight)
+
+    table_rows = []
+    for (source, dfa_state), lws in groups.items():
+        group_log_w = logsumexp(np.array(lws))
+        posterior = np.exp(group_log_w - log_Z)
+        if show_role:
+            is_q = dfa_state in q_states
+            is_r = dfa_state in r_states
+            role = ('Q+R' if is_q and is_r else
+                    'Q' if is_q else
+                    'R' if is_r else 'frontier')
+        else:
+            role = None
+        table_rows.append((source, dfa_state, role, len(lws),
+                           group_log_w, posterior))
+    table_rows.sort(key=lambda r: -r[5])
+
+    rows = []
+    for source, dfa_state, role, count, log_w, posterior in table_rows:
+        dfa_label = decode_fn(dfa_state) if decode_fn else str(dfa_state)
+        row = [repr(source), dfa_label]
+        if show_role:
+            row.append(role)
+        row.extend([str(count), f'{log_w:.2f}', f'{posterior:.4f}'])
+        rows.append(row)
+
+    headings = ['Source prefix', 'DFA state']
+    if show_role:
+        headings.append('Role')
+    headings.extend(['Count', 'log w', 'p(x|y)'])
+
+    result = header + format_table(
+        rows,
+        headings=headings,
+        column_styles={0: 'text-align:left'},
+    )
+
+    # Add collapsible Q/R FSA visualizations
+    if decode_fn and qr_builder and decomp:
+        particle_states = {p.dfa_state for p in items}
+
+        def sty_node(state):
+            if state in particle_states:
+                return {'fillcolor': '#ADD8E6',
+                        'style': 'filled,rounded'}
+            return {}
+
+        def fmt_node(state):
+            return decode_fn(state)
+
+        relevant_syms = set()
+        for y, d in decomp.items():
+            if d.quotient & particle_states or \
+               d.remainder & particle_states:
+                relevant_syms.add(y)
+
+        MAX_QR = 10
+        shown = 0
+        for y in sorted(relevant_syms, key=repr):
+            if shown >= MAX_QR:
+                rest = len(relevant_syms) - shown
+                result += (f'<details><summary>… and {rest} more '
+                           f'Q/R sections</summary></details>')
+                break
+            try:
+                q_fsa, r_fsa = qr_builder(y)
+            except Exception:
+                continue
+            if not q_fsa.states and not r_fsa.states:
+                continue
+
+            parts = []
+            y_label = _html.escape(repr(y))
+            if q_fsa.states:
+                try:
+                    g = q_fsa.graphviz(fmt_node=fmt_node,
+                                       sty_node=sty_node)
+                    svg = g._repr_image_svg_xml()
+                    parts.append(f'<b>Q({y_label})</b><br>{svg}')
+                except Exception:
+                    pass
+            if r_fsa.states:
+                try:
+                    g = r_fsa.graphviz(fmt_node=fmt_node,
+                                       sty_node=sty_node)
+                    svg = g._repr_image_svg_xml()
+                    parts.append(f'<b>R({y_label})</b><br>{svg}')
+                except Exception:
+                    pass
+            if parts:
+                content = '<br>'.join(parts)
+                result += (f'<details><summary>Q/R for y={y_label}'
+                           f'</summary>{content}</details>')
+                shown += 1
+
+    return result
+
+
 # ---------------------------------------------
 # Edge-label compressor (regex-style summaries)
 # ---------------------------------------------

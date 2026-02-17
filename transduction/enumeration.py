@@ -1,22 +1,26 @@
+"""
+These are baseline, nonincremental methods for sampling/enumerating strings 
+and prefixes in the precover, i.e., estimating prefix probabilities for a 
+fixed target string.  They have been included in the repo primarily for 
+pedagogical reasons.
+
+Unlike TransducedLM and FusedTransducedLM, which compute the transduced
+distribution incrementally (one output symbol at a time), these methods
+take a fixed target string and estimate its prefix probability under the
+inner LM by sampling/enumerating source strings in the precover.
+
+Provides: prioritized_enumeration (best-first search), importance_sampling,
+and crude_importance_sampling (without decomposition).
+
+"""
+
 from transduction import Precover, LazyPrecoverNFA
 
 import heapq
 import numpy as np
 from dataclasses import dataclass
 
-from transduction.util import colors, sample
-
-
-def logsumexp(arr):
-    arr = np.array(arr, dtype=np.float64)
-    arr = arr[arr > -np.inf]
-    if len(arr) == 0: return -np.inf
-    vmax = arr.max()
-    arr -= vmax
-    np.exp(arr, out=arr)
-    out = np.log(arr.sum())
-    out += vmax
-    return out
+from transduction.util import colors, sample, logsumexp
 
 
 @dataclass(frozen=False, eq=True, unsafe_hash=True)

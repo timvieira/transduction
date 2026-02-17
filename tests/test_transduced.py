@@ -5,10 +5,12 @@ import numpy as np
 from collections import defaultdict
 
 from transduction import examples, FST
+from transduction.fst import EPSILON
 from transduction.lm.base import LM, LMState
 from transduction.lm.base import LogpNext
 from transduction.lm.ngram import ByteNgramLM, CharNgramLM, NgramState
-from transduction.lm.transduced import TransducedLM, TransducedState, Particle, logsumexp
+from transduction.lm.transduced import TransducedLM, TransducedState, Particle
+from transduction.util import logsumexp
 from transduction.lm.transduced import _select_top_k
 from transduction.lm.fused_transduced import FusedTransducedLM, FusedTransducedState
 
@@ -872,3 +874,103 @@ class TestFusedCarryForwardNoDuplicates:
                 _check_no_duplicate_dfa_states(state)
             else:
                 break
+
+
+# ---------------------------------------------------------------------------
+# BPE-style FST tests (Bug 2: carry-forward particles are dead ends)
+# ---------------------------------------------------------------------------
+
+def _bpe_style_fst():
+    """BPE-style FST: epsilon-input arcs produce output, then source:eps back to start.
+
+    Maps: x -> 'a','a'  and  y -> 'b','b'
+    """
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(0)
+    fst.add_arc(0, EPSILON, 'a', ('a',))
+    fst.add_arc(('a',), EPSILON, 'a', ('a', 'a'))
+    fst.add_arc(('a', 'a'), 'x', EPSILON, 0)
+    fst.add_arc(0, EPSILON, 'b', ('b',))
+    fst.add_arc(('b',), EPSILON, 'b', ('b', 'b'))
+    fst.add_arc(('b', 'b'), 'y', EPSILON, 0)
+    return fst
+
+
+class TestBPEStyleFST:
+    """Tests for BPE-style FSTs where carry-forward particles were dead ends.
+
+    Bug 2 from issue #4: carry-forward unconditionally saved particles at
+    Q/R states, including truncated ones that are dead ends in the next step.
+    Fix: only carry forward at resume_frontier states (which excludes
+    truncated Q/R).  When carry-forward is empty, seed from DFA start states.
+    """
+
+    def test_transduced_decodes_all_symbols(self):
+        """TransducedLM can decode all 4 output symbols on BPE-style FST."""
+        fst = _bpe_style_fst()
+        inner_lm = CharNgramLM.train(list('xxyxy') * 5, n=2, alpha=0.5)
+        tlm = TransducedLM(inner_lm, fst, K=50, max_layers=100)
+
+        target = ('a', 'a', 'b', 'b')
+        state = tlm.initial()
+        for i, y in enumerate(target):
+            lp = state.logp_next
+            assert y in lp and lp[y] > -np.inf, (
+                f"Step {i}: TransducedLM missing {y!r} in logp_next "
+                f"(keys={sorted(lp.keys())})"
+            )
+            state = state >> y
+
+    def test_fused_decodes_all_symbols(self):
+        """FusedTransducedLM can decode all 4 output symbols on BPE-style FST."""
+        fst = _bpe_style_fst()
+        inner_lm = CharNgramLM.train(list('xxyxy') * 5, n=2, alpha=0.5)
+        tlm = FusedTransducedLM(inner_lm, fst, max_steps=500, max_beam=50)
+
+        target = ('a', 'a', 'b', 'b')
+        state = tlm.initial()
+        for i, y in enumerate(target):
+            lp = state.logp_next
+            assert y in lp and lp[y] > -np.inf, (
+                f"Step {i}: FusedTransducedLM missing {y!r} in logp_next "
+                f"(keys={sorted(lp.keys())})"
+            )
+            state = state >> y
+
+    def test_transduced_normalization(self):
+        """TransducedLM on BPE FST produces normalized distributions at each step."""
+        fst = _bpe_style_fst()
+        inner_lm = CharNgramLM.train(list('xxyxy') * 5, n=2, alpha=0.5)
+        tlm = TransducedLM(inner_lm, fst, K=50, max_layers=100)
+
+        state = tlm.initial()
+        for y in ('a', 'a'):
+            all_logps = list(dict(state.logp_next.items()).values())
+            total = logsumexp(all_logps)
+            assert abs(total) < 0.5, (
+                f"logp_next should sum to ~1, got log-sum={total:.4f}"
+            )
+            state = state >> y
+
+    def test_transduced_multi_token_sequence(self):
+        """TransducedLM can decode two full BPE tokens (x then y)."""
+        fst = _bpe_style_fst()
+        inner_lm = CharNgramLM.train(list('xyxyxy') * 5, n=2, alpha=0.5)
+        tlm = TransducedLM(inner_lm, fst, K=100, max_layers=100)
+
+        state = tlm.initial()
+        for y in ('a', 'a', 'b', 'b'):
+            state = state >> y
+        assert state.logp > -np.inf
+
+    def test_fused_multi_token_sequence(self):
+        """FusedTransducedLM can decode two full BPE tokens (x then y)."""
+        fst = _bpe_style_fst()
+        inner_lm = CharNgramLM.train(list('xyxyxy') * 5, n=2, alpha=0.5)
+        tlm = FusedTransducedLM(inner_lm, fst, max_steps=500, max_beam=100)
+
+        state = tlm.initial()
+        for y in ('a', 'a', 'b', 'b'):
+            state = state >> y
+        assert state.logp > -np.inf

@@ -196,6 +196,24 @@ def memory_limit(gb):
 
 
 #_______________________________________________________________________________
+# logsumexp
+
+def logsumexp(arr):
+    """Numerically stable log-sum-exp over an array of log values."""
+    import numpy as np
+    arr = np.array(arr, dtype=np.float64)
+    arr = arr[arr > -np.inf]
+    if len(arr) == 0:
+        return -np.inf
+    vmax = arr.max()
+    arr -= vmax
+    np.exp(arr, out=arr)
+    out = np.log(arr.sum())
+    out += vmax
+    return out
+
+
+#_______________________________________________________________________________
 # sample (formerly from arsenal.maths)
 
 def sample(w, size=None, u=None):

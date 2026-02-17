@@ -36,197 +36,12 @@ import heapq
 import numpy as np
 
 from transduction.lm.base import LM, LMState, LogpNext
+from transduction.util import logsumexp
+from transduction.viz import _format_nfa_set, render_particles_html
 
 # Default incremental decomposition (Rust backend).
 from transduction.rust_bridge import RustPeekabooState as _DefaultDecompState
 from transduction.rust_bridge import _RustPeekabooUniv as _DefaultUniv
-
-
-def logsumexp(arr):
-    arr = np.array(arr, dtype=np.float64)
-    arr = arr[arr > -np.inf]
-    if len(arr) == 0:
-        return -np.inf
-    vmax = arr.max()
-    arr -= vmax
-    np.exp(arr, out=arr)
-    out = np.log(arr.sum())
-    out += vmax
-    return out
-
-
-def _format_source_path(lm_state):
-    """Format an LM state's source path for display."""
-    path = lm_state.path()
-    if not path:
-        return 'ε'
-    try:
-        return bytes(path).decode('utf-8', errors='replace')
-    except TypeError:
-        return ''.join(str(s) for s in path)
-
-
-def _format_nfa_element(fst_state, buf, truncated):
-    """Format a single NFA element (fst_state, buffer, truncated) compactly."""
-    if not buf:
-        buf_str = 'ε'
-    elif all(isinstance(b, str) and len(b) == 1 for b in buf):
-        s = ''.join(buf)
-        buf_str = repr(s) if len(s) <= 6 else repr(s[:5]) + '…'
-    else:
-        items = [str(b) for b in buf[:4]]
-        buf_str = '(' + ','.join(items) + ('…' if len(buf) > 4 else '') + ')'
-    trunc = '†' if truncated else ''
-    return f'({fst_state}, {buf_str}{trunc})'
-
-
-def _format_nfa_set(decoded_set):
-    """Format a decoded NFA state set for compact display."""
-    elements = sorted(decoded_set, key=lambda x: (repr(x[0]), x[1]))
-    parts = [_format_nfa_element(*e) for e in elements]
-    MAX = 4
-    if len(parts) <= MAX:
-        return '{' + ', '.join(parts) + '}'
-    return '{' + ', '.join(parts[:MAX]) + f', \u2026+{len(parts)-MAX}' + '}'
-
-
-# ---------------------------------------------------------------------------
-# Shared HTML rendering for particle tables
-# ---------------------------------------------------------------------------
-
-def _render_particles_html(
-    class_name,       # 'TransducedState' or 'FusedTransducedState'
-    items,            # Particle list with .dfa_state, .lm_state, .log_weight
-    target,           # list of target symbols
-    logp,             # float
-    *,
-    decode_fn=None,             # callable(dfa_state) -> str (formatted NFA set)
-    q_states=frozenset(),       # set of quotient DFA states
-    r_states=frozenset(),       # set of remainder DFA states
-    qr_builder=None,            # callable(y) -> (q_fsa, r_fsa)
-    decomp=None,                # decomp dict for Q/R filter
-):
-    """Render an HTML table for particles.
-
-    Shared by TransducedState and FusedTransducedState _repr_html_.
-    """
-    import html as _html
-    from transduction.viz import format_table
-
-    target_str = ''.join(str(y) for y in target) if target else 'ε'
-    header = (f'<b>{class_name}</b> '
-              f'target={target_str!r}, K={len(items)}, '
-              f'logp={logp:.4f}<br>')
-    if not items:
-        return header
-
-    log_weights = np.array([p.log_weight for p in items])
-    log_Z = logsumexp(log_weights)
-
-    show_role = bool(q_states or r_states)
-
-    # Group by (source_path, dfa_state)
-    groups = {}
-    for p in items:
-        source = _format_source_path(p.lm_state)
-        key = (source, p.dfa_state)
-        groups.setdefault(key, []).append(p.log_weight)
-
-    table_rows = []
-    for (source, dfa_state), lws in groups.items():
-        group_log_w = logsumexp(np.array(lws))
-        posterior = np.exp(group_log_w - log_Z)
-        if show_role:
-            is_q = dfa_state in q_states
-            is_r = dfa_state in r_states
-            role = ('Q+R' if is_q and is_r else
-                    'Q' if is_q else
-                    'R' if is_r else 'frontier')
-        else:
-            role = None
-        table_rows.append((source, dfa_state, role, len(lws),
-                           group_log_w, posterior))
-    table_rows.sort(key=lambda r: -r[5])
-
-    rows = []
-    for source, dfa_state, role, count, log_w, posterior in table_rows:
-        dfa_label = decode_fn(dfa_state) if decode_fn else str(dfa_state)
-        row = [repr(source), dfa_label]
-        if show_role:
-            row.append(role)
-        row.extend([str(count), f'{log_w:.2f}', f'{posterior:.4f}'])
-        rows.append(row)
-
-    headings = ['Source prefix', 'DFA state']
-    if show_role:
-        headings.append('Role')
-    headings.extend(['Count', 'log w', 'p(x|y)'])
-
-    result = header + format_table(
-        rows,
-        headings=headings,
-        column_styles={0: 'text-align:left'},
-    )
-
-    # Add collapsible Q/R FSA visualizations
-    if decode_fn and qr_builder and decomp:
-        particle_states = {p.dfa_state for p in items}
-
-        def sty_node(state):
-            if state in particle_states:
-                return {'fillcolor': '#ADD8E6',
-                        'style': 'filled,rounded'}
-            return {}
-
-        def fmt_node(state):
-            return decode_fn(state)
-
-        relevant_syms = set()
-        for y, d in decomp.items():
-            if d.quotient & particle_states or \
-               d.remainder & particle_states:
-                relevant_syms.add(y)
-
-        MAX_QR = 10
-        shown = 0
-        for y in sorted(relevant_syms, key=repr):
-            if shown >= MAX_QR:
-                rest = len(relevant_syms) - shown
-                result += (f'<details><summary>\u2026 and {rest} more '
-                           f'Q/R sections</summary></details>')
-                break
-            try:
-                q_fsa, r_fsa = qr_builder(y)
-            except Exception:                   # @cladue: as a general rule, please use more precise error handling
-                continue
-            if not q_fsa.states and not r_fsa.states:
-                continue
-
-            parts = []
-            y_label = _html.escape(repr(y))
-            if q_fsa.states:
-                try:
-                    g = q_fsa.graphviz(fmt_node=fmt_node,
-                                       sty_node=sty_node)
-                    svg = g._repr_image_svg_xml()
-                    parts.append(f'<b>Q({y_label})</b><br>{svg}')
-                except Exception:
-                    pass
-            if r_fsa.states:
-                try:
-                    g = r_fsa.graphviz(fmt_node=fmt_node,
-                                       sty_node=sty_node)
-                    svg = g._repr_image_svg_xml()
-                    parts.append(f'<b>R({y_label})</b><br>{svg}')
-                except Exception:
-                    pass
-            if parts:
-                content = '<br>'.join(parts)
-                result += (f'<details><summary>Q/R for y={y_label}'
-                           f'</summary>{content}</details>')
-                shown += 1
-
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -326,8 +141,21 @@ class TransducedState(LMState):
         # Advance peekaboo decomposition state
         new_peekaboo = self._peekaboo_state >> y
 
-        # Get carry-forward particles for this symbol
         cf_particles = self._carry_forward_cache.get(y, [])
+
+        # Resolve sentinel particles: dfa_state=None means the particle came
+        # from a truncated Q/R state whose DFA state is a dead end.  Replace
+        # with the child DFA's start states, preserving LM state and weight.
+        if any(p.dfa_state is None for p in cf_particles):
+            new_starts = list(new_peekaboo.dfa.start())
+            resolved = []
+            for p in cf_particles:
+                if p.dfa_state is None:
+                    for s in new_starts:
+                        resolved.append(Particle(s, p.lm_state, p.log_weight))
+                else:
+                    resolved.append(p)
+            cf_particles = resolved
 
         K = self.tlm.K
         new_logp = self.logp + lp_y
@@ -457,21 +285,35 @@ class TransducedState(LMState):
                     if not is_quotient or y not in q_syms:
                         scores.setdefault(y, []).append(eos_w)
 
-            # Carry-forward: save particle at resume_frontier / Q / R states.
-            # _add_carry enforces the no-prefix-domination invariant.
-            carry_syms = set()
-            rf = resume_of.get(d)
-            if rf is not None:
-                carry_syms |= rf
-            if q_syms is not None:
-                carry_syms |= q_syms
-            if r_syms is not None:
-                carry_syms |= r_syms
-            for y in carry_syms:
-                _add_carry(y, particle)
+            # Carry-forward: save particle at resume_frontier states
+            # (non-truncated Q/R + truncation boundary).
+            carry_syms = resume_of.get(d)
+            if carry_syms is not None:
+                for y in carry_syms:
+                    _add_carry(y, particle)
+
+            # Truncated Q/R states are not in resume_frontiers because their
+            # DFA state becomes a dead end in the next step (all NFA elements
+            # are truncated and can never reach new Q/R states).  However, the
+            # particle's LM state is still valuable — it encodes the source
+            # prefix consumed so far.  Carry these forward with dfa_state=None
+            # (sentinel); __rshift__ resolves this to the child DFA's actual
+            # start states, preserving LM incrementality.
+            if d not in resume_of:
+                trunc_syms = set()
+                if q_syms:
+                    trunc_syms.update(q_syms)
+                if r_syms:
+                    trunc_syms.update(r_syms)
+                if trunc_syms:
+                    remap = Particle(None, particle.lm_state, w)
+                    root_of[id(remap)] = root_of[id(particle)]
+                    for y in trunc_syms:
+                        _add_carry(y, remap)
 
             # Track carry-forward weights for early termination.
-            if carry_syms:
+            carried = carry_syms or (d not in resume_of and (q_syms or r_syms))
+            if carried:
                 if len(cf_top_k) < K:
                     heapq.heappush(cf_top_k, w)
                 elif w > cf_top_k[0]:
@@ -577,7 +419,7 @@ class TransducedState(LMState):
 
         qr_builder = ps.build_qr_fsa if can_decode and hasattr(ps, 'build_qr_fsa') else None
 
-        result = _render_particles_html(
+        result = render_particles_html(
             'TransducedState', self._particles, self.path(), self.logp,
             decode_fn=decode_fn,
             q_states=q_states, r_states=r_states,
@@ -631,7 +473,6 @@ class TransducedLM(LM):
         univ_cls: Universality precomputation class (default: FstUniversality).
         max_beam: Backward-compat alias for K.
         max_steps: Accepted for backward compat (unused).
-        max_expansions: Accepted for backward compat (unused).
     """
 
     def __init__(self, inner_lm, fst, K=100, max_layers=100,
@@ -651,15 +492,11 @@ class TransducedLM(LM):
 
     def initial(self):
         """Return the initial TransducedState (empty target prefix)."""
-        peekaboo = self._decomp_state_cls(
-            self.fst, '', parent=None, univ=self._univ,
-        )
-        dfa = peekaboo.dfa
-        start_states = list(dfa.start())
+        peekaboo = self._decomp_state_cls(self.fst, '', parent=None, univ=self._univ)
         inner_initial = self.inner_lm.initial()
         particles = [
             Particle(s, inner_initial, 0.0)
-            for s in start_states
+            for s in peekaboo.dfa.start()
         ]
         return TransducedState(self, peekaboo, particles, 0.0)
 

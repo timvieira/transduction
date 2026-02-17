@@ -38,7 +38,8 @@ import heapq
 import numpy as np
 
 from transduction.lm.base import LM, LMState, LogpNext
-from transduction.lm.transduced import logsumexp, Particle
+from transduction.util import logsumexp
+from transduction.lm.transduced import Particle
 from transduction.rust_bridge import to_rust_fst
 
 
@@ -105,7 +106,21 @@ class _FusedSearch:
             else tlm.inner_lm.initial().eos
         )
 
-        # Seed the priority queue
+        # Resolve sentinel particles: dfa_state=None means the particle came
+        # from a truncated Q/R state.  Replace with the new DFA's start states.
+        start_ids = tlm._rust_helper.start_ids()
+        resolved = []
+        for item in particles:
+            if item.dfa_state is None:
+                for s in start_ids:
+                    p = Particle(dfa_state=s, lm_state=item.lm_state,
+                                 log_weight=item.log_weight)
+                    self._root_of[id(p)] = self._root_of[id(item)]
+                    resolved.append(p)
+            else:
+                resolved.append(item)
+        particles = resolved
+
         self._queue = list(particles)
         heapq.heapify(self._queue)
 
@@ -117,6 +132,21 @@ class _FusedSearch:
             return
         self._carried.add((rid, y))
         self.carry_forward.setdefault(y, []).append(item)
+
+    def _add_carry_at_starts(self, y, item):
+        """Carry forward item with sentinel dfa_state=None, preserving LM state.
+
+        The sentinel is resolved to actual DFA start states in the next step's
+        _FusedSearch.__init__, where the child DFA's start states are known.
+        """
+        rid = self._root_of[id(item)]
+        remap = Particle(
+            dfa_state=None,
+            lm_state=item.lm_state,
+            log_weight=item.log_weight,
+        )
+        self._root_of[id(remap)] = rid
+        self._add_carry(y, remap)
 
     # --- Scoring (no expansion) ---
 
@@ -132,7 +162,13 @@ class _FusedSearch:
         is_quotient = q_sym is not None
         if is_quotient:
             self.scores.setdefault(q_sym, []).append(item.log_weight)
-            self._add_carry(q_sym, item)
+            if not result.has_truncated:
+                self._add_carry(q_sym, item)
+            else:
+                # Truncated Q: the DFA state is a dead end in the next step,
+                # but the particle's LM state encodes valuable source-prefix
+                # history.  Remap to DFA start states to preserve incrementality.
+                self._add_carry_at_starts(q_sym, item)
 
         # Preimage and remainder both need P_inner(EOS)
         if result.is_preimage or r_syms:
@@ -143,7 +179,10 @@ class _FusedSearch:
 
             for y in r_syms:
                 self.scores.setdefault(y, []).append(item.log_weight + eos_lp)
-                self._add_carry(y, item)
+                if not result.has_truncated:
+                    self._add_carry(y, item)
+                else:
+                    self._add_carry_at_starts(y, item)
 
         return is_quotient
 
@@ -173,9 +212,11 @@ class _FusedSearch:
             self._root_of[id(child)] = rid
             heapq.heappush(self._queue, child)
 
-            # If successor has truncated tuples, note which target symbols
-            # sit at the truncation boundary so we can resume there next step.
-            if result.has_truncated:
+            # Truncation-boundary carry-forward: if the ITEM is non-truncated
+            # but its successor crosses into truncation, carry forward the item
+            # at the truncation-boundary symbols.  This mirrors PeekabooState's
+            # resume_frontiers logic (peekaboo_incremental.py lines 430-435).
+            if not result.has_truncated:
                 dest_result = self._tlm._rust_helper.classify(dest_sid)
                 if dest_result.has_truncated:
                     for y_u32 in dest_result.trunc_output_syms:
@@ -279,7 +320,7 @@ class FusedTransducedState(LMState):
         return tokens
 
     def _repr_html_(self):
-        from transduction.lm.transduced import _render_particles_html, _format_nfa_set
+        from transduction.viz import render_particles_html, _format_nfa_set
         decode_fn = None
         if hasattr(self.tlm, 'decode_dfa_state'):
             decode_cache = {}
@@ -292,7 +333,7 @@ class FusedTransducedState(LMState):
                     except Exception:
                         decode_cache[dfa_state] = str(dfa_state)
                 return decode_cache[dfa_state]
-        return _render_particles_html(
+        return render_particles_html(
             'FusedTransducedState', self._particles,
             list(self._target), self.logp,
             decode_fn=decode_fn,
