@@ -49,6 +49,7 @@ Self-contained language model interface for use with enumeration/sampling:
   - External deps: `torch`, `transformers`, `arsenal`
 - `transduction/lm/transduced.py` — `TransducedLM`, `TransducedState` (pushforward of an inner LM through an FST; defaults to Rust backend)
 - `transduction/lm/fused_transduced.py` — `FusedTransducedLM`, `FusedTransducedState` (single-pass interleaved decomposition + LM search)
+- `transduction/lm/reference_transduced.py` — `ReferenceTransducedLM` (ground-truth transduced LM via Precover; enumerates Q/R languages exactly; finite-relation FSTs only)
 
 ### Rust Acceleration (`crates/transduction-core/`)
 
