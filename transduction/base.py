@@ -84,13 +84,6 @@ class DecompositionResult:
     def __iter__(self):
         return iter((self.quotient, self.remainder))
 
-    def __eq__(self, other):
-        if isinstance(other, DecompositionResult):
-            return self.quotient == other.quotient and self.remainder == other.remainder
-        if isinstance(other, tuple) and len(other) == 2:
-            return self.quotient == other[0] and self.remainder == other[1]
-        raise NotImplementedError()
-
     def __repr__(self):
         return f'DecompositionResult({self.quotient!r}, {self.remainder!r})'
 
@@ -193,14 +186,14 @@ class AbstractAlgorithm(DecompositionFunction):
                 worklist.append(next_xs)
         return precover
 
-    def initialize(self, target):
-        raise NotImplementedError()
+    @abstractmethod
+    def initialize(self, target): ...
 
-    def candidates(self, xs, target):
-        raise NotImplementedError()
+    @abstractmethod
+    def candidates(self, xs, target): ...
 
-    def discontinuity(self, xs, target):
-        raise NotImplementedError()
+    @abstractmethod
+    def discontinuity(self, xs, target): ...
 
-    def continuity(self, xs, target):
-        raise NotImplementedError()
+    @abstractmethod
+    def continuity(self, xs, target): ...
