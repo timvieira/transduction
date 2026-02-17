@@ -59,7 +59,7 @@ def _format_source_path(lm_state):
     """Format an LM state's source path for display."""
     path = lm_state.path()
     if not path:
-        return '(empty)'
+        return 'ε'
     try:
         return bytes(path).decode('utf-8', errors='replace')
     except TypeError:
@@ -113,7 +113,7 @@ def _render_particles_html(
     import html as _html
     from transduction.viz import format_table
 
-    target_str = ''.join(str(y) for y in target) if target else '(empty)'
+    target_str = ''.join(str(y) for y in target) if target else 'ε'
     header = (f'<b>{class_name}</b> '
               f'target={target_str!r}, K={len(items)}, '
               f'logp={logp:.4f}<br>')
@@ -577,12 +577,18 @@ class TransducedState(LMState):
 
         qr_builder = ps.build_qr_fsa if can_decode and hasattr(ps, 'build_qr_fsa') else None
 
-        return _render_particles_html(
+        result = _render_particles_html(
             'TransducedState', self._particles, self.path(), self.logp,
             decode_fn=decode_fn,
             q_states=q_states, r_states=r_states,
             qr_builder=qr_builder, decomp=decomp,
         )
+
+        from transduction.viz import render_logp_next_html
+        result += render_logp_next_html(
+            'TransducedState', self.path(), self.logp, self.logp_next,
+        )
+        return result
 
     def __repr__(self):
         return (f'TransducedState(target={self._peekaboo_state.target!r},'

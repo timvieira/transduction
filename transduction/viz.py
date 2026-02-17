@@ -247,6 +247,27 @@ def display_table(rows, **kwargs):
     display(HTML(format_table(rows, **kwargs)))
 
 
+def render_logp_next_html(class_name, target, logp, logp_next, top_k=20):
+    """Render an LM state's logp_next distribution as an HTML header + table.
+
+    Shared by TransducedState and ReferenceTransducedState ``_repr_html_``.
+
+    Args:
+        class_name: Display name for the state class.
+        target: Sequence of target symbols consumed so far.
+        logp: Cumulative log probability.
+        logp_next: Dict-like mapping token -> logp (must support ``.items()``).
+        top_k: Maximum number of entries to show (sorted by descending probability).
+    """
+    import numpy as np
+    target_str = ''.join(str(y) for y in target) if target else 'ε'
+    header = (f'<b>{class_name}</b> '
+              f'target={target_str!r}, logp={logp:.4f}<br>')
+    items = sorted(logp_next.items(), key=lambda kv: -kv[1])[:top_k]
+    rows = [[repr(y), f'{lp:.4f}', f'{np.exp(lp):.4f}'] for y, lp in items]
+    return header + format_table(rows, headings=['Token', 'logp', 'p'])
+
+
 # ---------------------------------------------
 # Edge-label compressor (regex-style summaries)
 # ---------------------------------------------
