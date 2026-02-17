@@ -2,10 +2,14 @@
 Visualization/display utilities for automata (edge-label compression,
 interactive Graphviz rendering, chain coalescing, HTML tables).
 """
+import re
 import html as _html
 import json
 import base64
+import uuid
 from collections import defaultdict
+from graphviz import Digraph
+from IPython.display import HTML, SVG, display
 
 from transduction.fsa import EPSILON
 from transduction.util import Integerizer
@@ -27,7 +31,6 @@ def _render_graphviz(states, start, stop, arc_iter, fmt_node, fmt_edge, sty_node
         fmt_node: callable(state) -> str
         sty_node: callable(state) -> dict of extra graphviz node attrs
     """
-    from graphviz import Digraph
 
     g = Digraph(
         graph_attr=dict(rankdir='LR'),
@@ -94,8 +97,6 @@ def _pick_from_mimebundle(obj, prefer=(
     highest-priority MIME type found.  Returns ``None`` if no mimebundle is
     available.
     """
-    from IPython.display import HTML, SVG
-
     bundle = None
 
     if hasattr(obj, "_repr_mimebundle_"):
@@ -152,7 +153,6 @@ def _as_html_cell(x):
     extraction, ``_repr_html_``/``_repr_svg_``/image repr methods, LaTeX repr,
     and finally falls back to ``html.escape(str(x))`` inside ``<pre>`` tags.
     """
-    from IPython.display import HTML, SVG
 
     if isinstance(x, HTML):
         return x.data
@@ -244,7 +244,6 @@ def display_table(rows, **kwargs):
     as an IPython ``HTML`` object.  Accepts the same keyword arguments as
     ``format_table`` (e.g. ``headings``).
     """
-    from IPython.display import HTML, display
     display(HTML(format_table(rows, **kwargs)))
 
 
@@ -640,9 +639,6 @@ class InteractiveGraph:
         return self.dot._repr_image_svg_xml()
 
     def _repr_html_(self):
-        import json
-        import re
-        import uuid
         svg_raw = self.dot.pipe(format='svg').decode('utf-8')
         cid = f"ig_{uuid.uuid4().hex[:8]}"
 
@@ -861,8 +857,6 @@ def visualize_automaton(
         coalesce_chains: Collapse unbranching chains into single edges with
             dot-separated labels (default ``True``).
     """
-    import uuid
-    from graphviz import Digraph
 
     is_fst = hasattr(automaton, 'B')   # FSTs have .A and .B alphabets
     prefix = uuid.uuid4().hex[:8]

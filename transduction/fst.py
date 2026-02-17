@@ -86,7 +86,7 @@ class FST:
         """
         self.states.add(i)
         self.states.add(j)
-        self.delta[i][a][b].add(j)   # TODO: change this data structure to separate a and b.
+        self.delta[i][a][b].add(j)
         self.A.add(a)
         self.B.add(b)
         self._arcs_i = None   # invalidate arc indexes
@@ -401,9 +401,9 @@ class FST:
             for a, b, Pʼ in self.arcs(P):
                 for c, Qʼ in tmp[Q, b]:
                     assert b != EPSILON, (
-                        f"Matched on raw epsilon in _compose(); both operands must "
-                        f"have augmented epsilon labels (ε_1/ε_2) — use __matmul__ "
-                        f"instead of calling _compose() directly."
+                        "Matched on raw epsilon in _compose(); both operands must "
+                        "have augmented epsilon labels (ε_1/ε_2) — use __matmul__ "
+                        "instead of calling _compose() directly."
                     )
 
                     PʼQʼ = (Pʼ, Qʼ)
@@ -926,13 +926,6 @@ def _strip_prefix(prefix, seq):
     assert seq[:len(prefix)] == prefix, f'{prefix} is not a prefix of {seq}'
     return seq[len(prefix):]
 
-
-# Re-export universality API for backward compatibility
-from transduction.universality import (   # noqa: F401
-    check_all_input_universal,
-    compute_ip_universal_states,
-    UniversalityFilter,
-)
 
 
 def epsilon_filter_fst(Sigma):

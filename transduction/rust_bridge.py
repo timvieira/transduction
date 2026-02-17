@@ -110,7 +110,7 @@ class RustDecomp(DecompositionResult):
         if oov:
             raise ValueError(f"Out of vocabulary target symbols: {oov}")
 
-        rust_fst, sym_map, state_map = to_rust_fst(fst)
+        rust_fst, sym_map, _state_map = to_rust_fst(fst)
 
         target_u32 = [sym_map(y) for y in target]
 

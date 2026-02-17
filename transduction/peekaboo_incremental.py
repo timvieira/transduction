@@ -141,7 +141,7 @@ class Peekaboo:
                 for j, arcs in curr.incoming.items():
                     for x,i in arcs:
                         inner.edge(str(i), str(j), label=x)
-                for y, parts in curr.decomp.items():
+                for _y, parts in curr.decomp.items():
                     for j in parts.quotient:
                         inner.node(str(j), fillcolor='#90EE90')
                     for j in parts.remainder:

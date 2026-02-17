@@ -18,4 +18,4 @@ dummy-variables-rgx=_.*
 # --enable=similarities". If you want to run only the classes checker, but have
 # no Warning level messages displayed, use"--disable=all --enable=classes
 # --disable=W"
-disable=W0142,W0232,W0212,C0103,C,R,W1401,E1103,using-constant-test,E0112,W0642,W0237,W2301
+disable=W0142,W0232,W0212,C0103,C,R,W1401,E1103,using-constant-test,E0112,W0642,W0237,W2301,W0511

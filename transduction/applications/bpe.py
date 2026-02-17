@@ -46,9 +46,9 @@ def bpe_wfst(tokenizer, readable=False):
 
 
 class Token:
-    def __init__(self, i, bytes):
+    def __init__(self, i, bs):
         self.i = i
-        self.bytes = bytes
+        self.bytes = bs
     def __repr__(self):
         return f'{str(self.bytes)[2:-1]}/{self.i}'
     def __hash__(self):

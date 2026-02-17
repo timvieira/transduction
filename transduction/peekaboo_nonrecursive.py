@@ -3,7 +3,7 @@ from transduction.precover import Precover
 from transduction.lazy import Lazy
 from transduction.fsa import FSA
 from transduction.fst import EPSILON
-from transduction.precover_nfa import PrecoverNFA, PeekabooFixedNFA as PeekabooPrecover
+from transduction.precover_nfa import PeekabooFixedNFA as PeekabooPrecover
 
 from collections import deque
 from functools import cached_property

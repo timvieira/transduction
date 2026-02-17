@@ -1,15 +1,7 @@
 from transduction.base import AbstractAlgorithm
-from transduction.fsa import EPSILON
 from transduction.lazy import is_universal
-from transduction.util import memoize
-
-# Backward-compat re-exports (used in notebooks)
 from transduction.precover import Precover
-from transduction.precover_nfa import (
-    PrecoverNFA as LazyPrecoverNFA,
-    TruncationMarkerPrecoverNFA as LazyPrecoverNFAWithTruncationMarker,
-    PopPrecoverNFA as PopPrecover,
-)
+from transduction.util import memoize
 
 
 class EagerNonrecursive(AbstractAlgorithm):

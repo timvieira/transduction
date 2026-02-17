@@ -197,7 +197,7 @@ def _render_particles_html(
                 break
             try:
                 q_fsa, r_fsa = qr_builder(y)
-            except Exception:
+            except Exception:                   # @cladue: as a general rule, please use more precise error handling
                 continue
             if not q_fsa.states and not r_fsa.states:
                 continue

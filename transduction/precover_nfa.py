@@ -476,10 +476,3 @@ class PeekabooFixedNFA(Lazy):
     def is_final(self, state):
         (i, ys) = state
         return self.fst.is_final(i) and ys[:self.N] == self.target and len(ys) == self.N+1
-
-
-# Backward-compatible aliases for old names
-LazyPrecoverNFA = PrecoverNFA
-LazyPrecoverNFAWithTruncationMarker = TruncationMarkerPrecoverNFA
-PopPrecover = PopPrecoverNFA
-PeekabooPrecover = PeekabooLookaheadNFA  # note: the nonrecursive one was also called PeekabooPrecover

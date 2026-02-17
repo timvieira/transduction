@@ -38,7 +38,7 @@ import heapq
 import numpy as np
 
 from transduction.lm.base import LM, LMState, LogpNext
-from transduction.lm.transduced import logsumexp, Particle, _format_source_path
+from transduction.lm.transduced import logsumexp, Particle
 from transduction.rust_bridge import to_rust_fst
 
 
@@ -284,7 +284,7 @@ class FusedTransducedState(LMState):
         if hasattr(self.tlm, 'decode_dfa_state'):
             decode_cache = {}
             target_tuple = tuple(self._target)
-            def decode_fn(dfa_state):
+            def decode_fn(dfa_state):    # pylint: disable=E0102
                 if dfa_state not in decode_cache:
                     try:
                         decoded = self.tlm.decode_dfa_state(dfa_state, target_tuple)

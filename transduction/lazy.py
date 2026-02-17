@@ -51,18 +51,18 @@ class Lazy:
     #____________________________________________________________
     # Abstract interface
 
-    def arcs(self, state):
-        """Yield ``(label, dest)`` pairs for all outgoing arcs from ``state``."""
+    def arcs(self, i):
+        """Yield ``(label, dest)`` pairs for all outgoing arcs from ``i``."""
         raise NotImplementedError()
 
-    def arcs_x(self, state, x):
-        """Yield destination states reachable from ``state`` on input ``x``.
+    def arcs_x(self, i, x):
+        """Yield destination states reachable from ``i`` on input ``x``.
 
         Default implementation filters ``arcs()``; subclasses may override
         for efficiency.
         """
         import warnings; warnings.warn('using slow implementation of arcs_x')
-        for X, j in self.arcs(state):
+        for X, j in self.arcs(i):
             if X == x:
                 yield j
 
@@ -70,7 +70,7 @@ class Lazy:
         """Yield the start state(s) of this automaton."""
         raise NotImplementedError()
 
-    def is_final(self, state):
+    def is_final(self, i):
         """Return True if ``state`` is an accepting state."""
         raise NotImplementedError()
 
@@ -293,7 +293,6 @@ class LazyWrapper(Lazy):
 # EXPERIMENTAL SCC-based epsilon closure; written by ChatGPT but not tested extensively
 
 if 0:
-    from collections import defaultdict
 
     class LazyEpsSCCIndex:
         """

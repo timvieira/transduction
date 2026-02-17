@@ -447,7 +447,7 @@ def build_ptb_fst_pynini():
     total_arcs = 0
     eps_in = eps_out = marker_in = marker_out = eos_in = eos_out = 0
     for s in native_fst.states:
-        for (i, o, t) in native_fst.arcs(s):
+        for (i, o, _t) in native_fst.arcs(s):
             total_arcs += 1
             if i == NATIVE_EPSILON: eps_in += 1
             if o == NATIVE_EPSILON: eps_out += 1

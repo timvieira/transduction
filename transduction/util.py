@@ -19,9 +19,9 @@ class Integerizer:
     def _add(self, k):
         try:
             return self._map[k]
-        except KeyError:
+        except KeyError as exc:
             if self._frozen:
-                raise ValueError(f'Alphabet is frozen. Key "{k}" not found.')
+                raise ValueError(f'Alphabet is frozen. Key "{k}" not found.') from exc
             x = self._map[k] = len(self._list)
             self._list.append(k)
             return x

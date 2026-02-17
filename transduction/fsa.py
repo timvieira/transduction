@@ -75,7 +75,7 @@ class FSA:
         return self.as_tuple() == other.as_tuple()
 
     def __repr__(self):
-        x = ['{']   # todo: better print; include start/stop
+        x = ['{']
         for s in self.states:
             ss = f'{s}'
             if s in self.start:
@@ -103,7 +103,7 @@ class FSA:
         from transduction.viz import _render_graphviz
         return _render_graphviz(
             self.states, self.start, self.stop,
-            arc_iter=lambda i: self.arcs(i),
+            arc_iter=self.arcs,
             fmt_node=fmt_node, fmt_edge=fmt_edge, sty_node=sty_node,
         )
 
@@ -591,7 +591,6 @@ class FSA:
     def __floordiv__(self, other):
         "left quotient self//other ≐ {y | ∃x ∈ other: x⋅y ∈ self}"
 
-        # TODO: support NFA/epsilon arcs?
         self = self.epsremove()
         other = other.epsremove()
 

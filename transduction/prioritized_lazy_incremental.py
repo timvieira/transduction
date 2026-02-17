@@ -154,9 +154,8 @@ class FrontierGraph:
             return cached
         symbols = set()
         for s, _ys in node:
-            for a, _b, j in self.fst.arcs(s):
-                if a != EPSILON:
-                    symbols.add(a)
+            symbols.update(self.fst.delta[s].keys())
+        symbols.discard(EPSILON)
         result = [(a, self.step(node, a)) for a in symbols]
         self._arcs[key] = result
         return result
@@ -444,9 +443,8 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
                 if cls != 'universal':
                     syms = set()
                     for s, _ys in node:
-                        for a, _b, j in fst.arcs(s):
-                            if a != EPSILON:
-                                syms.add(a)
+                        syms.update(fst.delta[s].keys())
+                    syms.discard(EPSILON)
                     node_available_syms[nid] = syms
 
             if cls == 'universal':
@@ -629,9 +627,8 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
             # Completeness: source symbols from ALL pairs (including incompatible).
             src_symbols = set()
             for s, _ys in cur:
-                for a, _b, j in fst.arcs(s):
-                    if a != EPSILON:
-                        src_symbols.add(a)
+                src_symbols.update(fst.delta[s].keys())
+            src_symbols.discard(EPSILON)
             if len(src_symbols) < source_alphabet_len:
                 self._add_neg(node)
                 return False
