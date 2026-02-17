@@ -95,7 +95,7 @@ Eliminated deps (previously external, now inlined):
 - `test_general.py`: 353 passed, 0 skipped
 - `test_finite.py`: 119 passed
 - `test_enumeration.py`: 55 passed
-- `test_transduced.py`: 55 passed
+- `test_transduced.py`: 53 passed
 - `test_fst.py`: 57 passed
 - `test_push_labels.py`: 35 passed
 - `test_lazy.py`: 100 passed
@@ -105,7 +105,7 @@ Eliminated deps (previously external, now inlined):
 - `test_ptb_nltk.py`: 4 passed
 - `test_make_total.py`: 3 passed
 - `test_statelm_kv_cache.py`: 3 passed
-- **Total: 855 tests, 0 skipped**
+- **Total: 853 tests, 0 skipped**
 - `test_general.py` tests the **general-case** algorithms (handle infinite quotients/remainders):
   NonrecursiveDFADecomp, TruncatedIncrementalDFADecomp, PeekabooState, PeekabooNonrecursive,
   DirtyPeekaboo, RustDecomp, RustDirtyState, RustDirtyPeekaboo.
