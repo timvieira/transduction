@@ -3,7 +3,6 @@
 import pytest
 import numpy as np
 from collections import defaultdict
-
 from transduction import examples, FST
 from transduction.fst import EPSILON
 from transduction.lm.base import LM, LMState
@@ -569,7 +568,7 @@ class TestFusedTransducedLM:
         fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
 
         state = fused >> 'a' >> 'b' >> 'a'
-        assert state.path() == ['a', 'b', 'a']
+        assert list(state.path) == ['a', 'b', 'a']
 
     def test_repr(self, char_ngram_lm):
         """Repr doesn't crash."""
@@ -723,132 +722,6 @@ class TestConsistency:
             large_lp = s_large.logp_next[y]
             # Large K should be closer to the true distribution
             assert abs(large_lp - inner_lp) <= abs(small_lp - inner_lp) + 0.01
-
-
-# ---------------------------------------------------------------------------
-# Carry-forward no-duplicates invariant
-# ---------------------------------------------------------------------------
-#
-# These tests verify the root-family carry-forward deduplication invariant
-# described in notes/carry-forward-prefix-invariant.md.
-#
-# The bug: during the per-step BFS (or best-first search in FusedTransducedLM),
-# carry-forward collects particles from ALL expansion depths.  A shallow
-# particle P at a resume/Q/R state gets carried forward AND expanded.  Its
-# deeper descendants at resume/Q/R states for the SAME target symbol also get
-# carried forward.  Since the DFA is deterministic with a single start state,
-# the deeper particles are fully redundant — the shallow particle's future
-# expansion will reproduce them at the same DFA state with the same weight.
-# This causes double-counting in scores and wastes beam slots.
-#
-# The fix: each particle is tagged with the index of its "root" — the initial
-# particle (from the previous step's carry-forward) it descended from.  For
-# each (root_id, target_symbol) pair, only the shallowest carry-forward entry
-# is kept ("first one wins" — correct because BFS processes layers shallowest-
-# first, and the priority queue in FusedTransducedLM pops highest-weight items
-# first, which within a root family is the shallowest by monotone weights).
-#
-# The observable invariant: after computing logp_next, no two carry-forward
-# particles for the same target symbol should share a DFA state.  This follows
-# from (a) within a root family, at most one entry per (root, y), at a unique
-# DFA state, and (b) across root families, different roots always occupy
-# distinct DFA states (by DFA determinism + non-prefix initial source paths).
-#
-# The tests below exercise this invariant on FSTs that are known to trigger
-# multi-depth carry-forward for the same target symbol:
-#   - delete_b: a->A, b->eps.  Source prefixes a, ab, abb, ... all produce 'A'.
-#   - duplicate: a->aa, b->bb.  Multi-state with buffered output.
-#   - infinite_quotient: epsilon-output arcs creating deep BFS expansion.
-#   - lookahead: epsilon-output arcs creating depth variance.
-#   - small: multi-state FST with resume frontiers.
-#   - newspeak2: multi-pattern replacement.
-# ---------------------------------------------------------------------------
-
-def _check_no_duplicate_dfa_states(state):
-    """Assert that carry-forward has no duplicate DFA states per target symbol."""
-    state._ensure_computed()
-    cf = state._carry_forward_cache
-    for y, particles in cf.items():
-        dfa_states = [p.dfa_state for p in particles]
-        assert len(dfa_states) == len(set(dfa_states)), (
-            f"Duplicate DFA states in carry-forward for y={y!r}: "
-            f"{len(dfa_states)} particles but only {len(set(dfa_states))} "
-            f"distinct DFA states"
-        )
-
-
-# Shared test cases: (name, fst_factory, inner_lm_factory, advance_symbols)
-# Each entry defines an FST, an inner LM, and symbols to advance through.
-_CARRY_FORWARD_TEST_CASES = [
-    (
-        'copy_fst',
-        lambda: copy_fst(['a', 'b']),
-        lambda: TinyLM(),
-        ['a', 'b'],
-    ),
-    (
-        'delete_b',
-        lambda: examples.delete_b(),
-        lambda: CharNgramLM.train(list('aabb') * 10, n=2, alpha=0.5),
-        ['A', 'A'],
-    ),
-    (
-        'duplicate',
-        lambda: examples.duplicate(['a', 'b'], K=2),
-        lambda: CharNgramLM.train(list('ab') * 20, n=2, alpha=0.5),
-        ['a'],
-    ),
-    (
-        'infinite_quotient',
-        lambda: examples.infinite_quotient(),
-        lambda: CharNgramLM.train(list('a#a#') * 10, n=2, alpha=0.5),
-        [],
-    ),
-    (
-        'small',
-        lambda: examples.small(),
-        lambda: CharNgramLM.train(list('abxab') * 10, n=2, alpha=0.5),
-        ['x'],
-    ),
-    (
-        'lookahead',
-        lambda: examples.lookahead(),
-        lambda: CharNgramLM.train(list('aabb') * 10, n=2, alpha=0.5),
-        ['x'],
-    ),
-    (
-        'newspeak',
-        lambda: examples.newspeak2(),
-        lambda: CharNgramLM.train(
-            list('the bad dog had a bad day') * 5, n=2, alpha=0.5),
-        ['u', 'n'],
-    ),
-]
-
-
-class TestFusedCarryForwardNoDuplicates:
-    """Tests root-family dedup for FusedTransducedLM (best-first search)."""
-
-    @pytest.mark.parametrize(
-        'name,fst_factory,lm_factory,advance',
-        _CARRY_FORWARD_TEST_CASES,
-        ids=[t[0] for t in _CARRY_FORWARD_TEST_CASES],
-    )
-    def test_no_duplicate_dfa_states(self, name, fst_factory, lm_factory, advance):
-        inner_lm = lm_factory()
-        fst = fst_factory()
-        tlm = FusedTransducedLM(inner_lm, fst, max_steps=500, max_beam=50)
-
-        state = tlm.initial()
-        _check_no_duplicate_dfa_states(state)
-
-        for y in advance:
-            scores = dict(state.logp_next.items())
-            if y in scores and scores[y] > -20:
-                state = state >> y
-                _check_no_duplicate_dfa_states(state)
-            else:
-                break
 
 
 # ---------------------------------------------------------------------------

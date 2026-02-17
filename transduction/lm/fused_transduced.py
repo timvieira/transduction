@@ -36,30 +36,12 @@ Usage:
 
 import heapq
 import numpy as np
+from collections import defaultdict
 
 from transduction.lm.base import LM, LMState, LogpNext
 from transduction.util import logsumexp
-from transduction.lm.transduced import Particle
+from transduction.lm.transduced import Particle, _select_top_k
 from transduction.rust_bridge import to_rust_fst
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _normalize(scores, eos_scores, eos_token):
-    """Turn per-symbol log-weight lists into a conditional distribution."""
-    all_raw = [logsumexp(ws) for ws in scores.values()]
-
-    eos_raw = logsumexp(eos_scores)
-    if eos_raw > -np.inf:
-        all_raw.append(eos_raw)
-
-    Z = logsumexp(all_raw)
-
-    out = {y: logsumexp(ws) - Z for y, ws in scores.items()}
-    out[eos_token] = (eos_raw - Z) if Z > -np.inf else -np.inf
-    return LogpNext(out)
 
 
 # ---------------------------------------------------------------------------
@@ -73,38 +55,18 @@ class _FusedSearch:
     """
 
     def __init__(self, tlm, target, particles):
-        self._target = target
         self._max_steps = tlm.max_steps
         self._tlm = tlm
+        self._inner_eos = tlm.inner_lm.eos
 
         # Create fresh Rust lazy DFA for this target prefix
         target_u32 = [tlm._sym_map[y] for y in target]
         tlm._rust_helper.new_step(target_u32)
 
-        # Inverse symbol map for converting u32 back to Python symbols
-        self._inv = tlm._inv_sym_map
-
         # Search accumulators
-        self.scores = {}          # symbol -> [log-weights]
-        self.eos_scores = []      # [log-weights]
-        self.carry_forward = {}   # symbol -> [Particle]
-
-        # Root-family tracking for carry-forward deduplication.
-        # Same invariant as TransducedLM: within each root family, only the
-        # shallowest carry-forward entry per target symbol is kept.  The
-        # priority queue pops highest-weight items first, and within a root
-        # family the shallowest item has the highest weight (monotone), so
-        # "first one wins" is correct.
-        self._root_of = {}        # id(item) -> root index
-        self._carried = set()     # (root_id, y) pairs already added
-        for i, item in enumerate(particles):
-            self._root_of[id(item)] = i
-
-        # Inner LM's EOS token
-        self._inner_eos = (
-            tlm.inner_lm.eos if hasattr(tlm.inner_lm, 'eos')
-            else tlm.inner_lm.initial().eos
-        )
+        self.scores = defaultdict(lambda: -np.inf)   # symbol -> log-weight
+        self.eos_score = -np.inf
+        self.carry_forward = defaultdict(list)        # symbol -> [Particle]
 
         # Resolve sentinel particles: dfa_state=None means the particle came
         # from a truncated Q/R state.  Replay source path through the new DFA
@@ -114,11 +76,7 @@ class _FusedSearch:
             if item.dfa_state is None:
                 s = tlm.run(item.source_path)
                 assert s is not None
-                p = Particle(dfa_state=s, lm_state=item.lm_state,
-                             log_weight=item.log_weight,
-                             source_path=item.source_path)
-                self._root_of[id(p)] = self._root_of[id(item)]
-                resolved.append(p)
+                resolved.append(Particle(s, item.lm_state, item.log_weight, item.source_path))
             else:
                 resolved.append(item)
         particles = resolved
@@ -126,102 +84,71 @@ class _FusedSearch:
         self._queue = list(particles)
         heapq.heapify(self._queue)
 
-    # --- Carry-forward dedup ---
+    # --- Carry-forward ---
 
     def _add_carry(self, y, item):
-        rid = self._root_of[id(item)]
-        if (rid, y) in self._carried:
-            return
-        self._carried.add((rid, y))
-        self.carry_forward.setdefault(y, []).append(item)
+        self.carry_forward[y].append(item)
 
-    def _add_carry_at_starts(self, y, item):
-        """Carry forward item with sentinel dfa_state=None, preserving LM state.
+    def _add_carry_sentinel(self, y, item):
+        """Carry forward item with sentinel dfa_state=None for truncated states.
 
-        The sentinel is resolved to actual DFA start states in the next step's
-        _FusedSearch.__init__, where the child DFA's start states are known.
+        The sentinel is resolved via source-path replay in the next step's
+        _FusedSearch.__init__.
         """
-        rid = self._root_of[id(item)]
-        remap = Particle(
-            dfa_state=None,
-            lm_state=item.lm_state,
-            log_weight=item.log_weight,
-            source_path=item.source_path,
-        )
-        self._root_of[id(remap)] = rid
-        self._add_carry(y, remap)
+        self._add_carry(y, Particle(None, item.lm_state, item.log_weight, item.source_path))
 
     # --- Scoring (no expansion) ---
 
     def _score_item(self, item):
         """Accumulate this item's contributions to scores.  Returns True if quotient."""
         result = self._tlm._rust_helper.classify(item.dfa_state)
-        inv = self._inv
+        inv = self._tlm._inv_sym_map
+        carry = self._add_carry if not result.has_truncated else self._add_carry_sentinel
 
         q_sym = inv[result.quotient_sym] if result.quotient_sym is not None else None
         r_syms = [inv[s] for s in result.remainder_syms]
 
-        # Quotient: full weight, no LM eval needed
-        is_quotient = q_sym is not None
-        if is_quotient:
-            self.scores.setdefault(q_sym, []).append(item.log_weight)
-            if not result.has_truncated:
-                self._add_carry(q_sym, item)
-            else:
-                # Truncated Q: the DFA state is a dead end in the next step,
-                # but the particle's LM state encodes valuable source-prefix
-                # history.  Remap to DFA start states to preserve incrementality.
-                self._add_carry_at_starts(q_sym, item)
+        if q_sym is not None:
+            self.scores[q_sym] = np.logaddexp(self.scores[q_sym], item.log_weight)
+            carry(q_sym, item)
 
-        # Preimage and remainder both need P_inner(EOS)
         if result.is_preimage or r_syms:
             eos_lp = item.lm_state.logp_next[self._inner_eos]
 
             if result.is_preimage:
-                self.eos_scores.append(item.log_weight + eos_lp)
+                self.eos_score = np.logaddexp(self.eos_score, item.log_weight + eos_lp)
 
             for y in r_syms:
-                self.scores.setdefault(y, []).append(item.log_weight + eos_lp)
-                if not result.has_truncated:
-                    self._add_carry(y, item)
-                else:
-                    self._add_carry_at_starts(y, item)
+                eos_w = item.log_weight + eos_lp
+                self.scores[y] = np.logaddexp(self.scores[y], eos_w)
+                carry(y, item)
 
-        return is_quotient
+        return q_sym is not None
 
     # --- Expansion ---
 
     def _expand(self, item):
         """Advance by each source symbol and push successors into the queue."""
-        result = self._tlm._rust_helper.classify(item.dfa_state)  # cached
-        arcs = self._tlm._rust_helper.arcs(item.dfa_state)
-        inv = self._inv
+        helper = self._tlm._rust_helper
+        result = helper.classify(item.dfa_state)  # cached
+        inv = self._tlm._inv_sym_map
         lm_logp_next = item.lm_state.logp_next
-        rid = self._root_of[id(item)]
 
         trunc_resume_syms = set()
 
-        for x_u32, dest_sid in arcs:
+        for x_u32, dest_sid in helper.arcs(item.dfa_state):
             x = inv[x_u32]
             w = float(item.log_weight + lm_logp_next[x])
-            if w == -np.inf:
-                continue
+            if w > -np.inf:
+                child = Particle(dest_sid, item.lm_state >> x, w,
+                                 item.source_path + (x,))
+                heapq.heappush(self._queue, child)
 
-            child = Particle(
-                dfa_state=dest_sid,
-                lm_state=item.lm_state >> x,
-                log_weight=w,
-                source_path=item.source_path + (x,),
-            )
-            self._root_of[id(child)] = rid
-            heapq.heappush(self._queue, child)
-
-            # Truncation-boundary carry-forward: if the ITEM is non-truncated
+            # Truncation-boundary carry-forward: if the item is non-truncated
             # but its successor crosses into truncation, carry forward the item
-            # at the truncation-boundary symbols.  This mirrors PeekabooState's
-            # resume_frontiers logic (peekaboo_incremental.py lines 430-435).
+            # at the truncation-boundary symbols (mirrors resume_frontiers).
             if not result.has_truncated:
-                dest_result = self._tlm._rust_helper.classify(dest_sid)
+                dest_result = helper.classify(dest_sid)
                 if dest_result.has_truncated:
                     for y_u32 in dest_result.trunc_output_syms:
                         trunc_resume_syms.add(inv[y_u32])
@@ -231,22 +158,20 @@ class _FusedSearch:
 
     # --- Main loop ---
 
-    def run(self):
-        """Run the search.  Returns (scores, eos_scores, carry_forward)."""
+    def search(self):
+        """Run the search.  Returns (scores, eos_score, carry_forward)."""
         steps = 0
         while self._queue and steps < self._max_steps:
             steps += 1
             item = heapq.heappop(self._queue)
-            is_quotient = self._score_item(item)
-            if not is_quotient:
+            if not self._score_item(item):
                 self._expand(item)
 
         # Budget exhausted — score remaining items without expanding
         while self._queue:
-            item = heapq.heappop(self._queue)
-            self._score_item(item)
+            self._score_item(heapq.heappop(self._queue))
 
-        return self.scores, self.eos_scores, self.carry_forward
+        return self.scores, self.eos_score, self.carry_forward
 
 
 # ---------------------------------------------------------------------------
@@ -260,13 +185,13 @@ class FusedTransducedState(LMState):
     decomposition inline during the LM-weighted search.
     """
 
-    def __init__(self, tlm, particles, target, logp, history=()):
+    def __init__(self, tlm, particles, target, logp, path=()):
         self.tlm = tlm
         self.eos = tlm.eos
         self._particles = particles
         self._target = target
         self.logp = logp
-        self.history = history
+        self.path = path
         self._logp_next_cache = None
         self._carry_forward_cache = None
 
@@ -287,41 +212,28 @@ class FusedTransducedState(LMState):
         return self._logp_next_cache
 
     def __rshift__(self, y):
-        if y == self.eos:
-            raise ValueError(f"Out of vocabulary: {y!r}")
         self._ensure_computed()
-
         if y not in self._logp_next_cache:
             raise ValueError(f"Out of vocabulary: {y!r}")
 
-        lp_y = self._logp_next_cache[y]
         new_particles = self._carry_forward_cache.get(y, [])
-
-        if len(new_particles) > self.tlm.max_beam:
-            new_particles = sorted(new_particles, key=lambda it: it.log_weight, reverse=True)
-            new_particles = new_particles[:self.tlm.max_beam]
+        new_particles = _select_top_k(new_particles, self.tlm.max_beam)
 
         return FusedTransducedState(
             self.tlm, new_particles,
             self._target + (y,),
-            self.logp + lp_y,
-            history=(self.history, y),
+            self.logp + self._logp_next_cache[y],
+            path=self.path + (y,),
         )
 
     def _compute_logp_next(self):
         search = _FusedSearch(self.tlm, self._target, self._particles)
-        scores, eos_scores, carry_forward = search.run()
-        self._logp_next_cache = _normalize(scores, eos_scores, self.tlm.eos)
-        self._carry_forward_cache = carry_forward
+        scores, eos_score, carry_forward = search.search()
 
-    def path(self):
-        tokens = []
-        h = self.history
-        while h:
-            h, token = h
-            tokens.append(token)
-        tokens.reverse()
-        return tokens
+        scores[self.eos] = eos_score
+        Z = logsumexp(list(scores.values()))
+        self._logp_next_cache = LogpNext({y: raw - Z for y, raw in scores.items()})
+        self._carry_forward_cache = carry_forward
 
     def _repr_html_(self):
         from transduction.viz import render_particles_html, _format_nfa_set
@@ -411,15 +323,7 @@ class FusedTransducedLM(LM):
         start_ids = self._rust_helper.start_ids()
 
         inner_initial = self.inner_lm.initial()
-        particles = [
-            Particle(
-                dfa_state=s,
-                lm_state=inner_initial,
-                log_weight=0.0,
-                source_path=(),
-            )
-            for s in start_ids
-        ]
+        particles = [Particle(s, inner_initial, 0.0, ()) for s in start_ids]
 
         return FusedTransducedState(self, particles, (), 0.0)
 

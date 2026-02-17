@@ -1,5 +1,11 @@
 # Carry-Forward Root-Family Deduplication
 
+**Status: Removed.**  The root-family deduplication described below was
+implemented and tested, but ultimately removed from both `TransducedLM` and
+`FusedTransducedLM`.  The `_select_top_k` beam pruning implicitly limits
+redundant carry-forward entries, making the explicit dedup unnecessary.
+This document is preserved as a reference for the analysis.
+
 ## Background: The Per-Step BFS
 
 TransducedLM estimates P(y | target_so_far) by maintaining a beam of K
@@ -337,8 +343,8 @@ we would have missed P's contribution to the score for 'B'.
 
 ## Implications for FusedTransducedLM
 
-The same issue may exist in `fused_transduced.py`, which has its own
-carry-forward logic.  This needs to be audited (see TODO.md).
+Both `TransducedLM` and `FusedTransducedLM` had the dedup implemented and
+tested, then removed.  Neither implementation performs root-family tracking.
 
 ## Key Properties Used
 
