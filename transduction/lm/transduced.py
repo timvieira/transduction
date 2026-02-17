@@ -91,23 +91,22 @@ def _format_nfa_set(decoded_set):
 
 
 # ---------------------------------------------------------------------------
-# Shared HTML rendering for beam / particle tables
+# Shared HTML rendering for particle tables
 # ---------------------------------------------------------------------------
 
-def _render_beam_html(
+def _render_particles_html(
     class_name,       # 'TransducedState' or 'FusedTransducedState'
-    items,            # beam items with .dfa_state, .lm_state
+    items,            # Particle list with .dfa_state, .lm_state, .log_weight
     target,           # list of target symbols
     logp,             # float
     *,
-    weight_attr='log_weight',   # 'log_weight' for Particle, 'weight' for BeamItem
     decode_fn=None,             # callable(dfa_state) -> str (formatted NFA set)
     q_states=frozenset(),       # set of quotient DFA states
     r_states=frozenset(),       # set of remainder DFA states
     qr_builder=None,            # callable(y) -> (q_fsa, r_fsa)
     decomp=None,                # decomp dict for Q/R filter
 ):
-    """Render an HTML table for a beam of particles / beam items.
+    """Render an HTML table for particles.
 
     Shared by TransducedState and FusedTransducedState _repr_html_.
     """
@@ -121,7 +120,7 @@ def _render_beam_html(
     if not items:
         return header
 
-    log_weights = np.array([getattr(p, weight_attr) for p in items])
+    log_weights = np.array([p.log_weight for p in items])
     log_Z = logsumexp(log_weights)
 
     show_role = bool(q_states or r_states)
@@ -131,7 +130,7 @@ def _render_beam_html(
     for p in items:
         source = _format_source_path(p.lm_state)
         key = (source, p.dfa_state)
-        groups.setdefault(key, []).append(getattr(p, weight_attr))
+        groups.setdefault(key, []).append(p.log_weight)
 
     table_rows = []
     for (source, dfa_state), lws in groups.items():
@@ -253,18 +252,6 @@ class Particle:
 
     def __repr__(self):
         return f'Particle(w={self.log_weight:.3f})'
-
-
-# Backward-compat alias for FusedTransducedLM and benchmarks.
-class BeamItem:
-    # NOTE: intentionally no __slots__ — autoreload + __slots__ causes
-    # "descriptor doesn't apply" errors when cross-module reload.
-    def __init__(self, dfa_state, lm_state, weight):
-        self.dfa_state = dfa_state
-        self.lm_state = lm_state
-        self.weight = weight
-    def __lt__(self, other):
-        return self.weight > other.weight
 
 
 # ---------------------------------------------------------------------------
@@ -587,9 +574,8 @@ class TransducedState(LMState):
 
         qr_builder = ps.build_qr_fsa if can_decode and hasattr(ps, 'build_qr_fsa') else None
 
-        return _render_beam_html(
+        return _render_particles_html(
             'TransducedState', self._particles, self.path(), self.logp,
-            weight_attr='log_weight',
             decode_fn=decode_fn,
             q_states=q_states, r_states=r_states,
             qr_builder=qr_builder, decomp=decomp,

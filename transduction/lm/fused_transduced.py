@@ -8,8 +8,8 @@ decomposition and then running LM-weighted search, we interleave both.
 The powerset DFA is built lazily, so only states reachable through
 high-probability source paths are ever materialized.
 
-The algorithm is a best-first search over source-side paths.  Each beam
-item carries a DFA state, an inner LM state, and a cumulative log-weight.
+The algorithm is a best-first search over source-side paths.  Each
+particle carries a DFA state, an inner LM state, and a cumulative log-weight.
 At each step we pop the highest-weight item and ask: what role does this
 DFA state play?
 
@@ -38,7 +38,7 @@ import heapq
 import numpy as np
 
 from transduction.lm.base import LM, LMState, LogpNext
-from transduction.lm.transduced import logsumexp, BeamItem, _format_source_path
+from transduction.lm.transduced import logsumexp, Particle, _format_source_path
 from transduction.rust_bridge import to_rust_fst
 
 
@@ -71,7 +71,7 @@ class _FusedSearch:
     Instantiated once per call to _compute_logp_next, then discarded.
     """
 
-    def __init__(self, tlm, target, beam):
+    def __init__(self, tlm, target, particles):
         self._target = target
         self._max_steps = tlm.max_steps
         self._tlm = tlm
@@ -86,7 +86,7 @@ class _FusedSearch:
         # Search accumulators
         self.scores = {}          # symbol -> [log-weights]
         self.eos_scores = []      # [log-weights]
-        self.carry_forward = {}   # symbol -> [BeamItem]
+        self.carry_forward = {}   # symbol -> [Particle]
 
         # Root-family tracking for carry-forward deduplication.
         # Same invariant as TransducedLM: within each root family, only the
@@ -96,7 +96,7 @@ class _FusedSearch:
         # "first one wins" is correct.
         self._root_of = {}        # id(item) -> root index
         self._carried = set()     # (root_id, y) pairs already added
-        for i, item in enumerate(beam):
+        for i, item in enumerate(particles):
             self._root_of[id(item)] = i
 
         # Inner LM's EOS token
@@ -106,7 +106,7 @@ class _FusedSearch:
         )
 
         # Seed the priority queue
-        self._queue = list(beam)
+        self._queue = list(particles)
         heapq.heapify(self._queue)
 
     # --- Carry-forward dedup ---
@@ -131,7 +131,7 @@ class _FusedSearch:
         # Quotient: full weight, no LM eval needed
         is_quotient = q_sym is not None
         if is_quotient:
-            self.scores.setdefault(q_sym, []).append(item.weight)
+            self.scores.setdefault(q_sym, []).append(item.log_weight)
             self._add_carry(q_sym, item)
 
         # Preimage and remainder both need P_inner(EOS)
@@ -139,10 +139,10 @@ class _FusedSearch:
             eos_lp = item.lm_state.logp_next[self._inner_eos]
 
             if result.is_preimage:
-                self.eos_scores.append(item.weight + eos_lp)
+                self.eos_scores.append(item.log_weight + eos_lp)
 
             for y in r_syms:
-                self.scores.setdefault(y, []).append(item.weight + eos_lp)
+                self.scores.setdefault(y, []).append(item.log_weight + eos_lp)
                 self._add_carry(y, item)
 
         return is_quotient
@@ -161,14 +161,14 @@ class _FusedSearch:
 
         for x_u32, dest_sid in arcs:
             x = inv[x_u32]
-            w = float(item.weight + lm_logp_next[x])
+            w = float(item.log_weight + lm_logp_next[x])
             if w == -np.inf:
                 continue
 
-            child = BeamItem(
+            child = Particle(
                 dfa_state=dest_sid,
                 lm_state=item.lm_state >> x,
-                weight=w,
+                log_weight=w,
             )
             self._root_of[id(child)] = rid
             heapq.heappush(self._queue, child)
@@ -215,15 +215,22 @@ class FusedTransducedState(LMState):
     decomposition inline during the LM-weighted search.
     """
 
-    def __init__(self, tlm, beam, target, logp, history=()):
+    def __init__(self, tlm, particles, target, logp, history=()):
         self.tlm = tlm
         self.eos = tlm.eos
-        self._beam = beam
+        self._particles = particles
         self._target = target
         self.logp = logp
         self.history = history
         self._logp_next_cache = None
         self._carry_forward_cache = None
+
+    def decode_dfa_state(self, state_id):
+        """Decode a DFA state ID to NFA constituents.
+
+        Delegates to FusedTransducedLM.decode_dfa_state with the current target.
+        """
+        return self.tlm.decode_dfa_state(state_id, self._target)
 
     def _ensure_computed(self):
         if self._logp_next_cache is None:
@@ -243,21 +250,21 @@ class FusedTransducedState(LMState):
             raise ValueError(f"Out of vocabulary: {y!r}")
 
         lp_y = self._logp_next_cache[y]
-        new_beam = self._carry_forward_cache.get(y, [])
+        new_particles = self._carry_forward_cache.get(y, [])
 
-        if len(new_beam) > self.tlm.max_beam:
-            new_beam = sorted(new_beam, key=lambda it: it.weight, reverse=True)
-            new_beam = new_beam[:self.tlm.max_beam]
+        if len(new_particles) > self.tlm.max_beam:
+            new_particles = sorted(new_particles, key=lambda it: it.log_weight, reverse=True)
+            new_particles = new_particles[:self.tlm.max_beam]
 
         return FusedTransducedState(
-            self.tlm, new_beam,
+            self.tlm, new_particles,
             self._target + (y,),
             self.logp + lp_y,
             history=(self.history, y),
         )
 
     def _compute_logp_next(self):
-        search = _FusedSearch(self.tlm, self._target, self._beam)
+        search = _FusedSearch(self.tlm, self._target, self._particles)
         scores, eos_scores, carry_forward = search.run()
         self._logp_next_cache = _normalize(scores, eos_scores, self.tlm.eos)
         self._carry_forward_cache = carry_forward
@@ -272,7 +279,7 @@ class FusedTransducedState(LMState):
         return tokens
 
     def _repr_html_(self):
-        from transduction.lm.transduced import _render_beam_html, _format_nfa_set
+        from transduction.lm.transduced import _render_particles_html, _format_nfa_set
         decode_fn = None
         if hasattr(self.tlm, 'decode_dfa_state'):
             decode_cache = {}
@@ -285,10 +292,9 @@ class FusedTransducedState(LMState):
                     except Exception:
                         decode_cache[dfa_state] = str(dfa_state)
                 return decode_cache[dfa_state]
-        return _render_beam_html(
-            'FusedTransducedState', self._beam,
+        return _render_particles_html(
+            'FusedTransducedState', self._particles,
             list(self._target), self.logp,
-            weight_attr='weight',
             decode_fn=decode_fn,
         )
 
@@ -355,16 +361,16 @@ class FusedTransducedLM(LM):
         start_ids = self._rust_helper.start_ids()
 
         inner_initial = self.inner_lm.initial()
-        beam = [
-            BeamItem(
+        particles = [
+            Particle(
                 dfa_state=s,
                 lm_state=inner_initial,
-                weight=0.0,
+                log_weight=0.0,
             )
             for s in start_ids
         ]
 
-        return FusedTransducedState(self, beam, (), 0.0)
+        return FusedTransducedState(self, particles, (), 0.0)
 
     def __repr__(self):
         return f'FusedTransducedLM(inner={self.inner_lm!r}, fst={self.fst!r})'
