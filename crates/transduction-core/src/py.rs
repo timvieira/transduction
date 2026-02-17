@@ -807,5 +807,20 @@ impl RustLazyPeekabooDFA {
             trunc_output_syms,
         }
     }
+
+    /// Decode a DFA state ID to its NFA constituents.
+    /// Returns list of (fst_state, buf_len, extra_sym_idx, truncated) tuples.
+    fn decode_state(&self, state_id: u32) -> Vec<(u32, u16, u16, bool)> {
+        let dfa = self.lazy_dfa.as_ref().expect("call new_step first");
+        dfa.arena_sets(state_id)
+            .iter()
+            .map(|&packed| peekaboo::unpack_peekaboo(packed))
+            .collect()
+    }
+
+    /// Return the idx→symbol mapping for decoding extra_sym_idx values.
+    fn idx_to_sym_map(&self) -> Vec<u32> {
+        self.idx_to_sym.clone()
+    }
 }
 

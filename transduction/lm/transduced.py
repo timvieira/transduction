@@ -91,6 +91,146 @@ def _format_nfa_set(decoded_set):
 
 
 # ---------------------------------------------------------------------------
+# Shared HTML rendering for beam / particle tables
+# ---------------------------------------------------------------------------
+
+def _render_beam_html(
+    class_name,       # 'TransducedState' or 'FusedTransducedState'
+    items,            # beam items with .dfa_state, .lm_state
+    target,           # list of target symbols
+    logp,             # float
+    *,
+    weight_attr='log_weight',   # 'log_weight' for Particle, 'weight' for BeamItem
+    decode_fn=None,             # callable(dfa_state) -> str (formatted NFA set)
+    q_states=frozenset(),       # set of quotient DFA states
+    r_states=frozenset(),       # set of remainder DFA states
+    qr_builder=None,            # callable(y) -> (q_fsa, r_fsa)
+    decomp=None,                # decomp dict for Q/R filter
+):
+    """Render an HTML table for a beam of particles / beam items.
+
+    Shared by TransducedState and FusedTransducedState _repr_html_.
+    """
+    import html as _html
+    from transduction.viz import format_table
+
+    target_str = ''.join(str(y) for y in target) if target else '(empty)'
+    header = (f'<b>{class_name}</b> '
+              f'target={target_str!r}, K={len(items)}, '
+              f'logp={logp:.4f}<br>')
+    if not items:
+        return header
+
+    log_weights = np.array([getattr(p, weight_attr) for p in items])
+    log_Z = logsumexp(log_weights)
+
+    show_role = bool(q_states or r_states)
+
+    # Group by (source_path, dfa_state)
+    groups = {}
+    for p in items:
+        source = _format_source_path(p.lm_state)
+        key = (source, p.dfa_state)
+        groups.setdefault(key, []).append(getattr(p, weight_attr))
+
+    table_rows = []
+    for (source, dfa_state), lws in groups.items():
+        group_log_w = logsumexp(np.array(lws))
+        posterior = np.exp(group_log_w - log_Z)
+        if show_role:
+            is_q = dfa_state in q_states
+            is_r = dfa_state in r_states
+            role = ('Q+R' if is_q and is_r else
+                    'Q' if is_q else
+                    'R' if is_r else 'frontier')
+        else:
+            role = None
+        table_rows.append((source, dfa_state, role, len(lws),
+                           group_log_w, posterior))
+    table_rows.sort(key=lambda r: -r[5])
+
+    rows = []
+    for source, dfa_state, role, count, log_w, posterior in table_rows:
+        dfa_label = decode_fn(dfa_state) if decode_fn else str(dfa_state)
+        row = [repr(source), dfa_label]
+        if show_role:
+            row.append(role)
+        row.extend([str(count), f'{log_w:.2f}', f'{posterior:.4f}'])
+        rows.append(row)
+
+    headings = ['Source prefix', 'DFA state']
+    if show_role:
+        headings.append('Role')
+    headings.extend(['Count', 'log w', 'p(x|y)'])
+
+    result = header + format_table(
+        rows,
+        headings=headings,
+        column_styles={0: 'text-align:left'},
+    )
+
+    # Add collapsible Q/R FSA visualizations
+    if decode_fn and qr_builder and decomp:
+        particle_states = {p.dfa_state for p in items}
+
+        def sty_node(state):
+            if state in particle_states:
+                return {'fillcolor': '#ADD8E6',
+                        'style': 'filled,rounded'}
+            return {}
+
+        def fmt_node(state):
+            return decode_fn(state)
+
+        relevant_syms = set()
+        for y, d in decomp.items():
+            if d.quotient & particle_states or \
+               d.remainder & particle_states:
+                relevant_syms.add(y)
+
+        MAX_QR = 10
+        shown = 0
+        for y in sorted(relevant_syms, key=repr):
+            if shown >= MAX_QR:
+                rest = len(relevant_syms) - shown
+                result += (f'<details><summary>\u2026 and {rest} more '
+                           f'Q/R sections</summary></details>')
+                break
+            try:
+                q_fsa, r_fsa = qr_builder(y)
+            except Exception:
+                continue
+            if not q_fsa.states and not r_fsa.states:
+                continue
+
+            parts = []
+            y_label = _html.escape(repr(y))
+            if q_fsa.states:
+                try:
+                    g = q_fsa.graphviz(fmt_node=fmt_node,
+                                       sty_node=sty_node)
+                    svg = g._repr_image_svg_xml()
+                    parts.append(f'<b>Q({y_label})</b><br>{svg}')
+                except Exception:
+                    pass
+            if r_fsa.states:
+                try:
+                    g = r_fsa.graphviz(fmt_node=fmt_node,
+                                       sty_node=sty_node)
+                    svg = g._repr_image_svg_xml()
+                    parts.append(f'<b>R({y_label})</b><br>{svg}')
+                except Exception:
+                    pass
+            if parts:
+                content = '<br>'.join(parts)
+                result += (f'<details><summary>Q/R for y={y_label}'
+                           f'</summary>{content}</details>')
+                shown += 1
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Particle
 # ---------------------------------------------------------------------------
 
@@ -425,130 +565,35 @@ class TransducedState(LMState):
         return tokens
 
     def _repr_html_(self):
-        import html as _html
-        from transduction.viz import format_table
-        particles = self._particles
-        target = self.path()
-        target_str = ''.join(str(y) for y in target) if target else '(empty)'
-        header = (f'<b>TransducedState</b> '
-                  f'target={target_str!r}, K={len(particles)}, '
-                  f'logp={self.logp:.4f}<br>')
-        if not particles:
-            return header
-        # Classify DFA states from current decomposition
         decomp = self._peekaboo_state.decomp
-        q_states = set()
-        r_states = set()
+        q_states, r_states = set(), set()
         for d in decomp.values():
             q_states.update(d.quotient)
             r_states.update(d.remainder)
-        log_weights = np.array([p.log_weight for p in particles])
-        log_Z = logsumexp(log_weights)
 
-        # Check if state decoding is available
-        can_decode = hasattr(self._peekaboo_state, 'decode_dfa_state')
-
-        # Cache decoded state names
+        ps = self._peekaboo_state
+        can_decode = hasattr(ps, 'decode_dfa_state')
         decode_cache = {}
-        def decode_state(dfa_state):
+        def decode_fn(dfa_state):
             if not can_decode:
                 return str(dfa_state)
             if dfa_state not in decode_cache:
                 try:
-                    decoded = self._peekaboo_state.decode_dfa_state(dfa_state)
+                    decoded = ps.decode_dfa_state(dfa_state)
                     decode_cache[dfa_state] = _format_nfa_set(decoded)
                 except Exception:
                     decode_cache[dfa_state] = str(dfa_state)
             return decode_cache[dfa_state]
 
-        groups = {}
-        for p in particles:
-            source = _format_source_path(p.lm_state)
-            key = (source, p.dfa_state)
-            groups.setdefault(key, []).append(p.log_weight)
-        table_rows = []
-        for (source, dfa_state), lws in groups.items():
-            group_log_w = logsumexp(np.array(lws))
-            posterior = np.exp(group_log_w - log_Z)
-            is_q = dfa_state in q_states
-            is_r = dfa_state in r_states
-            role = ('Q+R' if is_q and is_r else
-                    'Q' if is_q else
-                    'R' if is_r else 'frontier')
-            table_rows.append((source, dfa_state, role, len(lws),
-                               group_log_w, posterior))
-        table_rows.sort(key=lambda r: -r[5])
-        rows = []
-        for source, dfa_state, role, count, log_w, posterior in table_rows:
-            rows.append([repr(source), decode_state(dfa_state), role,
-                         str(count), f'{log_w:.2f}', f'{posterior:.4f}'])
-        result = header + format_table(
-            rows,
-            headings=['Source prefix', 'DFA state', 'Role', 'Count',
-                      'log w', 'p(x|y)'],
-            column_styles={0: 'text-align:left'},
+        qr_builder = ps.build_qr_fsa if can_decode and hasattr(ps, 'build_qr_fsa') else None
+
+        return _render_beam_html(
+            'TransducedState', self._particles, self.path(), self.logp,
+            weight_attr='log_weight',
+            decode_fn=decode_fn,
+            q_states=q_states, r_states=r_states,
+            qr_builder=qr_builder, decomp=decomp,
         )
-
-        # Add collapsible Q/R FSA visualizations
-        if can_decode and hasattr(self._peekaboo_state, 'build_qr_fsa'):
-            particle_states = {p.dfa_state for p in particles}
-
-            def sty_node(state):
-                if state in particle_states:
-                    return {'fillcolor': '#ADD8E6',
-                            'style': 'filled,rounded'}
-                return {}
-
-            def fmt_node(state):
-                return decode_state(state)
-
-            # Only show Q/R for symbols relevant to current particles
-            relevant_syms = set()
-            for y, d in decomp.items():
-                if d.quotient & particle_states or \
-                   d.remainder & particle_states:
-                    relevant_syms.add(y)
-
-            MAX_QR = 10
-            shown = 0
-            for y in sorted(relevant_syms, key=repr):
-                if shown >= MAX_QR:
-                    rest = len(relevant_syms) - shown
-                    result += (f'<details><summary>\u2026 and {rest} more '
-                               f'Q/R sections</summary></details>')
-                    break
-                try:
-                    q_fsa, r_fsa = self._peekaboo_state.build_qr_fsa(y)
-                except Exception:
-                    continue
-                if not q_fsa.states and not r_fsa.states:
-                    continue
-
-                parts = []
-                y_label = _html.escape(repr(y))
-                if q_fsa.states:
-                    try:
-                        g = q_fsa.graphviz(fmt_node=fmt_node,
-                                           sty_node=sty_node)
-                        svg = g._repr_image_svg_xml()
-                        parts.append(f'<b>Q({y_label})</b><br>{svg}')
-                    except Exception:
-                        pass
-                if r_fsa.states:
-                    try:
-                        g = r_fsa.graphviz(fmt_node=fmt_node,
-                                           sty_node=sty_node)
-                        svg = g._repr_image_svg_xml()
-                        parts.append(f'<b>R({y_label})</b><br>{svg}')
-                    except Exception:
-                        pass
-                if parts:
-                    content = '<br>'.join(parts)
-                    result += (f'<details><summary>Q/R for y={y_label}'
-                               f'</summary>{content}</details>')
-                    shown += 1
-
-        return result
 
     def __repr__(self):
         return (f'TransducedState(target={self._peekaboo_state.target!r},'

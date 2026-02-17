@@ -1768,6 +1768,10 @@ impl LazyPeekabooDFA {
         self.ensure_meta(fst, sid);
         &self.meta[sid as usize]
     }
+
+    pub fn arena_sets(&self, sid: u32) -> &[u64] {
+        &self.arena.sets[sid as usize]
+    }
 }
 
 #[cfg(test)]

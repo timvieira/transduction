@@ -272,35 +272,24 @@ class FusedTransducedState(LMState):
         return tokens
 
     def _repr_html_(self):
-        from transduction.viz import format_table
-        beam = self._beam
-        target_str = ''.join(str(y) for y in self._target) if self._target else '(empty)'
-        header = (f'<b>FusedTransducedState</b> '
-                  f'target={target_str!r}, K={len(beam)}, '
-                  f'logp={self.logp:.4f}<br>')
-        if not beam:
-            return header
-        log_weights = np.array([b.weight for b in beam])
-        log_Z = logsumexp(log_weights)
-        groups = {}
-        for b in beam:
-            source = _format_source_path(b.lm_state)
-            key = (source, b.dfa_state)
-            groups.setdefault(key, []).append(b.weight)
-        table_rows = []
-        for (source, dfa_state), lws in groups.items():
-            group_log_w = logsumexp(np.array(lws))
-            posterior = np.exp(group_log_w - log_Z)
-            table_rows.append((source, dfa_state, len(lws), group_log_w, posterior))
-        table_rows.sort(key=lambda r: -r[4])
-        rows = []
-        for source, dfa_state, count, log_w, posterior in table_rows:
-            rows.append([repr(source), str(dfa_state), str(count),
-                         f'{log_w:.2f}', f'{posterior:.4f}'])
-        return header + format_table(
-            rows,
-            headings=['Source prefix', 'DFA state', 'Count', 'log w', 'p(x|y)'],
-            column_styles={0: 'text-align:left'},
+        from transduction.lm.transduced import _render_beam_html, _format_nfa_set
+        decode_fn = None
+        if hasattr(self.tlm, 'decode_dfa_state'):
+            decode_cache = {}
+            target_tuple = tuple(self._target)
+            def decode_fn(dfa_state):
+                if dfa_state not in decode_cache:
+                    try:
+                        decoded = self.tlm.decode_dfa_state(dfa_state, target_tuple)
+                        decode_cache[dfa_state] = _format_nfa_set(decoded)
+                    except Exception:
+                        decode_cache[dfa_state] = str(dfa_state)
+                return decode_cache[dfa_state]
+        return _render_beam_html(
+            'FusedTransducedState', self._beam,
+            list(self._target), self.logp,
+            weight_attr='weight',
+            decode_fn=decode_fn,
         )
 
     def __repr__(self):
@@ -325,10 +314,40 @@ class FusedTransducedLM(LM):
         self.eos = eos
 
         # Build Rust FST and helper
-        rust_fst, sym_map, _ = to_rust_fst(fst)
+        rust_fst, sym_map, state_map = to_rust_fst(fst)
         self._rust_helper = transduction_core.RustLazyPeekabooDFA(rust_fst)
         self._sym_map = {k: v for k, v in sym_map.items()}
         self._inv_sym_map = {v: k for k, v in sym_map.items()}
+        self._state_map = state_map
+
+    def decode_dfa_state(self, state_id, target):
+        """Decode a lazy-DFA state ID to NFA constituents.
+
+        Returns frozenset of (fst_state, buffer_tuple, truncated) matching
+        the Python PeekabooLookaheadNFA representation.
+        """
+        if not hasattr(self, '_inv_maps'):
+            idx_to_sym_raw = self._rust_helper.idx_to_sym_map()
+            inv_sym = self._inv_sym_map
+            inv_state = {v: k for k, v in self._state_map.items()}
+            self._inv_maps = (idx_to_sym_raw, inv_sym, inv_state)
+        idx_to_sym_raw, inv_sym, inv_state = self._inv_maps
+
+        NO_EXTRA = 0xFFFF
+        raw = self._rust_helper.decode_state(state_id)
+
+        result = set()
+        for fst_state_u32, buf_len, extra_sym_idx, truncated in raw:
+            py_fst_state = inv_state.get(fst_state_u32, fst_state_u32)
+            if extra_sym_idx == NO_EXTRA:
+                buf = target[:buf_len]
+            else:
+                sym_u32 = idx_to_sym_raw[extra_sym_idx]
+                py_sym = inv_sym[sym_u32]
+                buf = target[:buf_len - 1] + (py_sym,)
+            result.add((py_fst_state, buf, truncated))
+
+        return frozenset(result)
 
     def initial(self):
         """Return the initial FusedTransducedState (empty target prefix)."""
