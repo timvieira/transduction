@@ -33,14 +33,12 @@ datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True
 # Local imports
 from transduction.applications.ptb import (
     build_ptb_fst_pynini,
-    string_to_byte_strs,
     decode_ptb_output,
     SEP,
     MARKER,
 )
 from transduction.applications.wikitext import load_wikitext, wikitext_detokenize
 from transduction.fsa import EPSILON
-from transduction.fst import FST
 from transduction.util import Timeout, timelimit, set_memory_limit
 
 # Decomposition methods
@@ -133,15 +131,11 @@ def load_wikitext_paragraphs_ptb(fst, split, n=4, max_chars=None):
         if max_chars is not None:
             detokenized = detokenized[:max_chars]
 
-        byte_strs = string_to_byte_strs(detokenized)
-
         try:
-            input_fst = FST.from_string(byte_strs)
-            output_fsa = (input_fst @ fst).project(1)
-            transduced = next(output_fsa.language())
+            transduced = fst.transduce(detokenized.encode('utf-8'))
             paragraphs.append(transduced)
             original.append(detokenized)
-        except StopIteration:
+        except ValueError:
             print(f"  Skipping (FST rejected): {detokenized[:50]}...")
             continue
         except Exception as e:
@@ -315,10 +309,7 @@ def main(n_pgs=1, max_chars=None, max_prefix_len=None,
     # Sanity test
     test_str = "Hello, world!"
     try:
-        test_bytes = string_to_byte_strs(test_str)
-        input_fst = FST.from_string(test_bytes)
-        output_fsa = (input_fst @ fst).project(1)
-        test_output = next(output_fsa.language())
+        test_output = fst.transduce(test_str.encode('utf-8'))
         print(f"\n  Sanity test: '{test_str}' -> '{decode_ptb_output(test_output)}'")
     except Exception as e:
         print(f"\n  Sanity test FAILED: {e}")

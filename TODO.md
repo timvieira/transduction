@@ -52,9 +52,10 @@
 - [ ] Add output ports between graphviz plates (line 125)
 
 
-### fsa.py
+### fsa.py & fst.py
 
-- [ ] Support NFA/epsilon arcs in `epsremove()` (line 553)
+- [ ] Rename `stop` → `accepting` in FSA/FST classes ("final" and "stop" suggest
+  you can't continue past the state, which is misleading; "accepting" is standard)
 
 ### lm/transduced.py
 

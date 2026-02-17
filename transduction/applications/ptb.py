@@ -26,14 +26,6 @@ _MARKER_STR = str(MARKER)
 _SEP_STR = str(SEP)
 
 
-def char_to_byte_str(ch):
-    """Convert a single ASCII character to its integer byte value."""
-    return ord(ch)
-
-
-def string_to_byte_strs(s):
-    """Convert a string to tuple of integer byte values."""
-    return tuple(b for b in s.encode('utf-8'))
 
 
 def decode_ptb_output(output_tuple):

@@ -11,39 +11,20 @@ from collections import defaultdict
 from nltk.tokenize import TreebankWordTokenizer
 import pytest
 
-from transduction.fst import FST
 from transduction.applications.ptb import (
     build_ptb_fst_pynini,
-    string_to_byte_strs,
-    SEP,
-    MARKER,
+    decode_ptb_output,
 )
 from transduction.applications.wikitext import load_wikitext, wikitext_detokenize
-from transduction.fsa import EPSILON
 
 
 def fst_tokenize(fst, text):
     """Tokenize text using the FST."""
-    byte_strs = string_to_byte_strs(text)
     try:
-        input_fst = FST.from_string(byte_strs)
-        output_fsa = (input_fst @ fst).project(1)
-        output = next(output_fsa.language())
-    except StopIteration:
+        output = fst.transduce(text.encode('utf-8'))
+    except ValueError:
         return None  # FST rejected input
-
-    tokens = []
-    current = []
-    for sym in output:
-        if sym == SEP:
-            if current:
-                tokens.append(bytes(current).decode('utf-8', errors='replace'))
-                current = []
-        elif sym != MARKER and sym != EPSILON:
-            current.append(sym)
-    if current:
-        tokens.append(bytes(current).decode('utf-8', errors='replace'))
-    return tokens
+    return decode_ptb_output(output).split()
 
 
 def nltk_tokenize(tokenizer, text):
