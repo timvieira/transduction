@@ -143,26 +143,41 @@ class ByteNgramLM(LM):
         """Train an n-gram model from byte data.
 
         Args:
-            data: bytes, bytearray, or iterable of bytes objects
+            data: bytes, bytearray, str, or list of (bytes/str) instances.
+                If data is a list, each element is treated as a separate
+                training instance with EOS (\\x00) appended.  Contexts do
+                not cross instance boundaries.
             n: n-gram order (1=unigram, 2=bigram, 3=trigram, ...)
             alpha: Laplace smoothing parameter
 
         Returns:
             ByteNgramLM instance
         """
+        EOS_BYTE = 0  # b'\x00'
+
+        # Convert to list of bytes instances
         if isinstance(data, (list, tuple)):
-            data = b''.join(d if isinstance(d, bytes) else d.encode() for d in data)
+            instances = []
+            for d in data:
+                if isinstance(d, str):
+                    instances.append(d.encode('utf-8'))
+                else:
+                    instances.append(bytes(d))
         elif isinstance(data, str):
-            data = data.encode('utf-8')
+            instances = [data.encode('utf-8')]
+        else:
+            instances = [bytes(data)]
 
         counts = {}
-        for order in range(1, n + 1):
-            for i in range(len(data) - order + 1):
-                ctx = tuple(data[i:i + order - 1])
-                byte_val = data[i + order - 1]
-                if ctx not in counts:
-                    counts[ctx] = Counter()
-                counts[ctx][byte_val] += 1
+        for inst in instances:
+            seq = inst + bytes([EOS_BYTE])
+            for order in range(1, n + 1):
+                for i in range(len(seq) - order + 1):
+                    ctx = tuple(seq[i:i + order - 1])
+                    byte_val = seq[i + order - 1]
+                    if ctx not in counts:
+                        counts[ctx] = Counter()
+                    counts[ctx][byte_val] += 1
 
         return cls(counts, n, alpha)
 
@@ -277,27 +292,48 @@ class CharNgramLM(LM):
         return CharNgramState(self, (), 0.0)
 
     @classmethod
-    def train(cls, data, n=2, alpha=0.5):
-        """Train from a string or iterable of symbols.
+    def train(cls, data, n=2, alpha=0.5, alphabet=None):
+        """Train from a string, iterable of symbols, or list of instances.
 
         Args:
-            data: string or iterable of symbols
+            data: string, iterable of symbols, or list of sequences.
+                If data is a list of sequences (list of lists/tuples), each
+                sequence is treated as a separate training instance with EOS
+                appended.  Contexts do not cross instance boundaries.
             n: n-gram order (1=unigram, 2=bigram, ...)
             alpha: Laplace smoothing parameter
+            alphabet: optional set of extra symbols to include in the vocabulary
 
         Returns:
             CharNgramLM instance
         """
-        alphabet = set(data)
+        eos = '<EOS>'
+
+        # Detect list-of-instances: data is a list/tuple whose first element
+        # is itself a list/tuple (not a scalar symbol like str/int).
+        if (isinstance(data, (list, tuple)) and len(data) > 0
+                and isinstance(data[0], (list, tuple))):
+            instances = data
+        else:
+            instances = [data]
+
+        obs_alphabet = set()
         counts = {}
-        for order in range(1, n + 1):
-            for i in range(len(data) - order + 1):
-                ctx = tuple(data[i:i + order - 1])
-                sym = data[i + order - 1]
-                if ctx not in counts:
-                    counts[ctx] = Counter()
-                counts[ctx][sym] += 1
-        return cls(counts, n, alpha, alphabet | {'<EOS>'})
+        for inst in instances:
+            seq = list(inst) + [eos]
+            obs_alphabet.update(inst)
+            for order in range(1, n + 1):
+                for i in range(len(seq) - order + 1):
+                    ctx = tuple(seq[i:i + order - 1])
+                    sym = seq[i + order - 1]
+                    if ctx not in counts:
+                        counts[ctx] = Counter()
+                    counts[ctx][sym] += 1
+
+        full_alphabet = obs_alphabet | {eos}
+        if alphabet is not None:
+            full_alphabet |= set(alphabet)
+        return cls(counts, n, alpha, full_alphabet)
 
     def __repr__(self):
         return f'CharNgramLM(n={self.n}, alphabet_size={len(self.alphabet)})'
