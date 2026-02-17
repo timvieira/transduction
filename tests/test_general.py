@@ -392,6 +392,13 @@ def test_multichar_output_symbols(impl):
     run_test(impl, fst, (), depth=3, verbosity=0)
 
 
+def test_oov_target_symbol(impl):
+    """Constructing with a target symbol not in fst.B raises ValueError."""
+    fst = examples.replace([('1', 'a'), ('2', 'b')])
+    with pytest.raises(ValueError, match="Out of vocabulary"):
+        impl(fst, 'z')
+
+
 def test_consume_raises_on_double_use():
     """TruncatedIncrementalDFADecomp: double decompose_next() or >> raises RuntimeError."""
     fst = examples.replace([('1', 'a'), ('2', 'b')])

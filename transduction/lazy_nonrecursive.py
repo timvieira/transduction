@@ -17,6 +17,9 @@ class LazyNonrecursive(AbstractAlgorithm):
         self.dfa = None
 
     def initialize(self, target):
+        oov = set(target) - self.target_alphabet
+        if oov:
+            raise ValueError(f"Out of vocabulary target symbols: {oov}")
         self.state = {}
         self.nfa = LazyPrecoverNFA(self.fst, target)
         self.dfa = self.nfa.det()

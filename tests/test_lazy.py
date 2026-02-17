@@ -375,5 +375,89 @@ def test_foo():
     assert E.materialize(max_steps=2).states == {1, 2}
 
 
+# ── Coverage: Lazy.arcs_x default implementation (lines 64-67) ───────────────
+
+def test_lazy_base_arcs_x_default():
+    """Lazy.arcs_x default filters arcs() by label (with deprecation warning)."""
+    import warnings
+    from transduction.lazy import Lazy
+
+    class MinimalLazy(Lazy):
+        """Only implements arcs/start/is_final — arcs_x falls through to default."""
+        def __init__(self, fsa):
+            self.fsa = fsa
+        def start(self):
+            return iter(self.fsa.start)
+        def is_final(self, i):
+            return self.fsa.is_final(i)
+        def arcs(self, i):
+            return self.fsa.arcs(i)
+
+    m = make_simple()
+    lazy = MinimalLazy(m)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        # Match: covers the yield branch (X == x is True)
+        assert list(lazy.arcs_x(1, 'a')) == [2]
+        # No match: covers the filter-skip branch (X == x is False)
+        assert list(lazy.arcs_x(1, 'z')) == []
+
+
+# ── Coverage: Lazy.min (line 88) ─────────────────────────────────────────────
+
+def test_lazy_min():
+    """Lazy.min() materializes then minimizes."""
+    m = make_simple()
+    lazy = LazyWrapper(m)
+    minimized = lazy.min()
+    assert minimized.equal(m.min())
+
+
+# ── Coverage: LazyDeterminize.arcs_x match (line 206, branch 205->206) ──────
+
+def test_det_arcs_x_match():
+    """LazyDeterminize.arcs_x yields result when input matches."""
+    m = make_simple()
+    det = LazyWrapper(m).det()
+    [start] = list(det.start())
+    results = list(det.arcs_x(start, 'a'))
+    assert len(results) == 1
+    assert isinstance(results[0], frozenset)
+
+
+def test_det_arcs_x_no_match():
+    """LazyDeterminize.arcs_x returns nothing for unrecognized input."""
+    m = make_simple()
+    det = LazyWrapper(m).det()
+    [start] = list(det.start())
+    assert list(det.arcs_x(start, 'z')) == []
+
+
+# ── Coverage: Renumber.arcs_x (lines 269-270) ───────────────────────────────
+
+def test_renumber_arcs_x():
+    """Renumber.arcs_x yields renumbered destinations."""
+    m = make_simple()
+    lazy = LazyWrapper(m)
+    renum = lazy.renumber()
+    [start] = list(renum.start())
+    dests = list(renum.arcs_x(start, 'a'))
+    assert len(dests) == 1
+    assert isinstance(dests[0], int)
+
+
+# ── Coverage: Cached.is_final cache hit (branch 226->228) ───────────────────
+
+def test_cached_is_final_cache_hit():
+    """Second is_final call returns cached result."""
+    m = make_simple()
+    cached = LazyWrapper(m).cache()
+    # First call populates cache
+    result1 = cached.is_final(1)
+    # Second call hits cache
+    result2 = cached.is_final(1)
+    assert result1 == result2
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

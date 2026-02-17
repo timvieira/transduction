@@ -29,6 +29,9 @@ class PeekabooStrings:
         looks up the last symbol.
         """
         target = tuple(target)
+        oov = set(target) - self.target_alphabet
+        if oov:
+            raise ValueError(f"Out of vocabulary target symbols: {oov}")
         if not target:
             return Precover(self.fst, target)
         return self.decompose_next(target[:-1]).get(

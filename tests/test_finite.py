@@ -278,6 +278,15 @@ def test_prioritized_custom_heuristic():
     assert_equal(tmp('abc'), DecompositionResult({'123'}, set()))
 
 
+@pytest.mark.parametrize('oov_impl', IMPLEMENTATIONS)
+def test_oov_target_symbol(oov_impl):
+    """Calling with a target symbol not in fst.B raises ValueError."""
+    fst = examples.replace([('1', 'a'), ('2', 'b')])
+    tmp = oov_impl(fst)
+    with pytest.raises(ValueError, match="Out of vocabulary"):
+        tmp('z')
+
+
 def test_prioritized_max_steps():
     """max_steps limits exploration, producing a subset of the full result."""
     fst = examples.replace([('1', 'a'), ('2', 'b'), ('3', 'c'), ('4', 'd'), ('5', 'e')])

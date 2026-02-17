@@ -336,25 +336,25 @@ def test_is_functional_nondeterministic_but_functional():
 
 def test_advance_buf_side_zero():
     """Both copies in sync, then diverge."""
-    side, buf = _advance_buf(0, '', 'a', 'b')
-    assert side != 0 or buf != ''
+    side, buf = _advance_buf(0, (), 'a', 'b')
+    assert side != 0 or buf != ()
 
 
 def test_advance_buf_side_two():
     """Copy-2 ahead (covers the side==2 branch at line 851)."""
-    # Start with copy-2 ahead by 'x', copy-1 emits nothing, copy-2 emits 'a'
-    side, buf = _advance_buf(2, 'x', '', 'a')
-    # ahead1=''+'', ahead2='x'+'a'='xa'. ahead1 empty → side=2
+    # Start with copy-2 ahead by ('x',), copy-1 emits nothing, copy-2 emits 'a'
+    side, buf = _advance_buf(2, ('x',), EPSILON, 'a')
+    # ahead1=(), ahead2=('x','a'). ahead1 empty → side=2
     assert side == 2
-    assert buf == 'xa'
+    assert buf == ('x', 'a')
 
 
 def test_advance_buf_resync():
     """Copies resynchronize when behind copy catches up."""
-    # Copy-1 ahead by 'a', then copy-2 outputs 'a' and copy-1 outputs nothing
-    side, buf = _advance_buf(1, 'a', '', 'a')
-    # ahead1='a'+''='a', ahead2=''+'a'='a', common prefix='a'
-    assert side == 0 and buf == ''
+    # Copy-1 ahead by ('a',), then copy-2 outputs 'a' and copy-1 outputs nothing
+    side, buf = _advance_buf(1, ('a',), EPSILON, 'a')
+    # ahead1=('a',), ahead2=('a',), common prefix=('a',)
+    assert side == 0 and buf == ()
 
 
 # ── Composition with epsilon (line 399) ──────────────────────────────────────
@@ -707,3 +707,106 @@ def test_strip_prefix():
     assert _strip_prefix(('a',), ('a', 'b', 'c')) == ('b', 'c')
     assert _strip_prefix((), ('a',)) == ('a',)
     assert _strip_prefix(('a', 'b'), ('a', 'b')) == ()
+
+
+# ── Coverage: _build_indexes (lines 91-106) ─────────────────────────────────
+
+def test_ensure_arc_indexes():
+    """ensure_arc_indexes creates index_iy_xj and friends."""
+    fst = FST()
+    fst.add_start(0); fst.add_stop(1)
+    fst.add_arc(0, 'a', 'x', 1)
+    fst.ensure_arc_indexes()
+    assert (0, 'x') in fst.index_iy_xj
+    assert 0 in fst.index_i_xj
+    assert (0, 'a') in fst.index_ix_j
+    assert (0, 'a', 'x') in fst.index_ixy_j
+    # Second call is a no-op (early return on hasattr check)
+    fst.ensure_arc_indexes()
+
+
+# ── Coverage: arcs with x argument (line 138, branch 135->138) ──────────────
+
+def test_arcs_with_input_label():
+    """arcs(i, x=label) returns (output, dest) pairs filtered by input."""
+    fst = FST()
+    fst.add_start(0); fst.add_stop(1)
+    fst.add_arc(0, 'a', 'x', 1)
+    fst.add_arc(0, 'b', 'y', 1)
+    assert fst.arcs(0, 'a') == (('x', 1),)
+    assert fst.arcs(0, 'b') == (('y', 1),)
+    assert fst.arcs(0, 'c') == ()
+
+
+# ── Coverage: rename and renumber (lines 142-150, 162) ──────────────────────
+
+def test_rename():
+    """rename() remaps states through a function."""
+    fst = FST()
+    fst.add_start(0); fst.add_stop(1)
+    fst.add_arc(0, 'a', 'x', 1)
+    renamed = fst.rename(lambda q: q + 10)
+    assert 10 in renamed.start
+    assert 11 in renamed.stop
+    assert list(renamed.arcs(10)) == [('a', 'x', 11)]
+
+
+def test_renumber():
+    """renumber() assigns contiguous integer states."""
+    fst = FST()
+    fst.add_start('foo'); fst.add_stop('bar')
+    fst.add_arc('foo', 'a', 'x', 'bar')
+    renumbered = fst.renumber()
+    assert renumbered.states == {0, 1}
+    assert len(renumbered.start) == 1
+    assert len(renumbered.stop) == 1
+
+
+# ── Coverage: spawn keep_init/keep_stop false branches (166->169, 173->176) ─
+
+def test_spawn_no_init_no_stop():
+    """spawn() with default args copies neither start nor stop states."""
+    fst = FST()
+    fst.add_start(0); fst.add_stop(1)
+    fst.add_arc(0, 'a', 'x', 1)
+    s = fst.spawn()
+    assert len(s.start) == 0
+    assert len(s.stop) == 0
+
+
+# ── Coverage: trim drops arcs to non-trimmed states (branch 623->622) ───────
+
+def test_trim_drops_unreachable_arc_dest():
+    """trim() excludes arcs whose dest is not in trimmed states."""
+    fst = FST()
+    fst.add_start(0); fst.add_stop(1)
+    fst.add_arc(0, 'a', 'x', 1)
+    fst.add_arc(0, 'b', 'y', 2)  # state 2 is a dead-end (not co-accessible)
+    fst.add_arc(2, 'c', 'z', 2)
+    trimmed = fst.trim()
+    assert 2 not in trimmed.states
+    # Only the arc to state 1 survives
+    assert list(trimmed.arcs(0)) == [('a', 'x', 1)]
+
+
+# ── Coverage: SCC cross-edge and multi-node component (812->808, 821->818) ──
+
+def test_scc_cross_edge_and_multi_node():
+    """SCC with cross-edges (already-indexed, not on stack) and multi-node components."""
+    fst = FST()
+    fst.add_start(0); fst.add_stop(3)
+    # Component {0, 1}: mutual cycle
+    fst.add_arc(0, 'a', 'a', 1)
+    fst.add_arc(1, 'b', 'b', 0)
+    # Forward edge to separate component
+    fst.add_arc(1, 'c', 'c', 2)
+    # Component {2}: self-loop
+    fst.add_arc(2, 'd', 'd', 2)
+    # Cross-edge back to already-finished component (2 finishes before 0,1)
+    fst.add_arc(0, 'e', 'e', 2)
+    # Forward to final
+    fst.add_arc(2, 'f', 'f', 3)
+    sccs = fst.strongly_connected_components()
+    # Should have at least a multi-node component {0,1}
+    sizes = sorted(len(c) for c in sccs)
+    assert 2 in sizes  # {0, 1} is a 2-node SCC

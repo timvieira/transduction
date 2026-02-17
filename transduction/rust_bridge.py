@@ -130,7 +130,11 @@ class RustDirtyState(IncrementalDecomposition):
     def __init__(self, fst, target=(), *, minimize=False, _rust_state=None):
         self.fst = fst
         self.target = tuple(target)
+        self.target_alphabet = fst.B - {EPSILON}
         self._minimize = minimize
+        oov = set(self.target) - self.target_alphabet
+        if oov:
+            raise ValueError(f"Out of vocabulary target symbols: {oov}")
         if _rust_state is not None:
             self._rust_state = _rust_state
         else:
@@ -321,6 +325,9 @@ class RustPeekabooState:
         self.target = tuple(target) if not isinstance(target, tuple) else target
         self.target_alphabet = fst.B - {EPSILON}
         self.source_alphabet = fst.A - {EPSILON}
+        oov = set(self.target) - self.target_alphabet
+        if oov:
+            raise ValueError(f"Out of vocabulary target symbols: {oov}")
 
         if _rust_state is not None:
             self._rust_state = _rust_state
