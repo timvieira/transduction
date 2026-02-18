@@ -3,15 +3,18 @@
 import pytest
 import numpy as np
 from collections import defaultdict
+from functools import cached_property
 from transduction import examples, FST
 from transduction.fst import EPSILON
 from transduction.lm.base import LM, LMState
-from transduction.lm.base import LogpNext
+from transduction.util import LogDistr
+from transduction.util import LogVector
 from transduction.lm.ngram import ByteNgramLM, CharNgramLM, NgramState
 from transduction.lm.transduced import TransducedLM, TransducedState, Particle
 from transduction.util import logsumexp
 from transduction.lm.transduced import _select_top_k
 from transduction.lm.fused_transduced import FusedTransducedLM, FusedTransducedState
+from transduction.lm.reference_transduced import ReferenceTransducedLM, ReferenceTransducedState
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +39,7 @@ class TinyState(LMState):
 
     @property
     def logp_next(self):
-        return LogpNext(self._probs)
+        return LogDistr(self._probs)
 
     @property
     def eos(self):
@@ -55,6 +58,62 @@ class TinyLM(LM):
         return TinyState(probs)
 
 
+class FiniteLMState(LMState):
+    """State for a finite-support LM. Computes exact conditionals from the trie."""
+
+    def __init__(self, lm, prefix, logp):
+        self._lm = lm
+        self._prefix = prefix
+        self.logp = logp
+        self.eos = lm.eos
+
+    def _prefix_mass(self, prefix):
+        """Sum of P(s) for all strings s starting with prefix."""
+        n = len(prefix)
+        return sum(p for s, p in self._lm._string_probs.items()
+                   if len(s) >= n and s[:n] == prefix)
+
+    @cached_property
+    def logp_next(self):
+        Z = self._prefix_mass(self._prefix)
+        if Z <= 0:
+            return LogDistr({self.eos: 0.0})
+        scores = {}
+        n = len(self._prefix)
+        next_tokens = {s[n] for s in self._lm._string_probs
+                       if len(s) > n and s[:n] == self._prefix}
+        for tok in sorted(next_tokens):
+            mass = self._prefix_mass(self._prefix + (tok,))
+            if mass > 0:
+                scores[tok] = np.log(mass / Z)
+        eos_mass = self._lm._string_probs.get(self._prefix, 0)
+        if eos_mass > 0:
+            scores[self.eos] = np.log(eos_mass / Z)
+        elif not scores:
+            scores[self.eos] = 0.0
+        return LogDistr(scores)
+
+    def __rshift__(self, token):
+        if token == self.eos:
+            raise ValueError("Cannot advance past EOS")
+        lp = self.logp_next[token]
+        return FiniteLMState(self._lm, self._prefix + (token,), self.logp + lp)
+
+
+class FiniteLM(LM):
+    """LM with exact support on a finite set of strings.
+
+    string_probs: {tuple_of_tokens: probability} — must sum to 1.
+    """
+
+    def __init__(self, string_probs, eos='<EOS>'):
+        self.eos = eos
+        self._string_probs = string_probs
+
+    def initial(self):
+        return FiniteLMState(self, (), 0.0)
+
+
 def brute_force_pushforward(inner_lm, fst, target, max_source_len=8):
     """Exhaustive enumeration of P_fst(target_prefix + y) for all y.
 
@@ -63,7 +122,7 @@ def brute_force_pushforward(inner_lm, fst, target, max_source_len=8):
 
     Returns dict mapping output_string → log P.
     """
-    output_probs = defaultdict(lambda: -np.inf)
+    output_probs = LogVector()
 
     def source_logp(source):
         """Compute log P_inner(source) including EOS."""
@@ -81,7 +140,7 @@ def brute_force_pushforward(inner_lm, fst, target, max_source_len=8):
         if lp == -np.inf:
             continue
         for out in outputs:
-            output_probs[out] = np.logaddexp(output_probs[out], lp)
+            output_probs.logaddexp(out, lp)
 
     return output_probs
 
@@ -260,7 +319,7 @@ class TestTransducedLM:
 
             @property
             def logp_next(self):
-                return LogpNext(self._probs)
+                return LogDistr(self._probs)
 
             def __rshift__(self, token):
                 lp = self._probs.get(token, -np.inf)
@@ -822,3 +881,620 @@ class TestBPEStyleFST:
         for y in ('a', 'a', 'b', 'b'):
             state = state >> y
         assert state.logp > -np.inf
+
+
+# ---------------------------------------------------------------------------
+# Carry-forward exactness tests (issue #6)
+# ---------------------------------------------------------------------------
+
+class TestCarryForwardExactness:
+    """Verify carry-forward doesn't cause double-counting.
+
+    delete_b is the canonical trigger: source paths a, ba, bba, ... all
+    produce target 'A', so carry-forward accumulates particles from multiple
+    BFS layers.  If these caused double-counting in the next step, scores
+    would diverge from the exact answer.
+
+    For TinyLM (memoryless: P(a)=0.6, P(b)=0.3, P(EOS)=0.1) + delete_b,
+    the exact pushforward is P(output="A"^n) = (6/7)^n / 7 (by the negative
+    binomial series), giving P(next='A' | any prefix) = 6/7 and
+    P(EOS | any prefix) = 1/7 at every step.
+    """
+
+    def test_delete_b_transduced_exact(self):
+        """TransducedLM on delete_b matches exact analytical answer.
+
+        Small K (10) leaves most of the expansion budget for fresh exploration,
+        so the geometric tail (0.3^k) is exhausted well past machine precision.
+        """
+        inner_lm = TinyLM()  # P(a)=0.6, P(b)=0.3, P(EOS)=0.1
+        fst = examples.delete_b()
+
+        exact_A = np.log(6 / 7)
+        exact_EOS = np.log(1 / 7)
+
+        tlm = TransducedLM(inner_lm, fst, K=10, max_expansions=10000)
+        state = tlm.initial()
+
+        for step in range(5):
+            lp = state.logp_next
+            assert abs(lp['A'] - exact_A) < 1e-10, \
+                f"Step {step}: P(A) exact={exact_A:.12f}, got={lp['A']:.12f}"
+            assert abs(lp[state.eos] - exact_EOS) < 1e-10, \
+                f"Step {step}: P(EOS) exact={exact_EOS:.12f}, got={lp[state.eos]:.12f}"
+            state = state >> 'A'
+
+    def test_delete_b_fused_exact(self):
+        """FusedTransducedLM on delete_b matches exact analytical answer."""
+        inner_lm = TinyLM()
+        fst = examples.delete_b()
+
+        exact_A = np.log(6 / 7)
+        exact_EOS = np.log(1 / 7)
+
+        tlm = FusedTransducedLM(inner_lm, fst, max_steps=10000, max_beam=10)
+        state = tlm.initial()
+
+        for step in range(5):
+            lp = state.logp_next
+            assert abs(lp['A'] - exact_A) < 1e-10, \
+                f"Step {step}: P(A) exact={exact_A:.12f}, got={lp['A']:.12f}"
+            assert abs(lp[state.eos] - exact_EOS) < 1e-10, \
+                f"Step {step}: P(EOS) exact={exact_EOS:.12f}, got={lp[state.eos]:.12f}"
+            state = state >> 'A'
+
+    def test_delete_b_carry_forward_has_overlap(self):
+        """Verify the test is actually triggering carry-forward overlap.
+
+        After the initial BFS, carry-forward for 'A' should contain multiple
+        particles (from different BFS depths: source paths a, ba, bba, ...).
+        """
+        inner_lm = TinyLM()
+        fst = examples.delete_b()
+
+        tlm = TransducedLM(inner_lm, fst, K=10, max_expansions=10000)
+        state = tlm.initial()
+        state._ensure_computed()
+
+        cf_A = state._carry_forward_cache.get('A', [])
+        assert len(cf_A) > 1, \
+            f"Expected multiple carry-forward particles for 'A', got {len(cf_A)}"
+
+    def test_duplicate_vs_reference(self):
+        """TransducedLM on duplicate FST matches ReferenceTransducedLM."""
+        inner_lm = TinyLM()
+        V = ['a', 'b']
+        fst = examples.duplicate(V, K=2)
+
+        ref = ReferenceTransducedLM(inner_lm, fst)
+        tlm = TransducedLM(inner_lm, fst, K=500, max_expansions=5000)
+
+        ref_state = ref.initial()
+        tlm_state = tlm.initial()
+
+        for step, y in enumerate(['a', 'a', 'b', 'b']):
+            ref_lp = ref_state.logp_next
+            tlm_lp = tlm_state.logp_next
+            for sym in ref_lp:
+                if ref_lp[sym] > -10:
+                    assert abs(tlm_lp[sym] - ref_lp[sym]) < 0.01, \
+                        f"Step {step}, sym={sym!r}: ref={ref_lp[sym]:.6f}, tlm={tlm_lp[sym]:.6f}"
+            ref_state = ref_state >> y
+            tlm_state = tlm_state >> y
+
+    def test_duplicate_fused_vs_reference(self):
+        """FusedTransducedLM on duplicate FST matches ReferenceTransducedLM."""
+        inner_lm = TinyLM()
+        V = ['a', 'b']
+        fst = examples.duplicate(V, K=2)
+
+        ref = ReferenceTransducedLM(inner_lm, fst)
+        tlm = FusedTransducedLM(inner_lm, fst, max_steps=5000, max_beam=500)
+
+        ref_state = ref.initial()
+        tlm_state = tlm.initial()
+
+        for step, y in enumerate(['a', 'a', 'b', 'b']):
+            ref_lp = ref_state.logp_next
+            tlm_lp = tlm_state.logp_next
+            for sym in ref_lp:
+                if ref_lp[sym] > -10:
+                    assert abs(tlm_lp[sym] - ref_lp[sym]) < 0.01, \
+                        f"Step {step}, sym={sym!r}: ref={ref_lp[sym]:.6f}, tlm={tlm_lp[sym]:.6f}"
+            ref_state = ref_state >> y
+            tlm_state = tlm_state >> y
+
+
+def _finite_lm_for_delete_b(max_len=6):
+    """FiniteLM matching TinyLM distribution truncated at max_len.
+
+    Assigns P(s) ∝ 0.6^(#a) * 0.3^(#b) * 0.1 for all s in {a,b}^{≤max_len},
+    then normalizes to sum to 1.
+    """
+    from itertools import product
+    probs = {}
+    for length in range(max_len + 1):
+        for s in product(('a', 'b'), repeat=length):
+            p = 0.6 ** s.count('a') * 0.3 ** s.count('b') * 0.1
+            probs[s] = p
+    Z = sum(probs.values())
+    return FiniteLM({s: p / Z for s, p in probs.items()})
+
+
+def _brute_force_conditional(inner_lm, fst, prefix, max_source_len):
+    """Exact P(next=y | target prefix) via brute-force enumeration."""
+    bf = brute_force_pushforward(inner_lm, fst, '', max_source_len=max_source_len)
+
+    # Partition output strings by whether they extend the prefix
+    mass = {}     # next_symbol -> log P
+    for out_str, lp in bf.items():
+        if not out_str.startswith(prefix):
+            continue
+        suffix = out_str[len(prefix):]
+        y = '<EOS>' if suffix == '' else suffix[0]
+        if y not in mass:
+            mass[y] = lp
+        else:
+            mass[y] = np.logaddexp(mass[y], lp)
+
+    Z = logsumexp(list(mass.values())) if mass else -np.inf
+    return {y: lp - Z for y, lp in mass.items()}
+
+
+class TestFiniteLMExact:
+    """Exact tests using FiniteLM where the BFS terminates naturally.
+
+    With FiniteLM, zero-probability transitions are pruned, so the BFS
+    explores only the finite support.  With K and budget larger than the
+    support size, there is NO approximation — results must match brute-force
+    enumeration exactly (up to floating-point).
+    """
+
+    @pytest.fixture
+    def finite_delete_b_setup(self):
+        max_len = 6
+        inner_lm = _finite_lm_for_delete_b(max_len)
+        fst = examples.delete_b()
+        # K and budget far exceed the support size (sum 2^k for k=0..6 = 127)
+        return inner_lm, fst, max_len
+
+    def test_transduced_vs_brute_force(self, finite_delete_b_setup):
+        """TransducedLM with FiniteLM matches brute-force on delete_b."""
+        inner_lm, fst, max_len = finite_delete_b_setup
+        tlm = TransducedLM(inner_lm, fst, K=500, max_expansions=5000)
+
+        state = tlm.initial()
+        for step, prefix in enumerate(['', 'A', 'AA', 'AAA']):
+            bf_cond = _brute_force_conditional(inner_lm, fst, prefix, max_len)
+            tlm_lp = state.logp_next
+            for y, bf_val in bf_cond.items():
+                tlm_val = tlm_lp.get(y, -np.inf)
+                assert abs(tlm_val - bf_val) < 1e-10, \
+                    f"Step {step}, y={y!r}: bf={bf_val:.12f}, tlm={tlm_val:.12f}"
+            if step < 3:
+                state = state >> 'A'
+
+    def test_fused_vs_brute_force(self, finite_delete_b_setup):
+        """FusedTransducedLM with FiniteLM matches brute-force on delete_b."""
+        inner_lm, fst, max_len = finite_delete_b_setup
+        tlm = FusedTransducedLM(inner_lm, fst, max_steps=5000, max_beam=500)
+
+        state = tlm.initial()
+        for step, prefix in enumerate(['', 'A', 'AA', 'AAA']):
+            bf_cond = _brute_force_conditional(inner_lm, fst, prefix, max_len)
+            tlm_lp = state.logp_next
+            for y, bf_val in bf_cond.items():
+                tlm_val = tlm_lp.get(y, -np.inf)
+                assert abs(tlm_val - bf_val) < 1e-10, \
+                    f"Step {step}, y={y!r}: bf={bf_val:.12f}, tlm={tlm_val:.12f}"
+            if step < 3:
+                state = state >> 'A'
+
+    def test_small_fst_vs_brute_force(self):
+        """TransducedLM with FiniteLM matches brute-force on small() FST."""
+        # small() has source alphabet {a, b}, output alphabet {x, a, b}
+        probs = {}
+        for length in range(6):
+            from itertools import product
+            for s in product(('a', 'b'), repeat=length):
+                probs[s] = 0.5 ** length * 0.5  # uniform + geometric length
+        Z = sum(probs.values())
+        inner_lm = FiniteLM({s: p / Z for s, p in probs.items()})
+
+        fst = examples.small()
+        tlm = TransducedLM(inner_lm, fst, K=500, max_expansions=5000)
+
+        state = tlm.initial()
+        bf_cond = _brute_force_conditional(inner_lm, fst, '', max_source_len=6)
+        tlm_lp = state.logp_next
+        for y, bf_val in bf_cond.items():
+            tlm_val = tlm_lp.get(y, -np.inf)
+            assert abs(tlm_val - bf_val) < 1e-10, \
+                f"y={y!r}: bf={bf_val:.12f}, tlm={tlm_val:.12f}"
+
+
+# ---------------------------------------------------------------------------
+# ReferenceTransducedLM tests (exact ground-truth)
+# ---------------------------------------------------------------------------
+
+def _mapping_fst():
+    """Acyclic FST: a→x, b→y. Start state is also stop (empty→empty)."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(0)
+    fst.add_arc(0, 'a', 'x', 1)
+    fst.add_arc(0, 'b', 'y', 2)
+    fst.add_stop(1)
+    fst.add_stop(2)
+    return fst
+
+
+def _bounded_copy_fst(alphabet, max_len):
+    """Acyclic copy FST that copies strings up to max_len symbols."""
+    fst = FST()
+    for i in range(max_len + 1):
+        if i == 0:
+            fst.add_start(i)
+        fst.add_stop(i)
+        if i < max_len:
+            for a in alphabet:
+                fst.add_arc(i, a, a, i + 1)
+    return fst
+
+
+def _ambiguous_fst():
+    """Acyclic FST: a→x, b→x. Two sources map to same output."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(0)
+    fst.add_arc(0, 'a', 'x', 1)
+    fst.add_arc(0, 'b', 'x', 2)
+    fst.add_stop(1)
+    fst.add_stop(2)
+    return fst
+
+
+def _length_changing_fst():
+    """Acyclic FST: a→xy. One source symbol produces two output symbols."""
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(0)
+    fst.add_arc(0, 'a', 'x', 1)
+    fst.add_arc(1, EPSILON, 'y', 2)
+    fst.add_stop(2)
+    return fst
+
+
+def _finite_inner_lm():
+    """Finite LM over source alphabet {a, b} with known probabilities."""
+    return FiniteLM({
+        (): 0.2,
+        ('a',): 0.3,
+        ('b',): 0.2,
+        ('a', 'b'): 0.15,
+        ('b', 'a'): 0.15,
+    })
+
+
+class TestReferenceTransducedLM:
+    """Tests for ReferenceTransducedLM (exact ground-truth transduced LM).
+
+    Uses FiniteLM as inner LM and acyclic (finite-relation) FSTs
+    so that all Q/R languages are finite and exact values can be
+    computed by hand.
+    """
+
+    # -- Basic properties ---------------------------------------------------
+
+    def test_logp_starts_at_zero(self):
+        """Initial state has logp = 0."""
+        tlm = ReferenceTransducedLM(_finite_inner_lm(), _mapping_fst())
+        assert tlm.initial().logp == 0.0
+
+    def test_normalization_mapping_fst(self):
+        """logp_next sums to exactly 1 at the initial state."""
+        tlm = ReferenceTransducedLM(_finite_inner_lm(), _mapping_fst())
+        state = tlm.initial()
+        all_logps = list(dict(state.logp_next.items()).values())
+        total = logsumexp(all_logps)
+        assert abs(total) < 1e-10, f"Should sum to 1, got log-sum={total}"
+
+    def test_normalization_bounded_copy(self):
+        """logp_next sums to exactly 1 with bounded copy FST."""
+        tlm = ReferenceTransducedLM(
+            _finite_inner_lm(), _bounded_copy_fst(['a', 'b'], 2))
+        state = tlm.initial()
+        all_logps = list(dict(state.logp_next.items()).values())
+        total = logsumexp(all_logps)
+        assert abs(total) < 1e-10, f"Should sum to 1, got log-sum={total}"
+
+    def test_normalization_after_advance(self):
+        """logp_next sums to 1 after advancing by a symbol."""
+        tlm = ReferenceTransducedLM(
+            _finite_inner_lm(), _bounded_copy_fst(['a', 'b'], 2))
+        state = tlm >> 'a'
+        all_logps = list(dict(state.logp_next.items()).values())
+        total = logsumexp(all_logps)
+        assert abs(total) < 1e-10, f"Should sum to 1, got log-sum={total}"
+
+    def test_incremental_consistency(self):
+        """logp after >> y1 >> y2 equals sum of conditional logps."""
+        tlm = ReferenceTransducedLM(
+            _finite_inner_lm(), _bounded_copy_fst(['a', 'b'], 2))
+        state0 = tlm.initial()
+        lp1 = state0.logp_next['a']
+        state1 = state0 >> 'a'
+        lp2 = state1.logp_next['b']
+        state2 = state1 >> 'b'
+        assert state2.logp == pytest.approx(lp1 + lp2, abs=1e-10)
+
+    # -- Exact value tests --------------------------------------------------
+
+    def test_exact_mapping_fst(self):
+        """Verify exact logp_next values for the mapping FST.
+
+        Relation: '' → '', 'a' → 'x', 'b' → 'y'
+        Pushforward: '' → 0.2, 'x' → 0.3, 'y' → 0.2, total = 0.7
+        Initial: P(x) = 3/7, P(y) = 2/7, P(EOS) = 2/7
+        """
+        tlm = ReferenceTransducedLM(_finite_inner_lm(), _mapping_fst())
+        lp = tlm.initial().logp_next
+
+        assert lp['x'] == pytest.approx(np.log(3 / 7), abs=1e-10)
+        assert lp['y'] == pytest.approx(np.log(2 / 7), abs=1e-10)
+        assert lp['<EOS>'] == pytest.approx(np.log(2 / 7), abs=1e-10)
+
+    def test_exact_bounded_copy(self):
+        """Verify exact logp_next for bounded copy FST.
+
+        Relation covers all 1- and 2-symbol strings over {a,b}.
+        Only strings in the inner LM have nonzero mass:
+          '' → 0.2, 'a' → 0.3, 'b' → 0.2, 'ab' → 0.15, 'ba' → 0.15
+        Total pushforward = 1.0.
+        Initial: P(a) = 0.45, P(b) = 0.35, P(EOS) = 0.2
+        """
+        tlm = ReferenceTransducedLM(
+            _finite_inner_lm(), _bounded_copy_fst(['a', 'b'], 2))
+        lp = tlm.initial().logp_next
+
+        assert lp['a'] == pytest.approx(np.log(0.45), abs=1e-10)
+        assert lp['b'] == pytest.approx(np.log(0.35), abs=1e-10)
+        assert lp['<EOS>'] == pytest.approx(np.log(0.2), abs=1e-10)
+
+    def test_exact_after_advance(self):
+        """Verify exact logp_next after advancing by 'a' on bounded copy FST.
+
+        After 'a': P(b|a) = 0.15/0.45 = 1/3, P(EOS|a) = 0.3/0.45 = 2/3.
+        'a' is unreachable (no source 'aa' has nonzero prob).
+        """
+        tlm = ReferenceTransducedLM(
+            _finite_inner_lm(), _bounded_copy_fst(['a', 'b'], 2))
+        lp = (tlm >> 'a').logp_next
+
+        assert lp['b'] == pytest.approx(np.log(1 / 3), abs=1e-10)
+        assert lp['<EOS>'] == pytest.approx(np.log(2 / 3), abs=1e-10)
+        assert lp['a'] == -np.inf  # no source 'aa' in inner LM
+
+    def test_exact_ambiguous_fst(self):
+        """Two source paths contribute to the same output symbol.
+
+        Relation: '' → '', 'a' → 'x', 'b' → 'x'
+        P_target('x') = P('a') + P('b') = 0.3 + 0.2 = 0.5, total = 0.7
+        P(x) = 5/7, P(EOS) = 2/7
+        """
+        tlm = ReferenceTransducedLM(_finite_inner_lm(), _ambiguous_fst())
+        lp = tlm.initial().logp_next
+
+        assert lp['x'] == pytest.approx(np.log(5 / 7), abs=1e-10)
+        assert lp['<EOS>'] == pytest.approx(np.log(2 / 7), abs=1e-10)
+
+    def test_exact_length_changing_fst(self):
+        """Source 'a' maps to target 'xy' (two output symbols).
+
+        Relation: '' → '', 'a' → 'xy'. Total pushforward = 0.2 + 0.3 = 0.5.
+        Initial: P(x) = 0.3/0.5 = 3/5, P(EOS) = 0.2/0.5 = 2/5
+        """
+        tlm = ReferenceTransducedLM(_finite_inner_lm(), _length_changing_fst())
+        lp = tlm.initial().logp_next
+
+        assert lp['x'] == pytest.approx(np.log(3 / 5), abs=1e-10)
+        assert lp['<EOS>'] == pytest.approx(np.log(2 / 5), abs=1e-10)
+
+    def test_length_changing_second_step(self):
+        """After 'x', the only option is 'y' with probability 1."""
+        tlm = ReferenceTransducedLM(_finite_inner_lm(), _length_changing_fst())
+        lp = (tlm >> 'x').logp_next
+
+        assert lp['y'] == pytest.approx(0.0, abs=1e-10)
+        assert lp['<EOS>'] == -np.inf
+
+    def test_complete_string_probability(self):
+        """Cumulative logp + logp_next[EOS] gives the correct string probability.
+
+        Target 'ab' with bounded copy FST: P_target('ab') = P_source('ab') = 0.15.
+        """
+        tlm = ReferenceTransducedLM(
+            _finite_inner_lm(), _bounded_copy_fst(['a', 'b'], 2))
+        state = tlm >> 'a' >> 'b'
+        complete_logp = state.logp + state.logp_next['<EOS>']
+        assert complete_logp == pytest.approx(np.log(0.15), abs=1e-10)
+
+    # -- EOS and error handling ---------------------------------------------
+
+    def test_eos_only_state(self):
+        """After exhausting all continuations, P(EOS) = 1."""
+        tlm = ReferenceTransducedLM(_finite_inner_lm(), _mapping_fst())
+        lp = (tlm >> 'x').logp_next
+        assert lp['<EOS>'] == pytest.approx(0.0, abs=1e-10)
+
+    def test_advance_past_eos_raises(self):
+        """Advancing by EOS raises ValueError."""
+        tlm = ReferenceTransducedLM(_finite_inner_lm(), _mapping_fst())
+        state = tlm.initial()
+        with pytest.raises(ValueError, match="Cannot advance past EOS"):
+            state >> '<EOS>'
+
+    def test_zero_prob_symbol_raises(self):
+        """Advancing by a symbol with zero probability raises ValueError."""
+        tlm = ReferenceTransducedLM(_finite_inner_lm(), _mapping_fst())
+        state = tlm >> 'x'  # after 'x', only EOS is possible
+        with pytest.raises(ValueError, match="zero probability"):
+            state >> 'y'
+
+    # -- Path, repr, decode -------------------------------------------------
+
+    def test_path_recovery(self):
+        """path() returns the correct sequence of target symbols."""
+        tlm = ReferenceTransducedLM(
+            _finite_inner_lm(), _bounded_copy_fst(['a', 'b'], 2))
+        state = tlm >> 'a' >> 'b'
+        assert state.path() == ['a', 'b']
+
+    def test_repr(self):
+        """repr doesn't crash and contains class name."""
+        tlm = ReferenceTransducedLM(_finite_inner_lm(), _mapping_fst())
+        state = tlm.initial()
+        assert 'ReferenceTransducedState' in repr(state)
+
+    def test_inheritance(self):
+        """ReferenceTransducedState inherits from LMState."""
+        assert issubclass(ReferenceTransducedState, LMState)
+
+    def test_greedy_decode(self):
+        """Inherited greedy_decode works correctly.
+
+        With bounded copy FST: P(a)=0.45 > P(b)=0.35 > P(EOS)=0.2.
+        After 'a': P(EOS)=2/3 > P(b)=1/3. So greedy picks 'a' then stops.
+        """
+        tlm = ReferenceTransducedLM(
+            _finite_inner_lm(), _bounded_copy_fst(['a', 'b'], 2))
+        tokens = tlm.initial().greedy_decode(max_len=10)
+        assert tokens == ['a']
+
+    def test_sample_decode(self):
+        """Inherited sample_decode produces valid token sequences."""
+        tlm = ReferenceTransducedLM(
+            _finite_inner_lm(), _bounded_copy_fst(['a', 'b'], 2))
+        tokens = tlm.initial().sample_decode(max_len=10)
+        assert isinstance(tokens, list)
+        assert len(tokens) <= 10
+
+    # -- Cross-validation against brute force -------------------------------
+
+    def test_brute_force_match_initial(self):
+        """ReferenceTransducedLM matches brute-force enumeration at initial state."""
+        inner = _finite_inner_lm()
+        fst = _bounded_copy_fst(['a', 'b'], 2)
+        bf = brute_force_pushforward(inner, fst, '', max_source_len=5)
+        Z = logsumexp(list(bf.values()))
+
+        tlm = ReferenceTransducedLM(inner, fst)
+        state = tlm.initial()
+
+        for y in ['a', 'b']:
+            matching = [lp for out, lp in bf.items() if out.startswith(y)]
+            bf_y = logsumexp(matching) - Z if matching else -np.inf
+            ref_y = state.logp_next[y]
+            assert ref_y == pytest.approx(bf_y, abs=1e-8), \
+                f"Symbol {y!r}: ref={ref_y:.6f}, bf={bf_y:.6f}"
+
+    def test_brute_force_match_after_advance(self):
+        """ReferenceTransducedLM matches brute force after advancing by 'a'."""
+        inner = _finite_inner_lm()
+        fst = _bounded_copy_fst(['a', 'b'], 2)
+        bf = brute_force_pushforward(inner, fst, '', max_source_len=5)
+
+        # P(next='b' | seen 'a') = P(starts with 'ab') / P(starts with 'a')
+        a_strings = [lp for out, lp in bf.items() if out.startswith('a')]
+        ab_strings = [lp for out, lp in bf.items() if out.startswith('ab')]
+        Z_a = logsumexp(a_strings)
+        bf_b_given_a = logsumexp(ab_strings) - Z_a if ab_strings else -np.inf
+
+        tlm = ReferenceTransducedLM(inner, fst)
+        ref_b = (tlm >> 'a').logp_next['b']
+
+        assert ref_b == pytest.approx(bf_b_given_a, abs=1e-8), \
+            f"P(b|a): ref={ref_b:.6f}, bf={bf_b_given_a:.6f}"
+
+    def test_brute_force_match_mapping_fst(self):
+        """Brute-force cross-check with the mapping FST."""
+        inner = _finite_inner_lm()
+        fst = _mapping_fst()
+        bf = brute_force_pushforward(inner, fst, '', max_source_len=5)
+        Z = logsumexp(list(bf.values()))
+
+        tlm = ReferenceTransducedLM(inner, fst)
+        state = tlm.initial()
+
+        for y in ['x', 'y']:
+            matching = [lp for out, lp in bf.items() if out.startswith(y)]
+            bf_y = logsumexp(matching) - Z if matching else -np.inf
+            ref_y = state.logp_next[y]
+            assert ref_y == pytest.approx(bf_y, abs=1e-8), \
+                f"Symbol {y!r}: ref={ref_y:.6f}, bf={bf_y:.6f}"
+
+    # -- Cross-validation against TransducedLM / FusedTransducedLM ----------
+
+    def test_agrees_with_transduced_lm(self):
+        """ReferenceTransducedLM agrees with TransducedLM (large K)."""
+        inner = _finite_inner_lm()
+        fst = _bounded_copy_fst(['a', 'b'], 2)
+
+        ref = ReferenceTransducedLM(inner, fst)
+        approx = TransducedLM(inner, fst, K=500, max_expansions=5000)
+
+        ref_state = ref.initial()
+        approx_state = approx.initial()
+
+        for y in ['a', 'b', '<EOS>']:
+            ref_lp = ref_state.logp_next[y]
+            approx_lp = approx_state.logp_next[y]
+            assert abs(ref_lp - approx_lp) < 0.5, \
+                f"Symbol {y!r}: ref={ref_lp:.4f}, approx={approx_lp:.4f}"
+
+    def test_agrees_with_fused_transduced_lm(self):
+        """ReferenceTransducedLM agrees with FusedTransducedLM."""
+        inner = _finite_inner_lm()
+        fst = _bounded_copy_fst(['a', 'b'], 2)
+
+        ref = ReferenceTransducedLM(inner, fst)
+        fused = FusedTransducedLM(inner, fst, max_steps=5000, max_beam=500)
+
+        ref_state = ref.initial()
+        fused_state = fused.initial()
+
+        for y in ['a', 'b', '<EOS>']:
+            ref_lp = ref_state.logp_next[y]
+            fused_lp = fused_state.logp_next[y]
+            assert abs(ref_lp - fused_lp) < 0.5, \
+                f"Symbol {y!r}: ref={ref_lp:.4f}, fused={fused_lp:.4f}"
+
+    # -- Multi-step decode --------------------------------------------------
+
+    def test_multi_step_bounded_copy(self):
+        """Advance through multiple steps and verify logp consistency."""
+        tlm = ReferenceTransducedLM(
+            _finite_inner_lm(), _bounded_copy_fst(['a', 'b'], 2))
+
+        state = tlm.initial()
+        cumulative = 0.0
+        for y in ['a', 'b']:
+            lp = state.logp_next[y]
+            cumulative += lp
+            state = state >> y
+            assert state.logp == pytest.approx(cumulative, abs=1e-10)
+        # Final state should have P(EOS) = 1
+        assert state.logp_next['<EOS>'] == pytest.approx(0.0, abs=1e-10)
+
+    def test_multi_step_length_changing(self):
+        """Full decode through the length-changing FST: target 'xy'."""
+        tlm = ReferenceTransducedLM(_finite_inner_lm(), _length_changing_fst())
+
+        state = tlm.initial()
+        state = state >> 'x'
+        state = state >> 'y'
+        # Target 'xy' corresponds to source 'a' with P = 0.3.
+        # Pushforward total = 0.5, so P_target('xy') = 0.3/0.5 = 0.6.
+        # Complete string logp = log(0.6).
+        complete_logp = state.logp + state.logp_next['<EOS>']
+        assert complete_logp == pytest.approx(np.log(0.6), abs=1e-10)
