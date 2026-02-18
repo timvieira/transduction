@@ -31,13 +31,14 @@ Do not auto-commit after finishing work.
 - `transduction/applications/ptb.py` — PTB tokenizer FST built with pynini
 - `transduction/applications/wikitext.py` — WikiText data loading (`load_wikitext`, `wikitext_detokenize`)
 - `transduction/rust_bridge.py` — Python ↔ Rust conversion layer; also provides `RustPeekabooState`, `RustLazyPeekabooDFA`
+- `transduction/util.py` — Shared utilities: `Integerizer`, `logsumexp`, `LogVector` (mutable log-space accumulator), `LogDistr` (immutable log-probability distribution), `memoize`, `timelimit`, `set_memory_limit`, `memory_limit`, `sample`, `colors`
 - `transduction/examples.py` — Example FSTs for testing
 
 ### LM Integration (`transduction/lm/`)
 
 Self-contained language model interface for use with enumeration/sampling:
 
-- `transduction/lm/base.py` — `LMState` ABC (defines `logp_next`, `eos`, `__rshift__`, `__call__`, `greedy_decode`, `sample_decode`)
+- `transduction/lm/base.py` — `LM` (ABC), `LMState` (ABC; defines `logp_next`, `eos`, `__rshift__`, `__call__`, `greedy_decode`, `sample_decode`)
 - `transduction/lm/ngram.py` — `ByteNgramLM`, `CharNgramLM` (lightweight n-gram LMs for testing)
 - `transduction/lm/statelm.py` — `StateLM`, `TokenizedLLM`, `load_model_by_name`
   - Wraps HuggingFace causal LMs with KV-cache-based incremental decoding
@@ -89,13 +90,14 @@ Eliminated deps (previously external, now inlined):
 - `arsenal` — `Integerizer`, `colors`, `memoize`, `timelimit`, `timeit`, `sample`, `set_memory_limit`, `memory_limit` inlined into `util.py`
 - `genlm` — `get_byte_vocab` replaced with local `decode_hf_tokenizer`
 - `tokenization` — `StateLM`, `LazyProb`, `logsumexp` all copied/inlined
+- `LogpNext` (formerly in `lm/base.py`) — replaced by `LogDistr` in `util.py`
 
 ## Test Status
 
 - `test_general.py`: 353 passed, 0 skipped
 - `test_finite.py`: 119 passed
 - `test_enumeration.py`: 55 passed
-- `test_transduced.py`: 46 passed
+- `test_transduced.py`: 81 passed
 - `test_fst.py`: 57 passed
 - `test_push_labels.py`: 35 passed
 - `test_lazy.py`: 100 passed
@@ -105,7 +107,7 @@ Eliminated deps (previously external, now inlined):
 - `test_ptb_nltk.py`: 4 passed
 - `test_make_total.py`: 3 passed
 - `test_statelm_kv_cache.py`: 3 passed
-- **Total: 846 tests, 0 skipped**
+- **Total: 881 tests, 0 skipped**
 - `test_general.py` tests the **general-case** algorithms (handle infinite quotients/remainders):
   NonrecursiveDFADecomp, TruncatedIncrementalDFADecomp, PeekabooState, PeekabooNonrecursive,
   DirtyPeekaboo, RustDecomp, RustDirtyState, RustDirtyPeekaboo.
