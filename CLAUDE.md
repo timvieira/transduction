@@ -78,7 +78,6 @@ Visualization / benchmarking (notebooks, `benchmark/`):
 
 Test-only deps:
 - `pytest` — test runner
-- `genparse` — EarleyLM grammar-based LM (used in `test_enumeration.py` small tests)
 
 Optional deps:
 - `pynini` — PTB tokenizer FST construction (`applications/ptb.py`)

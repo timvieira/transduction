@@ -3,7 +3,7 @@
 branch = True
 
 include =
-    genparse/*
+    transduction/*
 
 [report]
 # Regexes for lines to exclude from consideration

@@ -104,6 +104,12 @@ for symbol, decomp in decomps.items():
 
 Peekaboo supports incremental extension via the `>>` operator, reusing computation across decoding steps.
 
+### Rich notebook display
+
+`TransducedState` provides rich HTML display in Jupyter notebooks, showing the particle table, DFA states, and per-symbol Q/R decompositions:
+
+<p align="center"><img src="images/transduced_state_repr.png" alt="TransducedState rich notebook display" width="700"></p>
+
 ### Rust backend
 
 Drop-in replacements for the Python algorithms:
@@ -149,7 +155,7 @@ sample = sampler.sample(max_length=50)
 | `NonrecursiveDFADecomp` | `dfa_decomp_nonrecursive.py` | No | Clean reference; rebuilds from scratch each call |
 | `TruncatedIncrementalDFADecomp` | `dfa_decomp_incremental_truncated.py` | Yes | Incremental DFA decomp with target-buffer truncation and dirty-state tracking |
 | `PeekabooState` | `peekaboo_incremental.py` | Yes | **Recommended.** Batches all next-symbol decompositions; truncation ensures termination |
-| `Peekaboo` | `peekaboo_nonrecursive.py` | No | Simpler peekaboo variant without `>>` |
+| `Peekaboo` | `peekaboo_nonrecursive.py` | No | Non-incremental peekaboo |
 | `RustDecomp` | `rust_bridge.py` | No | Rust generic decomposition |
 | `DirtyPeekaboo` | `peekaboo_dirty.py` | Yes | Dirty-state incremental peekaboo |
 | `RustDirtyState` | `rust_bridge.py` | Yes | Rust incremental decomposition with dirty-state tracking |
@@ -159,6 +165,29 @@ sample = sampler.sample(max_length=50)
 
 - **Autoregressive decoding (token by token):** Use `RustDirtyPeekaboo` or `RustDirtyState` for best performance, or `PeekabooState` / `DirtyPeekaboo` (Python) if the Rust extension is unavailable. The dirty-state variants persist DFA state across decoding steps, avoiding redundant recomputation.
 - **One-shot decomposition:** Use `RustDecomp` or `Precover`.
+
+## Performance
+
+### PTB tokenizer FST (296 states, 23.7K arcs)
+
+End-to-end `TransducedLM` throughput on WikiText test set (850 symbols):
+
+| Mode | Total | Throughput | Speedup |
+|------|-------|------------|---------|
+| Dirty-state (incremental, Rust) | 1.5 s | **558 sym/sec** | **15x** |
+| Batch (rebuild each step) | 23.4 s | 36 sym/sec | 1x |
+
+Dirty-state persistence re-expands only dirty/border states each step, giving a 15x aggregate speedup.
+
+Per-step breakdown (CharNgramLM + PTB FST, K=20): avg **0.17 s/step** over 45 symbols (range: 31–411 ms).
+
+### BPE FST (GPT-2 tokenizer)
+
+The BPE FST constructed from GPT-2's ~50K-token vocabulary is a stress test for memory and decomposition speed. See `notes/bpe-lm-benchmark.ipynb` for TransducedLM benchmarks on subsampled BPE vocabularies.
+
+### Rust acceleration
+
+The Rust backend (`RustDirtyPeekaboo`) provides 3–25x speedups over Python for decomposition and is the default for `TransducedLM`.
 
 ## Project structure
 
@@ -183,6 +212,7 @@ transduction/                Python package
   prioritized_lazy_incremental.py  PrioritizedLazyIncremental (finite-language, heuristic BFS)
   viz.py                     Visualization/display utilities for automata
   rust_bridge.py             Python <-> Rust conversion layer
+  util.py                    Shared utilities: Integerizer, LogVector, LogDistr, logsumexp, memoize, etc.
   examples.py                Example FSTs for testing
   applications/              Application-specific FST builders
     bpe.py                   BPE WFST builder (bpe_wfst)
@@ -193,6 +223,8 @@ transduction/                Python package
     ngram.py                 ByteNgramLM, CharNgramLM (lightweight n-gram LMs)
     statelm.py               StateLM: incremental LM state with KV caching
     transduced.py            TransducedLM: pushforward of an inner LM through an FST
+    fused_transduced.py      FusedTransducedLM: single-pass fused decomposition + LM search
+    reference_transduced.py  ReferenceTransducedLM: exact ground-truth oracle (finite FSTs only)
 
 crates/transduction-core/    Rust acceleration (PyO3)
   src/
@@ -207,14 +239,18 @@ crates/transduction-core/    Rust acceleration (PyO3)
 
 tests/                       Test suite
   test_general.py            General-case decomposition correctness (9 implementations)
-  test_enumeration.py        Enumeration + BPE-scale integration tests
-  test_push_labels.py        Push-label tests
-  test_transduced.py         Transduced LM tests
   test_finite.py             Finite-language-only algorithm tests
+  test_fst.py                FST method tests (57 tests)
+  test_enumeration.py        Enumeration + BPE-scale integration tests
+  test_transduced.py         Transduced LM tests
+  test_push_labels.py        Push-label tests
   test_lazy.py               Lazy automaton tests
+  test_lazy_peekaboo_dfa.py  Rust lazy DFA tests (23 tests)
+  test_is_functional.py      Functionality tests (26 tests)
   test_ngram.py              N-gram LM tests
   test_ptb_nltk.py           PTB tokenizer tests
   test_statelm_kv_cache.py   StateLM KV cache tests
+  test_make_total.py         FST totalization tests (3 tests)
 reports/                     Algorithm analysis and benchmarks
 ```
 
@@ -235,7 +271,6 @@ All general-case algorithms terminate on all test inputs.
 
 ### Dependencies for full test suite
 
-- `genparse` — required for grammar-based LM tests in `test_enumeration.py`
 - `transformers` — required for GPT-2 BPE-scale tests
 
 ## Built-in examples

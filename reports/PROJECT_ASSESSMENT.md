@@ -100,11 +100,45 @@ Users don't need to understand precovers, peekaboo, or dirty states. The
 `TransducedState` and `FusedTransducedState` support rich notebook display
 via `_repr_html_` with unified visualization.
 
+### 6. Testing Strategy for TransducedLM
+
+The `TransducedLM` tests use a four-level cross-validation pyramid, where each
+level provides independent verification:
+
+1. **Hand-computed exact values** — `FiniteLM` + acyclic FSTs where the
+   pushforward can be computed by hand. With `FiniteLM`, zero-probability
+   transitions are pruned, so beam-sum BFS terminates with the full support;
+   there is no approximation. Results must match brute-force enumeration to
+   1e-10. (Tests: `TestFiniteLMExact`)
+
+2. **Brute-force enumeration** — `fst.relation()` enumerates all source/target
+   pairs up to a bounded length. `brute_force_pushforward()` sums inner LM
+   probabilities over all source preimages. This is completely independent of
+   Precover, Peekaboo, or any decomposition algorithm. (Tests:
+   `test_brute_force_comparison`, `test_brute_force_multi_state`)
+
+3. **Oracle cross-validation** — `ReferenceTransducedLM` computes exact
+   transduced probabilities by enumerating Q/R languages via Precover on
+   finite-relation FSTs. `TransducedLM` and `FusedTransducedLM` are both
+   validated against this oracle. (Tests: `TestReferenceTransducedLM`,
+   `test_reference_vs_transduced`, `test_reference_vs_fused`)
+
+4. **Analytical closed-form** — `delete_b` with `TinyLM` (memoryless:
+   P(a)=0.6, P(b)=0.3, P(EOS)=0.1) has infinite quotients, yet the
+   pushforward has a closed-form: P(next='A' | any prefix) = 6/7,
+   P(EOS | any prefix) = 1/7, by the negative binomial series. This tests
+   correctness on infinite-quotient FSTs where brute-force enumeration cannot
+   reach. (Tests: `TestDeleteBExact`)
+
+**Structural invariants** are also tested: normalization (probabilities sum to
+1), incremental consistency (`>>` matches fresh decomposition), path recovery,
+and carry-forward prefix-domination regression tests.
+
 ---
 
 ## Open Issues
 
-### Medium: No Batched LM Inference
+### Medium: No Batched LM Inference (#7)
 
 `TransducedLM` processes one sequence at a time. The LM state advance
 (`lm_state >> x`) consumes 30-40% of `_compute_logp_next` time. Batching
@@ -158,7 +192,7 @@ with GPT-2's tuple caches but will silently corrupt results with modern
 | Item | Severity | Location | Effort |
 |------|----------|----------|--------|
 | DirtyPeekaboo non-monotonic targets (#5) | Medium | `rust_bridge.py`, `peekaboo.rs` | Medium |
-| No batched LM calls | Medium | `lm/transduced.py` | Medium |
+| No batched LM calls (#7) | Medium | `lm/transduced.py` | Medium |
 | StateLM KV cache with DynamicCache (#1) | Low | `lm/statelm.py` | Small |
 | K/max_expansions coupling undocumented | Low | `lm/transduced.py` | Small |
 | No type annotations | Medium | Public API modules | Large |

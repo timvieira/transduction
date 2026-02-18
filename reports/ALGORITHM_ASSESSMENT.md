@@ -183,7 +183,7 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 
 **LM integration:** `torch`, `transformers`
 
-**Test-only:** `pytest`, `genparse`
+**Test-only:** `pytest`
 
 **Optional:** `pynini` (PTB FST construction), `nltk` (PTB testing), `datasets` (WikiText), `matplotlib` (notebooks/benchmarks)
 
