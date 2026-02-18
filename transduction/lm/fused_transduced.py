@@ -135,7 +135,8 @@ class _FusedSearch:
             self.scores.logaddexp(q_sym, item.log_weight)
             # Q carry-forward: no prefix check needed (not expanded).
             if has_trunc:
-                self._add_carry_sentinel_checked(q_sym, item)
+                sentinel = Particle(None, item.lm_state, item.log_weight, item.source_path)
+                self._add_carry_q(q_sym, sentinel)
             else:
                 self._add_carry_q(q_sym, item)
 
