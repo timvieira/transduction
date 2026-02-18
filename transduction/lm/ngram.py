@@ -21,7 +21,8 @@ import numpy as np
 from collections import Counter
 from functools import cached_property
 
-from transduction.lm.base import LM, LMState, LogpNext
+from transduction.lm.base import LM, LMState
+from transduction.util import LogDistr
 
 
 # ===========================================================================
@@ -70,7 +71,7 @@ class NgramState(LMState):
 
     @property
     def p_next(self):
-        return LogpNext({k: np.exp(v) for k, v in self.logp_next.items()})
+        return LogDistr({k: np.exp(v) for k, v in self.logp_next.items()})
 
     def path(self):
         """Recover the full sequence of tokens from the history."""
@@ -126,14 +127,14 @@ class ByteNgramLM(LM):
         self._uniform = np.full(256, np.log(1.0 / 256))
 
     def _logp_next(self, context):
-        """Return LogpNext for a given context tuple."""
+        """Return LogDistr for a given context tuple."""
         # Try full context, then back off to shorter contexts
         for start in range(len(context) + 1):
             ctx = context[start:]
             if ctx in self._tables:
                 lp = self._tables[ctx]
-                return LogpNext({bytes([i]): float(lp[i]) for i in range(256)})
-        return LogpNext({bytes([i]): float(self._uniform[i]) for i in range(256)})
+                return LogDistr({bytes([i]): float(lp[i]) for i in range(256)})
+        return LogDistr({bytes([i]): float(self._uniform[i]) for i in range(256)})
 
     def initial(self):
         return NgramState(self, (), 0.0)
@@ -280,13 +281,13 @@ class CharNgramLM(LM):
         self._uniform = {s: np.log(1.0 / V) for s in self.alphabet}
 
     def _logp_next(self, context):
-        """Return LogpNext for a given context tuple."""
+        """Return LogDistr for a given context tuple."""
         # Try full context, then back off to shorter contexts
         for start in range(len(context) + 1):
             ctx = context[start:]
             if ctx in self._tables:
-                return LogpNext(self._tables[ctx])
-        return LogpNext(self._uniform)
+                return LogDistr(self._tables[ctx])
+        return LogDistr(self._uniform)
 
     def initial(self):
         return CharNgramState(self, (), 0.0)

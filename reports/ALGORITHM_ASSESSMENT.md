@@ -66,7 +66,7 @@ quotients. Tested separately in `test_finite.py`.
 
 | Class | File | Description |
 |-------|------|-------------|
-| `LM` / `LMState` / `LogpNext` | `lm/base.py` | ABCs: `logp_next`, `eos`, `>>`, `__call__`, `greedy_decode`, `sample_decode` |
+| `LM` / `LMState` / `LogDistr` | `lm/base.py`, `util.py` | ABCs: `logp_next`, `eos`, `>>`, `__call__`, `greedy_decode`, `sample_decode`; `LogDistr` is the immutable log-probability distribution |
 | `ByteNgramLM` / `CharNgramLM` | `lm/ngram.py` | Lightweight n-gram LMs for testing |
 | `StateLM` / `TokenizedLLM` | `lm/statelm.py` | Incremental LM state with KV-cache; wraps HuggingFace causal LMs |
 | `load_model_by_name` | `lm/statelm.py` | Load `'gpt2'`, `'meta-llama/...'`, etc. |
@@ -164,7 +164,7 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 - **`test_finite.py`**: 119 passed
 - **`test_fst.py`**: 57 passed
 - **`test_enumeration.py`**: 55 passed
-- **`test_transduced.py`**: 55 passed
+- **`test_transduced.py`**: 81 passed
 - **`test_push_labels.py`**: 35 passed
 - **`test_is_functional.py`**: 26 passed
 - **`test_lazy_peekaboo_dfa.py`**: 23 passed
@@ -173,7 +173,7 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 - **`test_ptb_nltk.py`**: 4 passed
 - **`test_make_total.py`**: 3 passed
 - **`test_statelm_kv_cache.py`**: 3 passed
-- **Total**: 855 tests across 13 test files, all passing, 0 skipped
+- **Total**: 881 tests across 13 test files, all passing, 0 skipped
 
 ---
 

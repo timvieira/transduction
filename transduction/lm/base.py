@@ -1,58 +1,5 @@
-import numpy as np
 from abc import ABC, abstractmethod
-
-
-class LogpNext:
-    """Dict-backed log-probability distribution over next tokens.
-
-    Supports dict-like access, top-k retrieval, argmax, and sampling.
-    ``items()`` includes all tokens in the distribution (including EOS).
-    ``__getitem__`` returns ``-inf`` for tokens not in the distribution.
-    """
-
-    def __init__(self, scores):
-        self._scores = scores
-
-    def __getitem__(self, token):
-        """Return ``log P(token)``, or ``-inf`` if ``token`` is not in the distribution."""
-        v = self._scores.get(token)
-        return v if v is not None else -np.inf
-
-    def __contains__(self, token):
-        return token in self._scores
-
-    def keys(self):
-        return self._scores.keys()
-
-    def items(self):
-        return self._scores.items()
-
-    def materialize(self, top=None):
-        """Return a dict of ``{token: logp}`` sorted by descending probability.
-
-        If ``top`` is given, return only the top-k entries.
-        """
-        items = sorted(self._scores.items(), key=lambda kv: kv[1], reverse=True)
-        if top is not None:
-            items = items[:int(top)]
-        return dict(items)
-
-    def top(self, K):
-        """Return a dict of the top-K tokens by log-probability."""
-        return self.materialize(top=K)
-
-    def argmax(self):
-        """Return the token with the highest log-probability."""
-        return max(self._scores, key=self._scores.__getitem__)
-
-    def sample(self):
-        """Sample a token from the distribution (proportional to exp(logp))."""
-        toks = list(self._scores.keys())
-        logps = np.array(list(self._scores.values()), dtype=np.float64)
-        logps -= logps.max()
-        probs = np.exp(logps)
-        probs /= probs.sum()
-        return toks[np.random.choice(len(toks), p=probs)]
+from transduction.util import LogDistr
 
 
 class LM(ABC):

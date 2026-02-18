@@ -24,7 +24,8 @@ import numpy as np
 from functools import cached_property
 
 from transduction.fsa import EPSILON
-from transduction.lm.base import LM, LMState, LogpNext
+from transduction.lm.base import LM, LMState
+from transduction.util import LogDistr
 from transduction.precover import Precover
 
 
@@ -97,7 +98,7 @@ class ReferenceTransducedState(LMState):
             scores[self.eos] = float(np.log1p(-p_non_eos)) if p_non_eos < 1 else -np.inf
         else:
             scores[self.eos] = 0.0
-        return LogpNext(scores)
+        return LogDistr(scores)
 
     def __rshift__(self, y):
         if y == self.eos:

@@ -1,9 +1,9 @@
 import pytest
 import numpy as np
-from collections import defaultdict
 
 from transduction import examples
 from transduction.lm.base import LMState
+from transduction.util import LogDistr
 from transduction.enumeration import (
     prioritized_enumeration,
     importance_sampling,
@@ -33,8 +33,8 @@ class SimpleGrammarLM(LMState):
     @property
     def logp_next(self):
         if self._finished:
-            return defaultdict(lambda: float('-inf'), {EOS: 0.0})
-        return defaultdict(lambda: float('-inf'), {
+            return LogDistr({EOS: 0.0})
+        return LogDistr({
             'a': np.log(0.5),
             'b': np.log(0.4),
             'c': np.log(0.1),
@@ -67,15 +67,15 @@ class PalindromeLM(LMState):
     @property
     def logp_next(self):
         if self._stack is None:
-            return defaultdict(lambda: float('-inf'), {EOS: 0.0})
+            return LogDistr({EOS: 0.0})
         if self._stack and self._stack[-1] == 'c':
             # In mirror phase: must output top of stack (symbol before 'c')
             mirror_stack = self._stack[:-1]  # drop the 'c' sentinel
             if not mirror_stack:
-                return defaultdict(lambda: float('-inf'), {EOS: 0.0})
-            return defaultdict(lambda: float('-inf'), {mirror_stack[-1]: 0.0})
+                return LogDistr({EOS: 0.0})
+            return LogDistr({mirror_stack[-1]: 0.0})
         # Still in left half: push phase
-        return defaultdict(lambda: float('-inf'), {
+        return LogDistr({
             'a': np.log(0.5),
             'b': np.log(0.4),
             'c': np.log(0.1),

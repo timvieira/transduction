@@ -1,4 +1,5 @@
-from transduction.lm.base import LM, LMState, LogpNext
+from transduction.lm.base import LM, LMState
+from transduction.util import LogVector, LogDistr
 from transduction.lm.ngram import ByteNgramLM, CharNgramLM
 from transduction.lm.statelm import StateLM, TokenizedLLM, load_model_by_name
 from transduction.lm.transduced import TransducedLM

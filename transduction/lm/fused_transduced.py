@@ -38,8 +38,8 @@ import heapq
 import numpy as np
 from collections import defaultdict
 
-from transduction.lm.base import LM, LMState, LogpNext
-from transduction.util import logsumexp
+from transduction.lm.base import LM, LMState
+from transduction.util import logsumexp, LogVector
 from transduction.lm.transduced import Particle, _select_top_k
 from transduction.rust_bridge import to_rust_fst
 
@@ -64,7 +64,7 @@ class _FusedSearch:
         tlm._rust_helper.new_step(target_u32)
 
         # Search accumulators
-        self.scores = defaultdict(lambda: -np.inf)   # symbol -> log-weight
+        self.scores = LogVector()                     # symbol -> log-weight
         self.eos_score = -np.inf
         self.carry_forward = defaultdict(list)        # symbol -> [Particle]
 
@@ -109,7 +109,7 @@ class _FusedSearch:
         r_syms = [inv[s] for s in result.remainder_syms]
 
         if q_sym is not None:
-            self.scores[q_sym] = np.logaddexp(self.scores[q_sym], item.log_weight)
+            self.scores.logaddexp(q_sym, item.log_weight)
             carry(q_sym, item)
 
         if result.is_preimage or r_syms:
@@ -120,7 +120,7 @@ class _FusedSearch:
 
             for y in r_syms:
                 eos_w = item.log_weight + eos_lp
-                self.scores[y] = np.logaddexp(self.scores[y], eos_w)
+                self.scores.logaddexp(y, eos_w)
                 carry(y, item)
 
         return q_sym is not None
@@ -231,8 +231,7 @@ class FusedTransducedState(LMState):
         scores, eos_score, carry_forward = search.search()
 
         scores[self.eos] = eos_score
-        Z = logsumexp(list(scores.values()))
-        self._logp_next_cache = LogpNext({y: raw - Z for y, raw in scores.items()})
+        self._logp_next_cache = scores.normalize()
         self._carry_forward_cache = carry_forward
 
     def _repr_html_(self):

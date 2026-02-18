@@ -3,6 +3,8 @@ import signal
 from functools import partial
 from contextlib import contextmanager
 
+import numpy as np
+
 
 #_______________________________________________________________________________
 # Integerizer (formerly from arsenal)
@@ -200,7 +202,6 @@ def memory_limit(gb):
 
 def logsumexp(arr):
     """Numerically stable log-sum-exp over an array of log values."""
-    import numpy as np
     arr = np.array(arr, dtype=np.float64)
     arr = arr[arr > -np.inf]
     if len(arr) == 0:
@@ -214,11 +215,88 @@ def logsumexp(arr):
 
 
 #_______________________________________________________________________________
+# Sparse log-space mappings: LogVector (mutable) and LogDistr (immutable)
+
+_NEG_INF = float('-inf')
+
+
+class _SparseLogMap(dict):
+    """Dict subclass for sparse mappings in log-space (keys -> log-values).
+
+    Missing keys return ``-inf`` (via ``__missing__``).
+    """
+
+    def __missing__(self, key):
+        return _NEG_INF
+
+    def materialize(self, top=None):
+        """Return a dict of ``{key: value}`` sorted by descending value.
+
+        If ``top`` is given, return only the top-k entries.
+        """
+        items = sorted(self.items(), key=lambda kv: kv[1], reverse=True)
+        if top is not None:
+            items = items[:int(top)]
+        return dict(items)
+
+    def top(self, K):
+        """Return a dict of the top-K entries by value."""
+        return self.materialize(top=K)
+
+    def argmax(self):
+        """Return the key with the highest value."""
+        return max(self, key=self.__getitem__)
+
+    def __repr__(self):
+        name = type(self).__name__
+        n = len(self)
+        if n <= 5:
+            inner = ', '.join(f'{k!r}: {v:.4f}' for k, v in self.items())
+            return f'{name}({{{inner}}})'
+        return f'{name}(n={n})'
+
+
+class LogVector(_SparseLogMap):
+    """Mutable accumulator for sparse log-nonneg-real vectors.
+
+    Replaces the ``defaultdict(lambda: -np.inf)`` + ``logaddexp`` pattern.
+    """
+
+    def logaddexp(self, key, value):
+        """Accumulate: ``self[key] = logaddexp(self[key], value)``."""
+        prev = self.get(key)
+        if prev is None:
+            self[key] = value
+        else:
+            self[key] = np.logaddexp(prev, value)
+
+    def normalize(self):
+        """Return a ``LogDistr`` by subtracting ``logsumexp`` from each entry."""
+        Z = logsumexp(list(self.values()))
+        return LogDistr({k: v - Z for k, v in self.items()})
+
+
+class LogDistr(_SparseLogMap):
+    """Immutable normalized distribution in log-space.
+
+    Supports ``sample()`` but not mutation.
+    """
+
+    def sample(self):
+        """Sample a key proportional to ``exp(value)``."""
+        toks = list(self.keys())
+        logps = np.array(list(self.values()), dtype=np.float64)
+        logps -= logps.max()
+        probs = np.exp(logps)
+        probs /= probs.sum()
+        return toks[np.random.choice(len(toks), p=probs)]
+
+
+#_______________________________________________________________________________
 # sample (formerly from arsenal.maths)
 
 def sample(w, size=None, u=None):
     """Draw samples from an (unnormalized) discrete distribution via inverse CDF."""
-    import numpy as np
     c = np.cumsum(w)
     if u is None:
         u = np.random.uniform(0, 1, size=size)

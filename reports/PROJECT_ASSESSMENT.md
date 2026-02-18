@@ -1,6 +1,6 @@
 # Project Assessment: Delivering on the Transduced LM Mission
 
-## 2026-02-16
+## 2026-02-17
 
 ---
 
@@ -18,9 +18,10 @@ as K -> inf). Quotient states provide exact marginalization over infinitely many
 source continuations — the key variance reduction mechanism. All decomposition
 implementations now support the `>>` operator via `DecompositionResult.__rshift__`.
 Rich notebook display (`_repr_html_`) enables interactive exploration.
-Test coverage is comprehensive: 855 tests across 13 files, all passing with
-0 skipped. The remaining path to production readiness: batch LM calls for
-GPU utilization.
+The LM integration layer uses clean log-space types (`LogVector`, `LogDistr`)
+replacing ad-hoc patterns. Test coverage is comprehensive: 881 tests across
+13 files, all passing with 0 skipped. The remaining path to production
+readiness: batch LM calls for GPU utilization.
 
 ---
 
@@ -72,7 +73,7 @@ is self-contained with no pollution of core algorithms.
 
 ### 4. Solid Test Infrastructure
 
-- **855 tests** across 13 test files, all passing, 0 skipped
+- **881 tests** across 13 test files, all passing, 0 skipped
 - Parametrized cross-algorithm validation catches disagreements automatically
 - Reference implementations (`Precover`) serve as correctness oracles
 - Real-model integration tests (GPT-2 + BPE FST in `test_enumeration.py`)
@@ -110,6 +111,13 @@ via `_repr_html_` with unified visualization.
 multiple source-symbol expansions into a single forward pass would improve
 GPU utilization for neural LMs.
 
+### Medium: DirtyPeekaboo Non-Monotonic Target Sequences (#5)
+
+`RustDirtyPeekabooDecomp.decompose_for_beam` produces incorrect results when
+called with a shorter target after a longer one (e.g., tree-branching decode).
+The dirty-state logic assumes monotonic forward extension; backward steps
+cause stale state to corrupt the decomposition.
+
 ### Low: K and max_expansions Must Scale Together
 
 Beam-sum consistency requires both `K` (carry-forward budget) and
@@ -117,6 +125,12 @@ Beam-sum consistency requires both `K` (carry-forward budget) and
 defaults (K=100, max_expansions=1000) work for most FSTs, but
 high-branching-factor FSTs may need a larger ratio. This coupling is not
 documented in the user-facing API.
+
+### Low: StateLM KV Cache Sharing with DynamicCache (#1)
+
+`StateLM` shares `past_key_values` between parent and child states. Works
+with GPT-2's tuple caches but will silently corrupt results with modern
+`DynamicCache`-based models (transformers >= 4.40).
 
 ### Low: No Type Annotations on Public API
 
@@ -137,27 +151,17 @@ documented in the user-facing API.
 | Applications | 3 | ~580 | BPE, PTB, WikiText |
 | Utilities | 6 | ~3,320 | viz, examples, lazy, util, rust_bridge, enumeration |
 | **Total Python** | **31** | **~11,480** | |
-| Tests | 13 | ~4,820 | 855 tests |
+| Tests | 13 | ~4,820 | 881 tests |
 
 ### Technical Debt
 
 | Item | Severity | Location | Effort |
 |------|----------|----------|--------|
+| DirtyPeekaboo non-monotonic targets (#5) | Medium | `rust_bridge.py`, `peekaboo.rs` | Medium |
 | No batched LM calls | Medium | `lm/transduced.py` | Medium |
+| StateLM KV cache with DynamicCache (#1) | Low | `lm/statelm.py` | Small |
 | K/max_expansions coupling undocumented | Low | `lm/transduced.py` | Small |
 | No type annotations | Medium | Public API modules | Large |
-
-### Recently Resolved
-
-| Item | Date | Notes |
-|------|------|-------|
-| `>>` not supported by all implementations | 2026-02-16 | Added `DecompositionResult.__rshift__`; 0 skipped in test_general.py |
-| No end-to-end example | 2026-02-16 | Added `examples/hello_world.py`: n-gram LM + lowercase FST + TransducedLM decode |
-| Carry-forward prefix-domination bug | 2026-02-16 | Fixed in TransducedLM and FusedTransducedLM; regression tests added |
-| fst.py low test coverage (59%) | 2026-02-16 | Raised to 99% with 57 tests in test_fst.py |
-| TransducedLM used Python decomposition | 2026-02-16 | Now defaults to Rust `RustPeekabooState` |
-| No rich notebook display | 2026-02-16 | `_repr_html_` on TransducedState and FusedTransducedState |
-| Precover mixed into fst.py | 2026-02-16 | Split into dedicated `precover.py` module |
 
 ---
 
@@ -174,31 +178,26 @@ documented in the user-facing API.
    `lm_state >> x` calls into a single forward pass. This is the biggest
    remaining performance win for GPU-backed LMs.
 
-3. ~~**Write a "hello world" example.**~~ Done. See `examples/hello_world.py`.
-
 ### Phase 2: Make It Usable by Others
 
 **Goal:** A new contributor can understand and extend the library.
 
-5. ~~**Fix multi-character symbol handling.**~~ Done. All output buffers
-   now use tuples of symbols; `FSA.language()` always returns tuples.
-
-6. **Add type annotations to public API.** Start with `base.py`, `fst.py`,
+3. **Add type annotations to public API.** Start with `base.py`, `fst.py`,
    `lm/base.py`, `lm/transduced.py`.
 
-7. **Benchmark regression tracking.** Run PTB benchmarks in CI, store timing
+4. **Benchmark regression tracking.** Run PTB benchmarks in CI, store timing
    in `output/`, alert on regressions > 20%.
 
 ### Phase 3: Scale (ongoing)
 
-8. **FusedTransducedLM evaluation.** Benchmark against standard TransducedLM
+5. **FusedTransducedLM evaluation.** Benchmark against standard TransducedLM
    on GPT-2 + BPE to determine when the fused single-pass approach wins.
 
-9. **Streaming / multi-sequence support.** Enable batched inference across
+6. **Streaming / multi-sequence support.** Enable batched inference across
    multiple decode sequences (e.g., for beam search at the TransducedLM level).
 
-10. **FST construction toolkit.** Add utilities for regex-to-FST,
-    grammar-to-FST without requiring pynini (GPL dependency risk).
+7. **FST construction toolkit.** Add utilities for regex-to-FST,
+   grammar-to-FST without requiring pynini (GPL dependency risk).
 
 ---
 
@@ -209,15 +208,15 @@ documented in the user-facing API.
 | **Algorithms** | A | 11 implementations, well-tested, genuine innovations (Peekaboo, dirty-state) |
 | **Performance** | A | 25x Rust acceleration, 0.1ms per-step dirty-state; Rust now default backend |
 | **Architecture** | A- | Clean layering, no circular deps, optional Rust, self-contained LM module |
-| **Testing** | A+ | 855 tests across 13 files, 0 skipped; fst.py at 99% coverage; carry-forward regression tests |
+| **Testing** | A+ | 881 tests across 13 files, 0 skipped; fst.py at 99% coverage; carry-forward regression tests |
 | **End-to-End Product** | A- | Particle-based beam-sum inference; quotient exact marginalization; rich notebook display |
 | **API/Packaging** | A- | Exports correct; Rust default; `_repr_html_`; all impls support `>>`; end-to-end example |
 | **Documentation** | B- | Core concepts documented; function-level docs still sparse |
 
 **Bottom line:** The hard parts — fast, correct FST decomposition AND a working
-`TransducedLM` with particle-based approximate inference — are done. Multi-character
-symbol support is complete (tuple-based buffers throughout). TransducedLM now defaults
-to Rust acceleration. All decomposition implementations now support the `>>` operator
-via `DecompositionResult.__rshift__`, eliminating test skips. Test coverage stands at
-855 tests with 0 skipped. The remaining work is performance (batched LM calls) and
+`TransducedLM` with particle-based approximate inference — are done. The LM
+integration layer now uses clean log-space types (`LogVector` for mutable
+accumulation, `LogDistr` for immutable distributions) replacing the ad-hoc
+`LogpNext` class and `defaultdict` pattern. Test coverage stands at 881 tests
+with 0 skipped. The remaining work is performance (batched LM calls) and
 usability (types, benchmarks).

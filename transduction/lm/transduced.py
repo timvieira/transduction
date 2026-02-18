@@ -37,8 +37,8 @@ import numpy as np
 from collections import defaultdict
 
 from transduction import EPSILON
-from transduction.lm.base import LM, LMState, LogpNext
-from transduction.util import logsumexp
+from transduction.lm.base import LM, LMState
+from transduction.util import logsumexp, LogVector
 from transduction.viz import _format_nfa_set, render_particles_html
 
 # Default incremental decomposition (Rust backend).
@@ -187,7 +187,7 @@ class TransducedState(LMState):
                 resume_of.setdefault(state, set()).add(y)
 
         # --- Accumulators ---
-        scores = defaultdict(lambda: -np.inf)
+        scores = LogVector()
         carry_forward = defaultdict(list)   # y -> [particle, ...]
 
         def _update(particle):
@@ -201,9 +201,9 @@ class TransducedState(LMState):
             q_syms = q_of.get(d, set())
             r_syms = r_of.get(d, set())
 
-            # Quotient: 
+            # Quotient:
             for y in q_syms:
-                scores[y] = np.logaddexp(scores[y], w)
+                scores.logaddexp(y, w)
 
             eos_lp = particle.lm_state.logp_next[self.tlm.inner_lm.eos]
 
@@ -212,11 +212,11 @@ class TransducedState(LMState):
 
                 # preimage (EOS)
                 if d in self._peekaboo_state.preimage_stops:
-                    scores[self.eos] = np.logaddexp(scores[self.eos], eos_w)
+                    scores.logaddexp(self.eos, eos_w)
 
                 # Remainder
                 for y in r_syms - q_syms:
-                    scores[y] = np.logaddexp(scores[y], eos_w)
+                    scores.logaddexp(y, eos_w)
 
             # Carry forward at any relevant state (Q, R, or resume frontier).
             for y in q_syms | r_syms | resume_of.get(d, set()):
@@ -250,9 +250,7 @@ class TransducedState(LMState):
         while queue:
             _update(heapq.heappop(queue))
 
-        Z = logsumexp(list(scores.values()))
-
-        self._logp_next_cache = LogpNext({y: raw - Z for y, raw in scores.items()})
+        self._logp_next_cache = scores.normalize()
         self._carry_forward_cache = carry_forward
 
     def _repr_html_(self):
