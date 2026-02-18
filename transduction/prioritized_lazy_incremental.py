@@ -20,15 +20,13 @@ class Trie:
     """Interned trie of symbol paths.  O(1) extend, O(1) depth lookup.
 
     Each path is represented as an integer node ID.  ``extend(node, symbol)``
-    returns the child ID, allocating it on first access.  Strings are reconstructed
+    returns the child ID, allocating it on first access.  Tuples are reconstructed
     only when needed (e.g., to build the output FSA), not in the inner loop.
 
     Shared across ``>>`` steps alongside ``FrontierGraph``.
     """
 
-    def __init__(self, empty, extend):
-        self._extend = extend
-        self._empty = empty
+    def __init__(self):
         self._children = {}    # (node_id, symbol) -> child_id
         self._parent = [None]  # node_id -> (parent_id, symbol) | None
         self._depth = [0]      # node_id -> depth
@@ -61,18 +59,15 @@ class Trie:
             cur = self._parent[cur][0]
         return result
 
-    def to_string(self, node):
-        """Reconstruct the string for *node* by walking the parent chain."""
+    def to_tuple(self, node):
+        """Reconstruct the tuple for *node* by walking the parent chain."""
         symbols = []
         cur = node
         while self._parent[cur] is not None:
             cur, sym = self._parent[cur]
             symbols.append(sym)
         symbols.reverse()
-        result = self._empty
-        for sym in symbols:
-            result = self._extend(result, sym)
-        return result
+        return tuple(symbols)
 
 
 class FrontierGraph:
@@ -198,8 +193,7 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
         state.remainder   # FSA
     """
 
-    def __init__(self, fst, target=None, parent=None, *, empty_source='',
-                 empty_target='', extend=lambda x, y: x + y,
+    def __init__(self, fst, target=None, parent=None, *,
                  logp_gap=None,
                  max_steps=float('inf'), max_beam=float('inf'),
                  heuristic=BFSHeuristic()):
@@ -208,15 +202,12 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
         if parent is None:
             self.source_alphabet = fst.A - {EPSILON}
             self.target_alphabet = fst.B - {EPSILON}
-            self.empty_source = empty_source
-            self.empty_target = empty_target
-            self.extend = extend
             self.logp_gap = logp_gap
             self.max_steps = max_steps
             self.max_beam = max_beam
             self.heuristic = heuristic
-            self._target_trie = Trie(empty_target, extend)
-            self._source_trie = Trie(empty_source, extend)
+            self._target_trie = Trie()
+            self._source_trie = Trie()
             self._graph = FrontierGraph(fst, self._target_trie)
             self._all_input_universal = check_all_input_universal(fst)
             self._ip_universal_states = (
@@ -228,9 +219,6 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
         else:
             self.source_alphabet = parent.source_alphabet
             self.target_alphabet = parent.target_alphabet
-            self.empty_source = parent.empty_source
-            self.empty_target = parent.empty_target
-            self.extend = parent.extend
             self.logp_gap = parent.logp_gap
             self.max_steps = parent.max_steps
             self.max_beam = parent.max_beam
@@ -647,11 +635,11 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
 
     @property
     def quotient(self):
-        return FSA.from_strings(self._source_trie.to_string(xs) for xs in self._quotient)
+        return FSA.from_strings(self._source_trie.to_tuple(xs) for xs in self._quotient)
 
     @property
     def remainder(self):
-        return FSA.from_strings(self._source_trie.to_string(xs) for xs in self._remainder)
+        return FSA.from_strings(self._source_trie.to_tuple(xs) for xs in self._remainder)
 
     def __rshift__(self, y):
         if y not in self.target_alphabet:

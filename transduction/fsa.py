@@ -7,12 +7,23 @@ epsilon removal, and language equivalence testing.  Also includes Graphviz
 visualization and lazy (on-demand) variants via :mod:`transduction.lazy`.
 """
 
-from transduction.util import Integerizer
+from __future__ import annotations
+
+import builtins
 from collections import defaultdict, deque
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from functools import lru_cache
+from typing import Any, ClassVar, Generic, TypeVar, overload
+
+from transduction.util import Integerizer
+
+A = TypeVar('A')
+B = TypeVar('B')
+
+EPSILON = eps = ''
 
 
-def dfs(Ps, arcs):
+def dfs(Ps: Iterable[Any], arcs: Callable[[Any], Iterable[tuple[A, Any]]]) -> FSA[A]:
     """Build an FSA by depth-first exploration from seed states.
 
     Args:
@@ -23,7 +34,7 @@ def dfs(Ps, arcs):
         An FSA whose states and arcs are the DFS-reachable closure of ``Ps``.
     """
     stack = list(Ps)
-    m = FSA()
+    m: FSA[A] = FSA()
     for P in Ps: m.add_start(P)
     while stack:
         P = stack.pop()
@@ -35,13 +46,13 @@ def dfs(Ps, arcs):
     return m
 
 
-class frozenset(frozenset):
+class frozenset(builtins.frozenset):  # type: ignore[type-arg]
     "Same as frozenset, but with a nicer printing method."
-    def __repr__(self):
+    def __repr__(self) -> str:
         return '{%s}' % (','.join(str(x) for x in self))
 
 
-class FSA:
+class FSA(Generic[A]):
     """Finite-state automaton (acceptor) over a symbolic alphabet.
 
     An FSA is a directed graph whose arcs carry single labels.  A path
@@ -58,10 +69,18 @@ class FSA:
         states: Set of all states.
         start: Set of initial states.
         stop: Set of final (accepting) states.
-        syms: Set of arc labels observed.
+        syms: Set of arc labels observed (excludes EPSILON).
     """
 
-    def __init__(self, start=(), arcs=(), stop=()):
+    one: ClassVar[FSA[Any]]
+    zero: ClassVar[FSA[Any]]
+
+    def __init__(
+        self,
+        start: Iterable[Any] = (),
+        arcs: Iterable[tuple[Any, A, Any]] = (),
+        stop: Iterable[Any] = (),
+    ) -> None:
         """Create an FSA, optionally populating it from iterables.
 
         Args:
@@ -69,37 +88,39 @@ class FSA:
             arcs: Iterable of ``(src, label, dst)`` tuples.
             stop: Iterable of final (accepting) states.
         """
-        self.states = set()
-        self.start = set()
-        self.stop = set()
-        self.syms = set()
-        self.edges = defaultdict(lambda: defaultdict(set))
+        self.states: set[Any] = set()
+        self.start: set[Any] = set()
+        self.stop: set[Any] = set()
+        self.syms: set[A] = set()
+        self.edges: defaultdict[Any, defaultdict[Any, set[Any]]] = defaultdict(lambda: defaultdict(set))
         # use the official methods for the constructor's initialization
         for i in start: self.add_start(i)
         for i in stop: self.add_stop(i)
         for i,a,j in arcs: self.add_arc(i,a,j)
 
-    def materialize(self):
+    def materialize(self) -> FSA[A]:
         # the FSA is already materialized
         return self
 
-    def lazy(self):
+    def lazy(self) -> Any:
         from transduction.lazy import LazyWrapper
-        return LazyWrapper(self)
+        return LazyWrapper(self)  # type: ignore[no-untyped-call]
 
-    def as_tuple(self):
+    def as_tuple(self) -> tuple[Any, ...]:
         return (frozenset(self.states),
                 frozenset(self.start),
                 frozenset(self.stop),
                 frozenset(self.arcs()))
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self.as_tuple())
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, FSA):
+            return NotImplemented
         return self.as_tuple() == other.as_tuple()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         x = ['{']
         for s in self.states:
             ss = f'{s}'
@@ -113,12 +134,12 @@ class FSA:
         x.append('}')
         return '\n'.join(x)
 
-    def _repr_mimebundle_(self, *args, **kwargs):
+    def _repr_mimebundle_(self, *args: Any, **kwargs: Any) -> Any:
         if not self.states:
             return {'text/html': '<center>∅</center>'}
         return self.graphviz()._repr_mimebundle_(*args, **kwargs)
 
-    def graphviz(self, fmt_node=lambda x: x, sty_node=lambda x: {}, fmt_edge=lambda i,a,j: 'ε' if a == EPSILON else a):
+    def graphviz(self, fmt_node: Callable[[Any], Any] = lambda x: x, sty_node: Callable[[Any], dict[str, str]] = lambda x: {}, fmt_edge: Callable[[Any, Any, Any], Any] = lambda i,a,j: 'ε' if a == EPSILON else a) -> Any:
         """Return a Graphviz digraph for visualization.
 
         Optional callbacks customize rendering: ``fmt_node(state)`` formats
@@ -126,48 +147,64 @@ class FSA:
         attributes, and ``fmt_edge(i, a, j)`` formats edge labels.
         """
         from transduction.viz import _render_graphviz
-        return _render_graphviz(
+        return _render_graphviz(  # type: ignore[no-untyped-call]
             self.states, self.start, self.stop,
             arc_iter=self.arcs,
             fmt_node=fmt_node, fmt_edge=fmt_edge, sty_node=sty_node,
         )
 
-    def D(self, x):
+    def D(self, x: A) -> FSA[A]:
         """Left derivative: the language of strings ``y`` such that ``x·y`` is accepted."""
         e = self.epsremove()
-        m = FSA(start = set(e.start), stop = set(e.stop))
+        m: FSA[A] = FSA(start = set(e.start), stop = set(e.stop))
         for i,a,j in e.arcs():
             if i in e.start and a == x:
-                m.add(i,eps,j)
+                m._add_eps(i, j)
             else:
                 m.add(i,a,j)
         return m
 
-    def add(self, i, a, j):
+    def _add_eps(self, i: Any, j: Any) -> None:
+        """Add an epsilon arc from ``i`` to ``j`` (internal helper)."""
+        self.edges[i][EPSILON].add(j)
+        self.states.add(i)
+        self.states.add(j)
+
+    def add(self, i: Any, a: A, j: Any) -> FSA[A]:
         """Add arc from state ``i`` to state ``j`` with label ``a``. Creates states implicitly."""
         self.edges[i][a].add(j)
-        self.states.add(i); self.syms.add(a); self.states.add(j)
+        self.states.add(i)
+        self.states.add(j)
+        if a != EPSILON:
+            self.syms.add(a)
         return self
 
     add_arc = add
 
-    def add_start(self, i):
+    def add_start(self, i: Any) -> FSA[A]:
         """Mark state ``i`` as an initial state (creates it if needed)."""
         self.start.add(i)
         self.states.add(i)
         return self
 
-    def add_stop(self, i):
+    def add_stop(self, i: Any) -> FSA[A]:
         """Mark state ``i`` as a final (accepting) state (creates it if needed)."""
         self.stop.add(i)
         self.states.add(i)
         return self
 
-    def is_final(self, i):
+    def is_final(self, i: Any) -> bool:
         """Return True if state ``i`` is a final (accepting) state."""
         return i in self.stop
 
-    def arcs(self, i=None, a=None):
+    @overload
+    def arcs(self) -> Iterator[tuple[Any, A, Any]]: ...
+    @overload
+    def arcs(self, i: Any) -> Iterator[tuple[A, Any]]: ...
+    @overload
+    def arcs(self, i: Any, a: A) -> Iterator[Any]: ...
+
+    def arcs(self, i: Any = None, a: Any = None) -> Iterator[Any]:
         """Iterate over arcs.
 
         - ``arcs()`` → yields all ``(i, a, j)`` triples.
@@ -195,13 +232,13 @@ class FSA:
         else:
             raise NotImplementedError()
 
-    def arcs_x(self, i, x):
+    def arcs_x(self, i: Any, x: A) -> set[Any]:
         """Return the set of destination states for arcs ``i --x--> *``."""
         return self.edges[i][x]
 
-    def reverse(self):
+    def reverse(self) -> FSA[A]:
         """Return the reversal: arcs are flipped, start and stop states are swapped."""
-        m = FSA()
+        m: FSA[A] = FSA()
         for i in self.start:
             m.add_stop(i)
         for i in self.stop:
@@ -210,17 +247,17 @@ class FSA:
             m.add(j, a, i)     # pylint: disable=W1114
         return m
 
-    def _accessible(self, start):
+    def _accessible(self, start: set[Any]) -> set[Any]:
         return dfs(start, self.arcs).states
 
-    def accessible(self):
+    def accessible(self) -> set[Any]:
         """Return the set of states reachable from any start state."""
         return self._accessible(self.start)
 
-    def trim(self):
+    def trim(self) -> FSA[A]:
         """Return a copy keeping only states on some start-to-stop path."""
         c = self.accessible() & self.reverse().accessible()
-        m = FSA()
+        m: FSA[A] = FSA()
         for i in self.start & c:
             m.add_start(i)
         for i in self.stop & c:
@@ -230,16 +267,16 @@ class FSA:
                 m.add(i,a,j)
         return m
 
-    def renumber(self):
+    def renumber(self) -> FSA[A]:
         """Return a copy with states relabeled as consecutive integers."""
         return self.rename(Integerizer())
 
-    def rename(self, f):
+    def rename(self, f: Callable[[Any], Any]) -> FSA[A]:
         """Return a new FSA with states relabeled by ``f(state)``.
 
         If ``f`` is not injective, distinct states may merge.
         """
-        m = FSA()
+        m: FSA[A] = FSA()
         for i in self.start:
             m.add_start(f(i))
         for i in self.stop:
@@ -248,9 +285,9 @@ class FSA:
             m.add(f(i), a, f(j))
         return m
 
-    def map_labels(self, f):
+    def map_labels(self, f: Callable[[A], B]) -> FSA[B]:
         "Transform arc labels by applying f to each label."
-        m = FSA()
+        m: FSA[B] = FSA()
         for i in self.start:
             m.add_start(i)
         for i in self.stop:
@@ -259,33 +296,33 @@ class FSA:
             m.add(i, f(a), j)
         return m
 
-    def rename_apart(self, other):
+    def rename_apart(self, other: FSA[A]) -> tuple[FSA[A], FSA[A]]:
         """Rename states of ``self`` and ``other`` so their state sets are disjoint."""
-        f = Integerizer()
+        f: Integerizer[Any] = Integerizer()
         self = self.rename(lambda i: f((0, i)))
         other = other.rename(lambda i: f((1, i)))
         assert self.states.isdisjoint(other.states)
         return (self, other)
 
-    def __mul__(self, other):
+    def __mul__(self, other: FSA[A]) -> FSA[A]:
         """Concatenation: ``self * other`` accepts strings ``xy`` where ``x in self`` and ``y in other``."""
         self, other = self.rename_apart(other)
-        m = FSA(
+        m: FSA[A] = FSA(
             start = self.start,
             stop = other.stop,
         )
         for i in self.stop:
             for j in other.start:
-                m.add(i,eps,j)
+                m._add_eps(i, j)
         for i,a,j in self.arcs():
             m.add(i,a,j)
         for i,a,j in other.arcs():
             m.add(i,a,j)
         return m
 
-    def __add__(self, other):
+    def __add__(self, other: FSA[A]) -> FSA[A]:
         """Union: ``self + other`` accepts strings in either language."""
-        m = FSA()
+        m: FSA[A] = FSA()
         [self, other] = self.rename_apart(other)
         m.start = self.start | other.start
         m.stop = self.stop | other.stop
@@ -295,9 +332,9 @@ class FSA:
             m.add(i,a,j)
         return m
 
-    def p(self):
+    def p(self) -> FSA[A]:
         """Kleene plus: one or more repetitions of ``self``."""
-        m = FSA()
+        m: FSA[A] = FSA()
         m.start = set(self.start)
         m.stop = set(self.stop)
         for i,a,j in self.arcs():
@@ -305,25 +342,25 @@ class FSA:
         for i in self.stop:
             m.add_stop(i)
             for j in self.start:
-                m.add(i, eps, j)
+                m._add_eps(i, j)
         return m
 
-    def star(self):
+    def star(self) -> FSA[A]:
         """Kleene star: zero or more repetitions of ``self``."""
         return one + self.p()
 
-    def epsremove(self):
+    def epsremove(self) -> FSA[A]:
         """Return an equivalent FSA with all epsilon transitions removed."""
-        eps_m = FSA()
+        eps_m: FSA[A] = FSA()
         for i,a,j in self.arcs():
             if a == eps:
-                eps_m.add(i,a,j)
+                eps_m._add_eps(i, j)
 
         @lru_cache
-        def eps_accessible(i):
+        def eps_accessible(i: Any) -> set[Any]:
             return eps_m._accessible({i})
 
-        m = FSA()
+        m: FSA[A] = FSA()
 
         for i,a,j in self.arcs():
             if a == eps: continue
@@ -341,11 +378,11 @@ class FSA:
 
         return m
 
-    def det(self):
+    def det(self) -> FSA[A]:
         """Determinize via the powerset (subset) construction. Returns a DFA."""
         self = self.epsremove()
 
-        def powerarcs(Q):
+        def powerarcs(Q: Any) -> Iterator[tuple[A, Any]]:
             for a in self.syms:
                 yield a, frozenset(j for i in Q for j in self.edges[i][a])
 
@@ -357,7 +394,7 @@ class FSA:
 
         return m
 
-    def min_brzozowski(self):
+    def min_brzozowski(self) -> FSA[A]:
         """Minimize via Brzozowski's algorithm (reverse-determinize-reverse-determinize).
 
         Works on NFAs directly (no prior determinization needed).  Simple but
@@ -387,7 +424,7 @@ class FSA:
 
         return self.reverse().det().reverse().det().trim()
 
-    def min_fast(self):
+    def min_fast(self) -> FSA[A]:
         """Minimize via Hopcroft's partition-refinement algorithm.
 
         Determinizes first, then iteratively splits equivalence classes.
@@ -396,21 +433,21 @@ class FSA:
         self = self.det().renumber()
 
         # calculate inverse of transition function (i.e., reverse arcs)
-        inv = defaultdict(set)
+        inv: defaultdict[tuple[Any, A], set[Any]] = defaultdict(set)
         for i,a,j in self.arcs():
             inv[j,a].add(i)
 
         final = self.stop
         nonfinal = self.states - final
 
-        P = [final, nonfinal]
-        W = [final, nonfinal]
+        P: list[set[Any]] = [final, nonfinal]
+        W: list[set[Any]] = [final, nonfinal]
 
         while W:
-            A = W.pop()
+            S = W.pop()
             for a in self.syms:
-                X = {i for j in A for i in inv[j,a]}
-                R = []
+                X = {i for j in S for i in inv[j,a]}
+                R: list[set[Any]] = []
                 for Y in P:
                     if X.isdisjoint(Y) or X >= Y:
                         R.append(Y)
@@ -423,14 +460,14 @@ class FSA:
                 P = R
 
         # create new equivalence classes of states
-        minstates = {}
+        minstates: dict[Any, int] = {}
         for i, qs in enumerate(P):
             for q in qs:
                 minstates[q] = i #minstate
 
         return self.rename(lambda i: minstates[i]).trim()
 
-    def min_faster(self):
+    def min_faster(self) -> FSA[A]:
         """Optimized Hopcroft minimization with a ``find`` index for O(1) block lookup.
 
         Same algorithm as ``min_fast`` but avoids scanning all blocks on each
@@ -439,28 +476,28 @@ class FSA:
         self = self.det().renumber()
 
         # calculate inverse of transition function (i.e., reverse arcs)
-        inv = defaultdict(set)
+        inv: defaultdict[tuple[Any, A], set[Any]] = defaultdict(set)
         for i,a,j in self.arcs():
             inv[j,a].add(i)
 
         final = self.stop
         nonfinal = self.states - final
 
-        P = [final, nonfinal]
-        W = [final, nonfinal]
+        P: list[set[Any]] = [final, nonfinal]
+        W: list[set[Any]] = [final, nonfinal]
 
-        find = {i: block for block, elements in enumerate(P) for i in elements}
+        find: dict[Any, int] = {i: block for block, elements in enumerate(P) for i in elements}
 
         while W:
 
-            A = W.pop()
+            S = W.pop()
             for a in self.syms:
 
                 # Group pre-images by their current block; this lets us
                 # replace the O(|Y|) superset check `X >= Y` with an
                 # O(1) length comparison.
-                block_members = defaultdict(set)
-                for j in A:
+                block_members: defaultdict[int, set[Any]] = defaultdict(set)
+                for j in S:
                     for i in inv[j, a]:
                         block_members[find[i]].add(i)
 
@@ -486,13 +523,13 @@ class FSA:
 
     min = min_faster
 
-    def equal(self, other):
+    def equal(self, other: FSA[A] | frozenset | list[Any] | set[Any] | tuple[Any, ...]) -> bool:
         """Test language equivalence via minimal-DFA isomorphism."""
         if isinstance(other, (frozenset, list, set, tuple)):
             other = FSA.from_strings(other)
         return self.min()._dfa_isomorphism(other.min())
 
-    def _dfa_isomorphism(self, other):
+    def _dfa_isomorphism(self, other: FSA[A]) -> bool:
         "Find isomorphism between DFAs (if one exists)."
 
         # Requires that self and other are minimal DFAs
@@ -513,11 +550,11 @@ class FSA:
         [q] = other.start
 
         stack = [(p, q)]
-        iso = {p: q}
+        iso: dict[Any, Any] = {p: q}
 
         syms = self.syms | other.syms
 
-        done = set()
+        done: set[tuple[Any, Any]] = set()
         while stack:
             (p, q) = stack.pop()
             done.add((p,q))
@@ -543,13 +580,13 @@ class FSA:
 
         return self.rename(iso.get) == other
 
-    def __and__(self, other):
+    def __and__(self, other: FSA[A]) -> FSA[A]:
         """Intersection: ``self & other`` accepts strings in both languages."""
 
         self = self.epsremove().renumber()
         other = other.epsremove().renumber()
 
-        def product_arcs(Q):
+        def product_arcs(Q: Any) -> Iterator[tuple[A, Any]]:
             (q1, q2) = Q
             for a, j1 in self.arcs(q1):
                 for j2 in other.edges[q2][a]:
@@ -565,41 +602,41 @@ class FSA:
 
         return m
 
-    def add_sink(self, syms):
+    def add_sink(self, syms: Iterable[A]) -> FSA[A]:
         """Make the FSA complete over ``syms`` by adding a non-accepting sink state for missing transitions."""
 
-        syms = set(syms)
+        syms_set = set(syms)
 
         self = self.renumber()
 
         sink = len(self.states)
-        for a in syms:
+        for a in syms_set:
             self.add(sink, a, sink)
 
         for q in self.states:
             if q == sink: continue
-            for a in syms - set(self.edges[q]):
+            for a in syms_set - set(self.edges[q]):
                 if a == eps: continue  # ignore epsilon
                 self.add(q, a, sink)
 
         return self
 
-    def __sub__(self, other):
+    def __sub__(self, other: FSA[A]) -> FSA[A]:
         """Set difference: ``self - other`` accepts strings in ``self`` but not in ``other``."""
         return self & other.invert(self.syms | other.syms)
 
     __or__ = __add__
 
-    def __xor__(self, other):
+    def __xor__(self, other: FSA[A]) -> FSA[A]:
         "Symmetric difference"
         return (self | other) - (self & other)
 
-    def invert(self, syms):
+    def invert(self, syms: Iterable[A]) -> FSA[A]:
         """Complement over alphabet ``syms``: accepts all strings not in the language."""
 
         self = self.det().add_sink(syms)
 
-        m = FSA()
+        m: FSA[A] = FSA()
 
         for i in self.states:
             for a, j in self.arcs(i):
@@ -613,7 +650,7 @@ class FSA:
 
         return m
 
-    def __floordiv__(self, other):
+    def __floordiv__(self, other: FSA[A]) -> FSA[A]:
         "left quotient self//other ≐ {y | ∃x ∈ other: x⋅y ∈ self}"
 
         self = self.epsremove()
@@ -621,20 +658,22 @@ class FSA:
 
         # quotient arcs are very similar to product arcs except that the common
         # string is "erased" in the new machine.
-        def quotient_arcs(Q):
+        def quotient_arcs(Q: Any) -> Iterator[tuple[str, Any]]:
             (q1, q2) = Q
             for a, j1 in self.arcs(q1):
                 for j2 in other.edges[q2][a]:
-                    yield eps, (j1, j2)
+                    yield EPSILON, (j1, j2)
 
-        m = dfs({(q1, q2) for q1 in self.start for q2 in other.start},
-                quotient_arcs)
+        m: FSA[A] = dfs(
+            {(q1, q2) for q1 in self.start for q2 in other.start},
+            quotient_arcs,  # type: ignore[arg-type]
+        )
 
         # If we have managed to reach a final state of q2 then we can move into
         # the post-prefix set of states
         for (q1,q2) in set(m.states):
             if q2 in other.stop:
-                m.add((q1, q2), eps, (q1,))
+                m._add_eps((q1, q2), (q1,))
 
         # business as usual
         for q1 in self.states:
@@ -645,30 +684,30 @@ class FSA:
 
         return m
 
-    def __truediv__(self, other):
+    def __truediv__(self, other: FSA[A]) -> FSA[A]:
         "right quotient self/other ≐ {x | ∃y ∈ other: x⋅y ∈ self}"
         return (self.reverse() // other.reverse()).reverse()   # reduce to left quotient on reversed languages
 
-    def __lt__(self, other):
+    def __lt__(self, other: FSA[A]) -> bool:
         "self ⊂ other"
         if self.equal(other): return False
         return (self & other).equal(self)
 
-    def __le__(self, other):
+    def __le__(self, other: FSA[A]) -> bool:
         "self ⊆ other"
         return (self & other).equal(self)
 
     @classmethod
-    def lift(cls, x):
+    def lift(cls, x: A) -> FSA[A]:
         """Build a single-arc FSA accepting exactly the one-symbol string ``x``."""
-        m = cls()
+        m: FSA[A] = cls()
         m.add_start(0); m.add_stop(1); m.add(0,x,1)
         return m
 
     @classmethod
-    def from_string(cls, xs):
+    def from_string(cls, xs: Sequence[A]) -> FSA[A]:
         """Build a linear FSA accepting exactly the string ``xs``."""
-        m = cls()
+        m: FSA[A] = cls()
         m.add_start(xs[:0])
         for i in range(len(xs)):
             m.add(xs[:i], xs[i], xs[:i+1])
@@ -676,9 +715,9 @@ class FSA:
         return m
 
     @classmethod
-    def from_strings(cls, Xs):
+    def from_strings(cls, Xs: Iterable[Sequence[A]]) -> FSA[A]:
         """Build an FSA accepting the union of the given strings (trie structure)."""
-        m = cls()
+        m: FSA[A] = cls()
         for xs in Xs:
             m.add_start(xs[:0])
             for i in range(len(xs)):
@@ -686,7 +725,7 @@ class FSA:
             m.add_stop(xs)
         return m
 
-    def run(self, xs):
+    def run(self, xs: Iterable[A]) -> set[Any]:
         """Run string ``xs`` from start states, returning the set of reached states."""
         states = set(self.start)
         for x in xs:
@@ -695,16 +734,16 @@ class FSA:
                 break
         return states
 
-    def __contains__(self, xs):
+    def __contains__(self, xs: Iterable[A]) -> bool:
         """Test if string ``xs`` is in the language: ``xs in fsa``."""
         return bool(self.run(xs) & self.stop)
 
-    def merge(self, S, name=None):
+    def merge(self, S: set[Any], name: Any = None) -> FSA[A]:
         """Merge all states in ``S`` into a single state (default name: ``min(S)``)."""
         if name is None: name = min(S)
-        def f(s):
+        def f(s: Any) -> Any:
             return name if s in S else s
-        m = FSA()
+        m: FSA[A] = FSA()
         for x in self.start:
             m.add_start(f(x))
         for x,a,y in self.arcs():
@@ -714,18 +753,18 @@ class FSA:
         return m
 
     @staticmethod
-    def universal(alphabet):
+    def universal(alphabet: Iterable[A]) -> FSA[A]:
         """Build a single-state FSA accepting all strings over ``alphabet`` (Σ*)."""
-        u = FSA()
+        u: FSA[A] = FSA()
         u.add_start(0)
         for a in alphabet:
             u.add(0, a, 0)
         u.add_stop(0)
         return u
 
-    def language(self, max_length=None):
+    def language(self, max_length: int | None = None) -> Iterator[tuple[A, ...]]:
         "Enumerate strings in the language of this FSA."
-        worklist = deque()
+        worklist: deque[tuple[Any, tuple[A, ...]]] = deque()
         worklist.extend([(i, ()) for i in self.start])
         while worklist:
             (i, x) = worklist.popleft()
@@ -740,9 +779,9 @@ class FSA:
                     worklist.append((j, x + (a,)))
 
 
-EPSILON = eps = ''
-
-FSA.one = one = FSA()
+one: FSA[Any] = FSA()
 one.add_start(0); one.add_stop(0)
+FSA.one = one
 
-FSA.zero = zero = FSA()
+zero: FSA[Any] = FSA()
+FSA.zero = zero

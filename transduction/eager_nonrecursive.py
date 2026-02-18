@@ -19,12 +19,12 @@ class EagerNonrecursive(AbstractAlgorithm):
         self.state = {}
         self.dfa = Precover(self.fst, target).min
         for state in self.dfa.start:
-            self.state[self.empty_source] = state
-            yield self.empty_source
+            self.state[()] = state
+            yield ()
 
     def candidates(self, xs, target):
         for source_symbol, next_state in self.dfa.arcs(self.state[xs]):
-            next_xs = self.extend(xs, source_symbol)
+            next_xs = xs + (source_symbol,)
             self.state[next_xs] = next_state
             yield next_xs
 

@@ -54,13 +54,22 @@ Terminology
   previous target prefix that need re-expansion.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from transduction.fst import EPSILON
-from transduction.util import colors
 from collections import deque
+from collections.abc import Iterable
+from typing import Any, Generic, TypeVar, cast
+
+from transduction.fsa import FSA
+from transduction.fst import FST, EPSILON  # type: ignore[attr-defined]
+from transduction.util import colors
+
+A = TypeVar('A')  # source alphabet symbol type
+B = TypeVar('B')  # target alphabet symbol type
 
 
-class DecompositionResult:
+class DecompositionResult(Generic[A, B]):
     r"""Base class for quotient--remainder decomposition results.
 
     $$\mathcal{P}(\boldsymbol{y}) = \mathcal{Q}(\boldsymbol{y}) \mathcal{X}^* \sqcup \mathcal{R}(\boldsymbol{y})$$
@@ -73,31 +82,43 @@ class DecompositionResult:
 
     Or subclassed with lazy properties (e.g., ``Precover``, ``NonrecursiveDFADecomp``).
 
-    The quotient and remainder may be sets of strings or FSAs depending on the
-    producer.
+    The quotient and remainder are either an :class:`FSA`
+    (compact representation, possibly infinite) or an explicit ``set``
+    (used by string-enumeration algorithms like :class:`AbstractAlgorithm`).
     """
 
-    def __init__(self, quotient, remainder):
+    def __init__(
+        self,
+        quotient: FSA[A] | set[Any],
+        remainder: FSA[A] | set[Any],
+    ) -> None:
         self.quotient = quotient
         self.remainder = remainder
 
-    def __iter__(self):
-        return iter((self.quotient, self.remainder))
-
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f'DecompositionResult({self.quotient!r}, {self.remainder!r})'
 
-    def __rshift__(self, y):
-        """Advance the target by one symbol, returning a new decomposition."""
-        return type(self)(self.fst, self.target + (y,))
+    def __rshift__(self, y: B) -> DecompositionResult[A, B]:
+        """Advance the target by one symbol, returning a new decomposition.
 
-    def decompose_next(self):
-        """Decompose for every next target symbol, returning a dict {y: DecompositionResult}."""
-        target_alphabet = self.fst.B - {EPSILON}
+        Note: uses ``self.fst`` and ``self.target`` which are defined by
+        subclasses, not by ``DecompositionResult`` itself.  Subclasses
+        typically override this method entirely.
+        """
+        return type(self)(self.fst, self.target + (y,))  # type: ignore[attr-defined]
+
+    def decompose_next(self) -> dict[B, DecompositionResult[A, B]]:
+        """Decompose for every next target symbol, returning a dict {y: DecompositionResult}.
+
+        Note: uses ``self.fst`` which is defined by subclasses.
+        Subclasses typically override this method entirely.
+        """
+        fst = cast(FST[A, B], self.fst)  # type: ignore[attr-defined]
+        target_alphabet = fst.B - cast(set[B], {EPSILON})
         return {y: self >> y for y in target_alphabet}
 
 
-class DecompositionFunction(ABC):
+class DecompositionFunction(ABC, Generic[A, B]):
     """Interface for reusable decomposition algorithms.
 
     Constructed once with an FST, then called with different target strings.
@@ -113,10 +134,10 @@ class DecompositionFunction(ABC):
     Implementations: AbstractAlgorithm
     """
     @abstractmethod
-    def __call__(self, target) -> 'DecompositionResult': ...
+    def __call__(self, target: tuple[B, ...]) -> DecompositionResult[A, B]: ...
 
 
-class IncrementalDecomposition(DecompositionResult):
+class IncrementalDecomposition(DecompositionResult[A, B]):
     """Interface for incremental (symbol-by-symbol) decomposition.
 
     Extends DecompositionResult with an optimized ``>>`` operator that
@@ -134,48 +155,47 @@ class IncrementalDecomposition(DecompositionResult):
     Implementations: PeekabooState, TruncatedIncrementalDFADecomp, LazyIncremental
     """
     @abstractmethod
-    def __rshift__(self, y) -> 'IncrementalDecomposition': ...
+    def __rshift__(self, y: B) -> IncrementalDecomposition[A, B]: ...
 
-    def __call__(self, ys):
+    def __call__(self, ys: Iterable[B]) -> IncrementalDecomposition[A, B]:
         """Advance state by a sequence of target symbols. Returns the final state."""
-        s = self
+        s: IncrementalDecomposition[A, B] = self
         for y in ys:
             s = s >> y
         return s
 
 
-class AbstractAlgorithm(DecompositionFunction):
+class AbstractAlgorithm(DecompositionFunction[A, B]):
     """BFS-based decomposition framework over explicit source strings.
 
     Subclasses implement four hooks that control the BFS:
     ``initialize`` (seed strings), ``candidates`` (extensions),
     ``continuity`` (quotient test), and ``discontinuity`` (remainder test).
     The ``__call__`` method drives the BFS loop, collecting Q and R.
+
+    Source strings are represented as ``tuple[A, ...]``.
     """
 
-    def __init__(self, fst, empty_source='', extend=lambda x, y: x + y, max_steps=float('inf')):
+    def __init__(
+        self,
+        fst: FST[A, B],
+        max_steps: float = float('inf'),
+    ) -> None:
         """
         Args:
             fst: The FST to decompose.
-            empty_source: Identity element for source strings (default ``''``).
-                Used as the seed for BFS over source language strings.
-            extend: Binary function to append a symbol to a string
-                (default ``x + y``, i.e., Python string concatenation).
-                Override both ``empty_source`` and ``extend`` to use a
-                non-string sequence type (e.g., tuples).
             max_steps: Maximum BFS steps before stopping (default unlimited).
         """
-        self.fst = fst
-        self.empty_source = empty_source
-        self.source_alphabet = fst.A - {EPSILON}
-        self.target_alphabet = fst.B - {EPSILON}
-        self.extend = extend
+        self.fst: FST[A, B] = fst
+        self.source_alphabet: set[A] = fst.A - cast(set[A], {EPSILON})
+        self.target_alphabet: set[B] = fst.B - cast(set[B], {EPSILON})
         self.max_steps = max_steps
 
-    def __call__(self, target):
+    def __call__(self, target: tuple[B, ...]) -> DecompositionResult[A, B]:
         """Compute the Q/R decomposition for ``target`` via BFS over source strings."""
-        precover = DecompositionResult(set(), set())
-        worklist = deque()
+        quotient: set[tuple[A, ...]] = set()
+        remainder: set[tuple[A, ...]] = set()
+        worklist: deque[tuple[A, ...]] = deque()
         for xs in self.initialize(target):
             worklist.append(xs)
         t = 0
@@ -186,30 +206,30 @@ class AbstractAlgorithm(DecompositionFunction):
                 print(colors.light.red % 'stopped early')
                 break
             if self.continuity(xs, target):
-                precover.quotient.add(xs)
+                quotient.add(xs)
                 continue
             if self.discontinuity(xs, target):
-                precover.remainder.add(xs)
+                remainder.add(xs)
             for next_xs in self.candidates(xs, target):
                 worklist.append(next_xs)
-        return precover
+        return DecompositionResult(quotient, remainder)
 
     @abstractmethod
-    def initialize(self, target):
+    def initialize(self, target: tuple[B, ...]) -> Iterable[tuple[A, ...]]:
         """Return the initial seed strings for the BFS worklist."""
         ...
 
     @abstractmethod
-    def candidates(self, xs, target):
+    def candidates(self, xs: tuple[A, ...], target: tuple[B, ...]) -> Iterable[tuple[A, ...]]:
         """Return source-string extensions of ``xs`` to add to the worklist."""
         ...
 
     @abstractmethod
-    def discontinuity(self, xs, target):
+    def discontinuity(self, xs: tuple[A, ...], target: tuple[B, ...]) -> bool:
         """Return True if ``xs`` belongs in the remainder R(target)."""
         ...
 
     @abstractmethod
-    def continuity(self, xs, target):
+    def continuity(self, xs: tuple[A, ...], target: tuple[B, ...]) -> bool:
         """Return True if ``xs`` belongs in the quotient Q(target)."""
         ...

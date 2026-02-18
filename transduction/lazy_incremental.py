@@ -17,23 +17,18 @@ class LazyIncremental(IncrementalDecomposition):
 
     Usage::
 
-        state = LazyIncremental(fst, '')
+        state = LazyIncremental(fst)
         state = state >> 'a'
         state.quotient    # FSA
         state.remainder   # FSA
     """
 
-    def __init__(self, fst, target='', parent=None, *, empty_source='', empty_target=(), extend=lambda x, y: x + y, max_steps=float('inf')):
+    def __init__(self, fst, target=(), parent=None, *, max_steps=float('inf')):
         """
         Args:
             fst: The FST to decompose.
-            target: Current target string (use ``>>`` to extend incrementally).
+            target: Current target tuple (use ``>>`` to extend incrementally).
             parent: Internal — previous state in the ``>>`` chain.
-            empty_source: Identity element for source strings (default ``''``).
-            empty_target: Identity element for target strings (default ``''``).
-                Used as the initial output buffer in frontier computation.
-            extend: Binary function to append a symbol to a string
-                (default ``x + y``).  Applied to both source and target strings.
             max_steps: Maximum BFS steps per decomposition (default unlimited).
         """
         self.fst = fst
@@ -47,18 +42,12 @@ class LazyIncremental(IncrementalDecomposition):
 
         if parent is None:
             # Initial state: store config and create shared frontier cache
-            self.empty_source = empty_source
-            self.empty_target = empty_target
-            self.extend = extend
             self.max_steps = max_steps
             self._frontier_cache = {}
             assert len(target) == 0, 'Use __call__ or >> to advance from an empty target'
             self.parent = None
         else:
             # Incremental step: inherit config and shared cache from parent
-            self.empty_source = parent.empty_source
-            self.empty_target = parent.empty_target
-            self.extend = parent.extend
             self.max_steps = parent.max_steps
             self._frontier_cache = parent._frontier_cache
             self.parent = parent
@@ -73,7 +62,7 @@ class LazyIncremental(IncrementalDecomposition):
 
         N = len(self.target)
         if N == 0:
-            worklist.append(self.empty_source)
+            worklist.append(())
         else:
             # filter previous remainders
             for xs in self.parent._remainder_set:
@@ -116,7 +105,7 @@ class LazyIncremental(IncrementalDecomposition):
 
     def candidates(self, xs, target):
         for source_symbol in self.source_alphabet:
-            next_xs = self.extend(xs, source_symbol)
+            next_xs = xs + (source_symbol,)
             if self.candidacy(next_xs, target):
                 yield next_xs
 
@@ -141,7 +130,7 @@ class LazyIncremental(IncrementalDecomposition):
 
     def _compute_frontier(self, xs):
         if len(xs) == 0:
-            return self._epsilon_closure_frontier({(s, self.empty_target) for s in self.fst.start})
+            return self._epsilon_closure_frontier({(s, ()) for s in self.fst.start})
         else:
             return self.next_frontier(self.frontier(xs[:-1]), xs[-1])
 
@@ -194,7 +183,7 @@ class LazyIncremental(IncrementalDecomposition):
         # source_symbol---extended_string pair.
         def arcs(xs):
             for source_symbol in self.source_alphabet:
-                next_xs = self.extend(xs, source_symbol)
+                next_xs = xs + (source_symbol,)
                 if self.candidacy(next_xs, target):
                     yield source_symbol, next_xs
 

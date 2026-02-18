@@ -16,7 +16,6 @@ Key public functions:
 
 from __future__ import annotations
 
-import html as _html
 import resource
 import signal
 from collections.abc import Hashable, Iterator
@@ -116,40 +115,16 @@ class Integerizer(Generic[K]):
 
     def _repr_html_(self) -> str:
         """Rich HTML table for Jupyter notebooks."""
-        MAX = 20
+        from transduction.viz import format_table
         n = len(self)
         frozen = ' frozen' if self._frozen else ''
         header = (f'<b>Integerizer</b> '
                   f'<span style="color:#888">(n={n}{frozen})</span>')
         if n == 0:
             return header + ' <i>empty</i>'
-        rows = []
-        for idx, key in enumerate(self._list[:MAX]):
-            rows.append(
-                f'<tr><td style="text-align:right;color:#888;'
-                f'padding:1px 6px">{idx}</td>'
-                f'<td style="padding:1px 6px">'
-                f'{_html.escape(repr(key))}</td></tr>'
-            )
-        if n > MAX:
-            rows.append(
-                f'<tr><td colspan="2" style="text-align:center;'
-                f'color:#888;padding:1px 6px">'
-                f'… {n - MAX} more</td></tr>'
-            )
-        return (
-            header
-            + '<table style="border-collapse:collapse;margin-top:4px;'
-              'font:12px monospace">'
-            + '<thead><tr>'
-              '<th style="text-align:right;padding:1px 6px;'
-              'border-bottom:1px solid #ccc">idx</th>'
-              '<th style="text-align:left;padding:1px 6px;'
-              'border-bottom:1px solid #ccc">key</th>'
-              '</tr></thead><tbody>'
-            + ''.join(rows)
-            + '</tbody></table>'
-        )
+        rows = [[idx, repr(key)] for idx, key in enumerate(self._list)]
+        return header + format_table(rows, headings=['idx', 'key'],
+                                     max_rows=20)
 
 
 #_______________________________________________________________________________
@@ -342,47 +317,18 @@ class _SparseLogMap(dict[V, float]):
 
     def _repr_html_(self) -> str:
         """Rich HTML table for Jupyter notebooks."""
-        MAX = 20
+        from transduction.viz import format_table
         name = type(self).__name__
         n = len(self)
-        header = (f'<b>{_html.escape(name)}</b> '
+        header = (f'<b>{name}</b> '
                   f'<span style="color:#888">(n={n})</span>')
         if n == 0:
             return header + ' <i>empty</i>'
         items = sorted(self.items(), key=lambda kv: kv[1], reverse=True)
-        rows = []
-        for key, logv in items[:MAX]:
-            p = float(np.exp(logv))
-            rows.append(
-                f'<tr>'
-                f'<td style="padding:1px 6px">'
-                f'{_html.escape(repr(key))}</td>'
-                f'<td style="text-align:right;padding:1px 6px">'
-                f'{logv:.4f}</td>'
-                f'<td style="text-align:right;padding:1px 6px">'
-                f'{p:.4f}</td>'
-                f'</tr>'
-            )
-        if n > MAX:
-            rows.append(
-                f'<tr><td colspan="3" style="text-align:center;'
-                f'color:#888;padding:1px 6px">'
-                f'… {n - MAX} more</td></tr>'
-            )
-        return (
-            header
-            + '<table style="border-collapse:collapse;margin-top:4px;'
-              'font:12px monospace">'
-            + '<thead><tr>'
-              '<th style="text-align:left;padding:1px 6px;'
-              'border-bottom:1px solid #ccc">key</th>'
-              '<th style="text-align:right;padding:1px 6px;'
-              'border-bottom:1px solid #ccc">logp</th>'
-              '<th style="text-align:right;padding:1px 6px;'
-              'border-bottom:1px solid #ccc">p</th>'
-              '</tr></thead><tbody>'
-            + ''.join(rows)
-            + '</tbody></table>'
+        rows = [[repr(k), f'{v:.4f}', f'{np.exp(v):.4f}']
+                for k, v in items]
+        return header + format_table(
+            rows, headings=['key', 'logp', 'p'], max_rows=20,
         )
 
 

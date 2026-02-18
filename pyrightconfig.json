@@ -1,0 +1,7 @@
+{
+    "pythonVersion": "3.10",
+    "typeCheckingMode": "strict",
+    "include": [
+        "transduction/base.py"
+    ]
+}

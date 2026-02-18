@@ -255,7 +255,7 @@ def test_delete_b_check_decomposition():
         have = alg('AAA')
         assert have.remainder == set()
         p = Precover(fst, 'AAA')
-        p.check_decomposition(*have, skip_validity=True)
+        p.check_decomposition(have.quotient, have.remainder, skip_validity=True)
 
 
 def test_prioritized_custom_heuristic():

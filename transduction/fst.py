@@ -12,10 +12,14 @@ See :mod:`transduction.fsa` for the acceptor (single-tape) counterpart.
 from collections import defaultdict, deque
 from functools import cached_property
 from itertools import zip_longest
+from typing import Generic, TypeVar
 
 from transduction.fsa import FSA, EPSILON
 
 from transduction.util import Integerizer
+
+A = TypeVar('A')
+B = TypeVar('B')
 
 
 class _EpsilonVariant:
@@ -32,7 +36,7 @@ class _EpsilonVariant:
 eps = EPSILON
 
 
-class FST:
+class FST(Generic[A, B]):
     """Finite-state transducer mapping source strings to target strings.
 
     An FST is a directed graph whose arcs carry input:output label pairs.
@@ -57,8 +61,8 @@ class FST:
             arcs: Iterable of ``(src, input_label, output_label, dst)`` tuples.
             stop: Iterable of final (accepting) states.
         """
-        self.A = set()
-        self.B = set()
+        self.A: set[A] = set()
+        self.B: set[B] = set()
         self.states = set()
         self.delta = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
         self.start = set()

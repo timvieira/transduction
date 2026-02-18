@@ -196,12 +196,17 @@ def _as_html_cell(x):
     return f'<pre>{_html.escape(str(x))}</pre>'
 
 
-def format_table(rows, headings=None, column_styles=None):
+def format_table(rows, headings=None, column_styles=None, max_rows=None,
+                 total=None):
     """Build an HTML ``<table>`` string from a list of rows.
 
     Each element in a row is converted to HTML via ``_as_html_cell``, so cells
     can contain IPython display objects (FSA/FST graphviz, images, HTML
     fragments, etc.) alongside plain values.
+
+    When *max_rows* is set and the row count exceeds it, the overflow rows are
+    rendered but hidden; a clickable "▸ N more" toggle reveals them in-place
+    (no kernel round-trip).
 
     Args:
         rows: Iterable of row iterables.  Each element becomes one ``<td>``.
@@ -209,17 +214,20 @@ def format_table(rows, headings=None, column_styles=None):
         column_styles: Optional dict mapping column index to a CSS style string
             (e.g. ``{0: "text-align:left"}``).  Styles are merged with the
             default ``vertical-align:top`` on each ``<td>``.
+        max_rows: If given, show at most this many rows initially; overflow
+            rows are hidden behind a clickable toggle.
+        total: Total item count for the toggle label.  Inferred from
+            *rows* (which is materialized to a list) when not provided.
     """
     if column_styles is None:
         column_styles = {}
 
-    head_html = ""
-    if headings:
-        head_cells = "".join(f"<th>{h}</th>" for h in headings)
-        head_html = f"<thead><tr>{head_cells}</tr></thead>"
+    rows = list(rows)
+    if total is None:
+        total = len(rows)
+    truncated = max_rows is not None and len(rows) > max_rows
 
-    body_rows = []
-    for row in rows:
+    def _render_row(row):
         cells = []
         for i, x in enumerate(row):
             style = "vertical-align:top"
@@ -227,12 +235,61 @@ def format_table(rows, headings=None, column_styles=None):
             if extra:
                 style += ";" + extra
             cells.append(f'<td style="{style}">{_as_html_cell(x)}</td>')
-        body_rows.append(f'<tr>{"".join(cells)}</tr>')
-    body_html = "<tbody>" + "".join(body_rows) + "</tbody>"
+        return f'<tr>{"".join(cells)}</tr>', len(cells)
+
+    head_html = ""
+    ncols = 1
+    if headings:
+        ncols = len(headings)
+        head_cells = "".join(f"<th>{h}</th>" for h in headings)
+        head_html = f"<thead><tr>{head_cells}</tr></thead>"
+
+    visible_html = []
+    for row in rows[:max_rows] if truncated else rows:
+        tr, nc = _render_row(row)
+        ncols = max(ncols, nc)
+        visible_html.append(tr)
+    body_html = "<tbody>" + "".join(visible_html) + "</tbody>"
+
+    overflow_html = ""
+    if truncated:
+        remaining = total - max_rows
+        uid = uuid.uuid4().hex[:8]
+
+        overflow_rows = []
+        for row in rows[max_rows:]:
+            tr, nc = _render_row(row)
+            ncols = max(ncols, nc)
+            overflow_rows.append(tr)
+        overflow_html = (
+            f'<tbody id="ft_o_{uid}" style="display:none">'
+            + "".join(overflow_rows)
+            + '</tbody>'
+        )
+
+        toggle_html = (
+            f'<tbody><tr><td colspan="{ncols}" style="text-align:center;'
+            f'padding:2px 6px">'
+            f'<a id="ft_t_{uid}" style="color:#888;cursor:pointer;'
+            f'text-decoration:none"'
+            f' onclick="'
+            f"var o=document.getElementById('ft_o_{uid}'),"
+            f"t=document.getElementById('ft_t_{uid}');"
+            f"if(o.style.display==='none'){{"
+            f"o.style.display='';"
+            f"t.textContent='\\u25be collapse'"
+            f"}}else{{"
+            f"o.style.display='none';"
+            f"t.textContent='\\u25b8 {remaining} more'"
+            f"}}"
+            f'">&#x25b8; {remaining} more</a>'
+            f'</td></tr></tbody>'
+        )
+        overflow_html += toggle_html
 
     return (
         '<table class="fmt-table" style="border-collapse:collapse;">'
-        f"{head_html}{body_html}"
+        f"{head_html}{body_html}{overflow_html}"
         "</table>"
     )
 
@@ -263,9 +320,10 @@ def render_logp_next_html(class_name, target, logp, logp_next, top_k=20):
     target_str = ''.join(str(y) for y in target) if target else 'ε'
     header = (f'<b>{class_name}</b> '
               f'target={target_str!r}, logp={logp:.4f}<br>')
-    items = sorted(logp_next.items(), key=lambda kv: -kv[1])[:top_k]
+    items = sorted(logp_next.items(), key=lambda kv: -kv[1])
     rows = [[repr(y), f'{lp:.4f}', f'{np.exp(lp):.4f}'] for y, lp in items]
-    return header + format_table(rows, headings=['Token', 'logp', 'p'])
+    return header + format_table(rows, headings=['Token', 'logp', 'p'],
+                                 max_rows=top_k)
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +376,7 @@ def render_particles_html(
     r_states=frozenset(),       # set of remainder DFA states
     qr_builder=None,            # callable(y) -> (q_fsa, r_fsa)
     decomp=None,                # decomp dict for Q/R filter
+    max_rows=50,                # max particle groups to show in the table
 ):
     """Render an HTML table for particles.
 
@@ -379,6 +438,7 @@ def render_particles_html(
         rows,
         headings=headings,
         column_styles={0: 'text-align:left'},
+        max_rows=max_rows,
     )
 
     # Add collapsible Q/R FSA visualizations
