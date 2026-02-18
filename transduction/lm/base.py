@@ -1,3 +1,14 @@
+"""Abstract base classes for autoregressive language models.
+
+Defines :class:`LM` (model factory) and :class:`LMState` (decode position).
+Together they follow the Iterable/Iterator pattern: an LM produces LMState
+objects via ``initial()``, and each state supports ``state >> token`` to
+advance and ``state.logp_next`` to query next-token log-probabilities.
+
+Concrete implementations: :mod:`transduction.lm.ngram`,
+:mod:`transduction.lm.statelm`, :mod:`transduction.lm.transduced`.
+"""
+
 from abc import ABC, abstractmethod
 from transduction.util import LogDistr
 
@@ -72,10 +83,17 @@ class LMState(ABC):
     @property
     @abstractmethod
     def logp_next(self):
+        """Log-probability distribution over next tokens.
+
+        Returns a dict-like object supporting ``logp_next[token]`` -> float
+        and ``logp_next.items()`` -> iterable of (token, logp) pairs.
+        Missing tokens should return ``-inf``.
+        """
         ...
 
     @abstractmethod
     def __rshift__(self, token):
+        """Advance by one token, returning a new LMState conditioned on the extended context."""
         ...
 
     def greedy_decode(self, max_len=100):

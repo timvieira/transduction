@@ -145,6 +145,13 @@ class IncrementalDecomposition(DecompositionResult):
 
 
 class AbstractAlgorithm(DecompositionFunction):
+    """BFS-based decomposition framework over explicit source strings.
+
+    Subclasses implement four hooks that control the BFS:
+    ``initialize`` (seed strings), ``candidates`` (extensions),
+    ``continuity`` (quotient test), and ``discontinuity`` (remainder test).
+    The ``__call__`` method drives the BFS loop, collecting Q and R.
+    """
 
     def __init__(self, fst, empty_source='', extend=lambda x, y: x + y, max_steps=float('inf')):
         """

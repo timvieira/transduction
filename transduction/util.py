@@ -1,3 +1,19 @@
+"""Shared utilities: Integerizer, log-space types, caching, memory/time limits.
+
+Key public classes:
+
+- :class:`Integerizer` — bijection between objects and contiguous ints.
+- :class:`LogVector` — mutable sparse log-space accumulator (``logaddexp``).
+- :class:`LogDistr` — immutable normalized log-probability distribution.
+- :class:`memoize` — simple function-result cache (decorator).
+
+Key public functions:
+
+- :func:`logsumexp` — numerically stable log-sum-exp.
+- :func:`set_memory_limit` / :func:`memory_limit` — RLIMIT_AS guards.
+- :func:`timelimit` — wall-clock timeout via SIGALRM.
+"""
+
 import resource
 import signal
 from functools import partial
@@ -13,12 +29,14 @@ class Integerizer:
     """Maintain a perfect hash (bijection) between keys and contiguous ints."""
 
     def __init__(self, data=None):
+        """Create an Integerizer, optionally adding initial keys from *data*."""
         self._map = {}
         self._list = []
         self._frozen = False
         if data: self.add(data)
 
     def _add(self, k):
+        """Return the integer for *k*, assigning a new one if unseen."""
         try:
             return self._map[k]
         except KeyError as exc:
@@ -29,12 +47,15 @@ class Integerizer:
             return x
 
     def __contains__(self, k):
+        """Return True if *k* has been assigned an integer."""
         return k in self._map
 
     def __iter__(self):
+        """Iterate over keys in insertion order."""
         return iter(self._list)
 
     def __len__(self):
+        """Return the number of registered keys."""
         return len(self._list)
 
     def __eq__(self, other):
@@ -44,11 +65,13 @@ class Integerizer:
         return f'Integerizer(size={len(self)}, frozen={self._frozen})'
 
     def __getitem__(self, i):
+        """Decode: integer(s) -> key(s). Accepts an int or list of ints."""
         if isinstance(i, list):
             return [self._list[ii] for ii in i]
         return self._list[i]
 
     def __call__(self, k):
+        """Encode: key(s) -> integer(s). Accepts a key or list of keys."""
         if isinstance(k, list):
             return [self._add(kk) for kk in k]
         return self._add(k)
@@ -59,13 +82,16 @@ class Integerizer:
     add = __call__
 
     def freeze(self):
+        """Freeze the mapping; future unseen keys raise ValueError."""
         self._frozen = True
         return self
 
     def keys(self):
+        """Return the list of keys in insertion order."""
         return self._list
 
     def items(self):
+        """Return (key, int) pairs."""
         return self._map.items()
 
 

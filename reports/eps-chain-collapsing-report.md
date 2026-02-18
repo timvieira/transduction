@@ -91,6 +91,32 @@ re-encountered. It missed two common patterns:
 Replace the flat cache with a `UniversalityFilter` implementing five strategies
 in priority order:
 
+```mermaid
+graph TD
+    Q["Query: is S universal?"]
+    Q --> A{"1. all_input_universal?"}
+    A -->|"Yes"| U["Universal ✓"]
+    A -->|"No"| B{"2. Witness check<br/><i>any element is ip-universal?</i>"}
+    B -->|"Hit"| U
+    B -->|"No"| C{"3. Superset monotonicity<br/><i>known-universal u ⊆ S?</i>"}
+    C -->|"Hit"| U
+    C -->|"No"| D{"4. Subset monotonicity<br/><i>S ⊆ known-non-universal?</i>"}
+    D -->|"Hit"| NU["Not Universal ✗"]
+    D -->|"No"| E["5. Sub-BFS fallback<br/><i>full exploration</i>"]
+    E -->|"universal"| U
+    E -->|"not universal"| NU
+    E -.->|"cache result"| C
+    E -.->|"cache result"| D
+
+    style U fill:#d4edda
+    style NU fill:#f8d7da
+    style A fill:#fff3cd
+    style B fill:#fff3cd
+    style C fill:#cce5ff
+    style D fill:#cce5ff
+    style E fill:#e2e3e5
+```
+
 1. **Fast path**: If `all_input_universal`, return true immediately.
 2. **Witness check**: If any NFA element in the powerset state is a known
    ip-universal witness (see Optimization 3), the state is universal. O(|S|) check.

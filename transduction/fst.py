@@ -1,3 +1,14 @@
+"""Finite-state transducer (FST) data structure with composition and label pushing.
+
+Provides the :class:`FST` class for building, inspecting, and composing
+finite-state transducers.  An FST maps source strings to target strings via
+labeled arcs.  Supports epsilon-free and epsilon-rich machines, composition
+(``@``), projection, label pushing, reachability analysis, and Graphviz
+visualization.
+
+See :mod:`transduction.fsa` for the acceptor (single-tape) counterpart.
+"""
+
 from collections import defaultdict, deque
 from functools import cached_property
 from itertools import zip_longest
@@ -39,6 +50,13 @@ class FST:
     """
 
     def __init__(self, start=(), arcs=(), stop=()):
+        """Create an FST, optionally populating it from iterables.
+
+        Args:
+            start: Iterable of initial states.
+            arcs: Iterable of ``(src, input_label, output_label, dst)`` tuples.
+            stop: Iterable of final (accepting) states.
+        """
         self.A = set()
         self.B = set()
         self.states = set()

@@ -59,3 +59,55 @@ Each algorithm builds over a specific NFA variant defined in `precover_nfa.py`. 
 All NFA variants use **tuples of symbols** for the target-side buffer `ys`, supporting multi-character output symbols (e.g., PTB byte-value strings like `'84'`). Buffer operations use tuple slicing and concatenation (`ys + (a,)`, `ys[:n]`), which correctly preserves symbol boundaries.
 
 Note: `TruncatedIncrementalDFADecomp` and `RustDirtyState` use a frontier-marker approach conceptually similar to `TruncationMarkerPrecoverNFA` — tracking whether each NFA state is at the frontier (`|ys| == N`) to enable dirty-state detection. In the Rust implementation, this is handled directly in `incremental.rs` via `max_bufpos` tracking rather than a separate NFA class.
+
+## Transduced Language Models
+
+The decomposition algorithms above compute *structural* Q/R decompositions. The transduced LM layer sits on top, combining a decomposition with an inner LM to compute the pushforward distribution P(target) = sum_{source in T^{-1}(target)} P_inner(source). All implementations conform to the `LM`/`LMState` interface: `state >> y` advances by one target symbol, `state.logp_next[y]` returns log P(y | target_so_far).
+
+### Feature Matrix
+
+| | Incremental | Inference | Decomp strategy | Carry-forward | General (inf quotients) | Rust | Finite-only |
+|---|:---:|---|---|:---:|:---:|:---:|:---:|
+| `TransducedLM` | ✓ | particle beam + best-first search | pre-computed peekaboo | ✓ | ✓ | ✓ (default) | |
+| `FusedTransducedLM` | ✓ | particle beam + best-first search | lazy DFA built during search | ✓ | ✓ | ✓ (required) | |
+| `ReferenceTransducedLM` | ✓ | exact enumeration of Q/R languages | Precover (full materialization) | | | | ✓ |
+
+### How they work
+
+**`TransducedLM`** (`lm/transduced.py`) — The primary approximate inference engine. Maintains K particles (source-prefix hypotheses), each tracking a DFA state and an inner LM state. Per target step:
+1. The peekaboo decomposition classifies DFA states as Q(y), R(y), or preimage.
+2. Best-first search pops particles by weight. Quotient particles are *absorbed* — their full weight contributes to y's score (exact marginalization over all continuations). Remainder particles contribute weight × P_inner(EOS). Non-classified particles are expanded by source symbols weighted by P_inner.
+3. After the expansion budget (`max_expansions`) is exhausted, remaining queued particles are scored without expansion.
+4. Carry-forward passes particles at Q/R/resume-frontier states to the next step; top-K pruning bounds the beam.
+
+**`FusedTransducedLM`** (`lm/fused_transduced.py`) — Same particle-beam search as `TransducedLM`, but the decomposition DFA is not pre-computed. Instead, a Rust `RustLazyPeekabooDFA` builds the powerset DFA lazily during search — only states reachable via high-probability source paths are materialized. This avoids the upfront cost of full decomposition at each step. Carry-forward uses sentinel states (dfa_state=None) that are resolved via source-path replay in the next step.
+
+**`ReferenceTransducedLM`** (`lm/reference_transduced.py`) — Ground-truth implementation for validation. Uses the `Precover` decomposition to enumerate the Q and R languages exactly, then sums inner LM probabilities over all source strings. Only terminates when Q and R are finite (finite-relation FSTs). Not suitable for production use — exponential in the size of the Q/R languages.
+
+### Key design dimensions
+
+- **Pre-computed vs fused decomposition** — `TransducedLM` computes the full peekaboo decomposition (DFA + Q/R classification) before running LM search; `FusedTransducedLM` interleaves both, building only the DFA fragment the LM actually explores. Pre-computed is simpler and reusable across LMs; fused avoids wasted work on unreachable states.
+- **Carry-forward** — Particles at Q/R/resume-frontier states survive across target steps, avoiding redundant re-exploration. This is the key to amortizing work across the autoregressive decode. `ReferenceTransducedLM` lacks carry-forward: it recomputes from scratch at each step.
+- **Quotient absorption** — When a particle reaches a quotient state for symbol y, its entire weight (marginalizing over all continuations) contributes to y's score. This is the main source of variance reduction over naive sampling.
+
+## Prefix Probability Estimation (enumeration.py)
+
+These are non-incremental baselines for estimating the prefix probability P(output starts with target) for a *fixed* target string. Unlike the transduced LMs above, they do not advance one symbol at a time — they take a complete target prefix and estimate its probability under the inner LM. Included primarily for pedagogical purposes.
+
+### Feature Matrix
+
+| | Method | Uses decomposition | Early termination at Q | Bounded | Finite-only |
+|---|---|---|:---:|:---:|:---:|
+| `prioritized_enumeration` | best-first search | ✓ | ✓ (absorbed) | `max_steps` | |
+| `importance_sampling` | LM-guided sampling | ✓ | ✓ (absorbed) | `max_length` | |
+| `crude_importance_sampling` | LM-guided sampling | | | `max_length` | |
+
+### How they work
+
+All three search through the precover DFA (the automaton recognizing source strings whose output starts with the target prefix), weighted by the inner LM.
+
+**`prioritized_enumeration`** — Best-first search (max-heap by LM weight). Pops the highest-weight item and classifies it: Q states are absorbed (full prefix probability), R states contribute weight × P(EOS). Non-terminal states are expanded by source symbols. Equivalent to the per-step search in `TransducedLM`, but for a single fixed target rather than incrementally.
+
+**`importance_sampling`** — Samples a single source path through the precover DFA, proposing transitions proportional to the inner LM. At Q states the sample is absorbed; at R states, EOS can be chosen. The return value carries a log importance weight (the sum of proposal normalizers) for use in Monte Carlo estimation.
+
+**`crude_importance_sampling`** — Same sampling strategy but without the Q/R decomposition. Operates on the raw (determinized) precover NFA — the sample terminates only at final states (where the source has produced exactly the target prefix and stopped). This is the naive baseline that demonstrates why decomposition matters: without quotient absorption, many more samples are needed.

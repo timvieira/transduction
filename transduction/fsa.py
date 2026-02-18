@@ -1,9 +1,27 @@
+"""Finite-state automaton (FSA) data structure with regular-language operations.
+
+Provides the :class:`FSA` class for building and manipulating finite-state
+acceptors.  Supports union, concatenation, intersection, difference,
+complement, Kleene star, left/right quotient, determinization, minimization,
+epsilon removal, and language equivalence testing.  Also includes Graphviz
+visualization and lazy (on-demand) variants via :mod:`transduction.lazy`.
+"""
+
 from transduction.util import Integerizer
 from collections import defaultdict, deque
 from functools import lru_cache
 
 
 def dfs(Ps, arcs):
+    """Build an FSA by depth-first exploration from seed states.
+
+    Args:
+        Ps: Iterable of start states.
+        arcs: Callable ``arcs(state) -> iterable of (label, successor)`` pairs.
+
+    Returns:
+        An FSA whose states and arcs are the DFS-reachable closure of ``Ps``.
+    """
     stack = list(Ps)
     m = FSA()
     for P in Ps: m.add_start(P)
@@ -44,6 +62,13 @@ class FSA:
     """
 
     def __init__(self, start=(), arcs=(), stop=()):
+        """Create an FSA, optionally populating it from iterables.
+
+        Args:
+            start: Iterable of initial states.
+            arcs: Iterable of ``(src, label, dst)`` tuples.
+            stop: Iterable of final (accepting) states.
+        """
         self.states = set()
         self.start = set()
         self.stop = set()

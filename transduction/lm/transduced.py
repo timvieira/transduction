@@ -316,11 +316,20 @@ class TransducedLM(LM):
         inner_lm: LM with StateLM interface (has .initial(), state >> x,
             state.logp_next).
         fst: FST instance mapping source -> target.
+        K: Carry-forward budget -- maximum number of particles retained across
+            target steps.  Larger K improves accuracy.
         max_expansions: Best-first search budget -- maximum number of non-
-            quotient particles expanded per target step.
+            quotient particles expanded per target step.  Larger values
+            explore more of the source space per step.
         eos: Outer EOS token.
         decomp_state_cls: Incremental decomposition class (default: RustPeekabooState).
         univ_cls: Universality precomputation class (default: _RustPeekabooUniv).
+
+    Note:
+        For beam-sum consistency, both ``K`` and ``max_expansions`` must grow
+        to infinity.  The defaults (K=100, max_expansions=1000) work for most
+        FSTs, but high-branching-factor FSTs may need a larger ratio of
+        ``max_expansions`` to ``K``.
     """
 
     def __init__(self, inner_lm, fst, K, max_expansions=1000, eos='<EOS>',

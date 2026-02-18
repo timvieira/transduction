@@ -128,6 +128,14 @@ class RustDirtyState(IncrementalDecomposition):
     """
 
     def __init__(self, fst, target=(), *, minimize=False, _rust_state=None):
+        """Create a dirty-state incremental decomposition.
+
+        Args:
+            fst: Python FST instance.
+            target: Target prefix (iterable of symbols).
+            minimize: If True, minimize the Q/R FSAs before returning.
+            _rust_state: Internal; shared Rust state for incremental reuse.
+        """
         self.fst = fst
         self.target = tuple(target)
         self.target_alphabet = fst.B - {EPSILON}
@@ -145,7 +153,7 @@ class RustDirtyState(IncrementalDecomposition):
 
     @cached_property
     def _qr(self):
-        # Use precomputed Q/R from decompose_next() if available
+        """Lazily compute and cache the (quotient, remainder) FSA pair."""
         if hasattr(self, '_precomputed_qr'):
             return self._precomputed_qr
         state, sym_map = self._rust_state
@@ -158,13 +166,16 @@ class RustDirtyState(IncrementalDecomposition):
 
     @property
     def quotient(self):
+        """FSA accepting source strings in the quotient Q(target)."""
         return self._qr[0]
 
     @property
     def remainder(self):
+        """FSA accepting source strings in the remainder R(target)."""
         return self._qr[1]
 
     def __rshift__(self, y):
+        """Extend the target by symbol ``y``, returning a new RustDirtyState."""
         return RustDirtyState(
             self.fst, self.target + (y,),
             minimize=self._minimize,
@@ -172,6 +183,10 @@ class RustDirtyState(IncrementalDecomposition):
         )
 
     def decompose_next(self):
+        """Decompose for every next target symbol in one batch.
+
+        Returns a dict ``{y: RustDirtyState}`` with pre-computed Q/R FSAs.
+        """
         state, sym_map = self._rust_state
         target_u32 = [sym_map(y) for y in self.target]
         # Advance Rust state to current target first
@@ -208,6 +223,16 @@ class RustDirtyPeekaboo(DecompositionResult):
 
     def __init__(self, fst, target=(), *, minimize=False, _rust_state=None,
                  _parent=None, _symbol=None):
+        """Create a Rust-backed incremental peekaboo decomposition.
+
+        Args:
+            fst: Python FST instance.
+            target: Target prefix (iterable of symbols).
+            minimize: If True, minimize the Q/R FSAs before returning.
+            _rust_state: Internal; shared Rust peekaboo state for reuse.
+            _parent: Internal; parent node for lazy Q/R computation.
+            _symbol: Internal; the symbol that extended the parent to this node.
+        """
         self.fst = fst
         target = tuple(target)
         self.target = target
@@ -227,9 +252,14 @@ class RustDirtyPeekaboo(DecompositionResult):
                                 sym_map)
 
     def __rshift__(self, y):
+        """Extend the target by symbol ``y``, returning a new RustDirtyPeekaboo."""
         return self.decompose_next()[y]
 
     def decompose_next(self):
+        """Decompose for every next target symbol in one batched peekaboo pass.
+
+        Returns a dict ``{y: RustDirtyPeekaboo}`` with pre-computed Q/R FSAs.
+        """
         state, sym_map = self._rust_state
         target_u32 = [sym_map(y) for y in self.target]
         result = state.decompose(target_u32, self._minimize)
@@ -257,6 +287,7 @@ class RustDirtyPeekaboo(DecompositionResult):
 
     @cached_property
     def _qr(self):
+        """Lazily compute and cache the (quotient, remainder) FSA pair."""
         if hasattr(self, '_precomputed_qr'):
             return self._precomputed_qr
         parent = self._parent
@@ -274,10 +305,12 @@ class RustDirtyPeekaboo(DecompositionResult):
 
     @property
     def quotient(self):
+        """FSA accepting source strings in the quotient Q(target)."""
         return self._qr[0]
 
     @property
     def remainder(self):
+        """FSA accepting source strings in the remainder R(target)."""
         return self._qr[1]
 
 

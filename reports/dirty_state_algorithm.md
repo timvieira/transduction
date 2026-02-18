@@ -73,6 +73,18 @@ Each DFA state is classified into one of four categories:
 | `RSTOP` | Final but not universal. Remainder stop state. Has outgoing arcs (expansion continues). |
 | `NEW` | Not yet expanded. Placeholder before BFS visit. |
 
+```mermaid
+stateDiagram-v2
+    [*] --> NEW : intern in arena
+    NEW --> QSTOP : final + universal
+    NEW --> RSTOP : final + not universal
+    NEW --> INTERIOR : expand (non-final, or final with outgoing arcs)
+    RSTOP --> INTERIOR : continue expansion
+
+    note right of QSTOP : BFS prunes here<br/>(no outgoing arcs)
+    note right of RSTOP : Expansion continues<br/>(has outgoing arcs)
+```
+
 The quotient FSA $Q$ uses `QSTOP` states as its accepting states; the
 remainder FSA $R$ uses `RSTOP` states. Both share the same transition
 structure (the DFA arcs), with pruning applied during materialization.
@@ -195,6 +207,25 @@ from previous calls to remain valid.
 
 ### 4.4 Incremental Update Algorithm
 
+```mermaid
+graph LR
+    P1["<b>Phase 1</b><br/>Identify dirty<br/><i>O(|reachable|)</i>"]
+    P2["<b>Phase 2</b><br/>Identify border<br/><i>O(|dirty| × d_in)</i>"]
+    P3["<b>Phase 3</b><br/>Reset dirty ∪ border"]
+    P4["<b>Phase 4</b><br/>Evict stale caches"]
+    P5["<b>Phase 5</b><br/>Local BFS<br/><i>only dirty/border + new</i>"]
+    P6["<b>Phase 6</b><br/>Save state"]
+
+    P1 --> P2 --> P3 --> P4 --> P5 --> P6
+
+    style P1 fill:#f8d7da
+    style P2 fill:#f8d7da
+    style P3 fill:#fff3cd
+    style P4 fill:#fff3cd
+    style P5 fill:#d4edda
+    style P6 fill:#cce5ff
+```
+
 ```
 function DECOMPOSE_DIRTY(T, y_new):
     if y_new is not a prefix extension of y_prev:
@@ -297,6 +328,38 @@ identification and paying the full BFS cost $|\mathcal{Y}|$ times.
 
 The `decompose_next_all` method shares the dirty/border identification
 across all symbols and uses lightweight **overlays** for per-symbol branching:
+
+```mermaid
+graph TD
+    subgraph "Shared (computed once)"
+        BASE["Base DFA<br/><i>arcs_from, state_status, reverse_arcs</i>"]
+        DB["Dirty ∪ Border identification"]
+        EPS["Evicted eps_cache (cloned)"]
+    end
+
+    subgraph "Per-symbol γ₁"
+        O1_arcs["overlay_arcs"]
+        O1_status["overlay_status"]
+        O1_rev["overlay_reverse_add/remove"]
+        O1_bfs["Local BFS → Q(y·γ₁), R(y·γ₁)"]
+    end
+
+    subgraph "Per-symbol γ₂"
+        O2_arcs["overlay_arcs"]
+        O2_status["overlay_status"]
+        O2_rev["overlay_reverse_add/remove"]
+        O2_bfs["Local BFS → Q(y·γ₂), R(y·γ₂)"]
+    end
+
+    BASE --> DB --> EPS
+    EPS --> O1_arcs & O2_arcs
+    BASE -.->|"read clean states"| O1_bfs
+    BASE -.->|"read clean states"| O2_bfs
+    O1_arcs --> O1_bfs
+    O1_status --> O1_bfs
+    O2_arcs --> O2_bfs
+    O2_status --> O2_bfs
+```
 
 ```
 function DECOMPOSE_NEXT_ALL(T, y, 𝒴):
@@ -521,6 +584,25 @@ from scratch.
 ### 8.3 Comparison with `DirtyDecomp`
 
 The incremental peekaboo case is simpler than `DirtyDecomp`:
+
+```mermaid
+graph LR
+    subgraph "DirtyDecomp"
+        direction TB
+        DD1["Target: y₁y₂...yₙ"]
+        DD2["Single DFA with<br/>dirty/border regions"]
+        DD3["Re-expand dirty+border<br/>skip clean states"]
+        DD1 --> DD2 --> DD3
+    end
+
+    subgraph "DirtyPeekaboo"
+        direction TB
+        DP1["Target: y₁y₂...yₙ"]
+        DP2["Step 0 ✓ | Step 1 ✓ | ... | Step N ✓"]
+        DP3["Only run Step N+1<br/>skip completed steps"]
+        DP1 --> DP2 --> DP3
+    end
+```
 
 | Aspect | `DirtyDecomp` | `DirtyPeekaboo` |
 |--------|---------------|-----------------|

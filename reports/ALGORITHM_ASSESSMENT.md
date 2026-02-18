@@ -87,6 +87,26 @@ pe = prioritized_enumeration(lm, fst, target, max_steps=20)
 
 ## Recommended Algorithms
 
+```mermaid
+graph TD
+    Q1{"Use case?"}
+    Q1 -->|"Autoregressive decoding<br/>(token by token)"| Q2{"Rust available?"}
+    Q1 -->|"One-shot decomposition"| Q3{"Rust available?"}
+    Q1 -->|"Finite-language FST only"| FIN["LazyIncremental<br/>PrioritizedLazyIncremental"]
+
+    Q2 -->|"Yes"| BEST["<b>RustDirtyPeekaboo</b><br/><i>fastest: dirty-state + batched</i>"]
+    Q2 -->|"No"| PY["PeekabooState<br/><i>Python incremental</i>"]
+
+    Q3 -->|"Yes"| RUST1["<b>RustDecomp</b>"]
+    Q3 -->|"No"| PY1["NonrecursiveDFADecomp"]
+
+    style BEST fill:#d4edda
+    style RUST1 fill:#d4edda
+    style PY fill:#cce5ff
+    style PY1 fill:#cce5ff
+    style FIN fill:#fff3cd
+```
+
 ### For Autoregressive Decoding
 
 Use **`RustDirtyPeekaboo`** or **`RustDirtyState`** (or Python `PeekabooState` if Rust unavailable).
