@@ -95,18 +95,18 @@ in priority order:
 graph TD
     Q["Query: is S universal?"]
     Q --> A{"1. all_input_universal?"}
-    A -- Yes --> U["Universal"]
-    A -- No --> B{"2. Witness check"}
-    B -- Hit --> U
-    B -- No --> C{"3. Superset monotonicity"}
-    C -- Hit --> U
-    C -- No --> D{"4. Subset monotonicity"}
-    D -- Hit --> NU["Not Universal"]
-    D -- No --> E["5. Sub-BFS fallback"]
-    E -- universal --> U
-    E -- not universal --> NU
-    E -.-> C
-    E -.-> D
+    A -->|Yes| U["✓ Universal"]
+    A -->|No| B{"2. Witness check<br/>any element ip-universal?"}
+    B -->|Hit| U
+    B -->|No| C{"3. Superset monotonicity<br/>known-universal u ⊆ S?"}
+    C -->|Hit| U
+    C -->|No| D{"4. Subset monotonicity<br/>S ⊆ known-non-universal?"}
+    D -->|Hit| NU["✗ Not Universal"]
+    D -->|No| E["5. Sub-BFS fallback<br/>full exploration"]
+    E -->|universal| U
+    E -->|not universal| NU
+    E -.->|cache| C
+    E -.->|cache| D
 
     style U fill:#d4edda
     style NU fill:#f8d7da
