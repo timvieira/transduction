@@ -67,6 +67,7 @@ class _FusedSearch:
         self.scores = LogVector()                     # symbol -> log-weight
         self.eos_score = -np.inf
         self.carry_forward = defaultdict(list)        # symbol -> [Particle]
+        self._cf_paths = defaultdict(set)             # symbol -> set of source_paths
 
         # Resolve sentinel particles: dfa_state=None means the particle came
         # from a truncated Q/R state.  Replay source path through the new DFA
@@ -86,31 +87,57 @@ class _FusedSearch:
 
     # --- Carry-forward ---
 
-    def _add_carry(self, y, item):
+    def _is_prefix_dominated(self, y, path):
+        """Check if path is dominated by an existing shorter path in cf_paths[y]."""
+        return any(path[:k] in self._cf_paths[y] for k in range(len(path)))
+
+    def _add_carry_q(self, y, item):
+        """Carry forward a Q-absorbed item (no prefix check needed)."""
         self.carry_forward[y].append(item)
+        self._cf_paths[y].add(item.source_path)
 
-    def _add_carry_sentinel(self, y, item):
-        """Carry forward item with sentinel dfa_state=None for truncated states.
+    def _add_carry_checked(self, y, item):
+        """Carry forward with prefix-domination check (for non-Q items)."""
+        path = item.source_path
+        if path in self._cf_paths[y] or self._is_prefix_dominated(y, path):
+            return
+        self.carry_forward[y].append(item)
+        self._cf_paths[y].add(path)
 
-        The sentinel is resolved via source-path replay in the next step's
-        _FusedSearch.__init__.
-        """
-        self._add_carry(y, Particle(None, item.lm_state, item.log_weight, item.source_path))
+    def _add_carry_sentinel_checked(self, y, item):
+        """Carry forward with sentinel dfa_state=None and prefix check."""
+        path = item.source_path
+        if path in self._cf_paths[y] or self._is_prefix_dominated(y, path):
+            return
+        sentinel = Particle(None, item.lm_state, item.log_weight, path)
+        self.carry_forward[y].append(sentinel)
+        self._cf_paths[y].add(path)
 
-    # --- Scoring (no expansion) ---
+    # --- Scoring + carry-forward ---
 
     def _score_item(self, item):
-        """Accumulate this item's contributions to scores.  Returns True if quotient."""
+        """Accumulate this item's contributions to scores and carry-forward.
+
+        Q-absorbed carry-forward bypasses the prefix check (Q particles are
+        not expanded, so cannot create prefix-overlapping descendants).
+        Non-Q carry-forward uses the prefix-domination check.
+
+        Returns True if quotient.
+        """
         result = self._tlm._rust_helper.classify(item.dfa_state)
         inv = self._tlm._inv_sym_map
-        carry = self._add_carry if not result.has_truncated else self._add_carry_sentinel
+        has_trunc = result.has_truncated
 
         q_sym = inv[result.quotient_sym] if result.quotient_sym is not None else None
         r_syms = [inv[s] for s in result.remainder_syms]
 
         if q_sym is not None:
             self.scores.logaddexp(q_sym, item.log_weight)
-            carry(q_sym, item)
+            # Q carry-forward: no prefix check needed (not expanded).
+            if has_trunc:
+                self._add_carry_sentinel_checked(q_sym, item)
+            else:
+                self._add_carry_q(q_sym, item)
 
         if result.is_preimage or r_syms:
             eos_lp = item.lm_state.logp_next[self._inner_eos]
@@ -118,6 +145,8 @@ class _FusedSearch:
             if result.is_preimage:
                 self.eos_score = np.logaddexp(self.eos_score, item.log_weight + eos_lp)
 
+            # Non-Q carry-forward: uses prefix check.
+            carry = self._add_carry_checked if not has_trunc else self._add_carry_sentinel_checked
             for y in r_syms:
                 eos_w = item.log_weight + eos_lp
                 self.scores.logaddexp(y, eos_w)
@@ -154,7 +183,7 @@ class _FusedSearch:
                         trunc_resume_syms.add(inv[y_u32])
 
         for y in trunc_resume_syms:
-            self._add_carry(y, item)
+            self._add_carry_checked(y, item)
 
     # --- Main loop ---
 

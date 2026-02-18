@@ -87,6 +87,7 @@ def _select_top_k(particles, k):
     return [particles[i] for i in indices]
 
 
+
 # ---------------------------------------------------------------------------
 # TransducedState
 # ---------------------------------------------------------------------------
@@ -115,7 +116,7 @@ class TransducedState(LMState):
         self.logp = logp
         self.path = path
         self._logp_next_cache = None
-        self._carry_forward_cache = None
+        self._carry_forward = None
 
     def _ensure_computed(self):
         if self._logp_next_cache is None:
@@ -136,16 +137,15 @@ class TransducedState(LMState):
         # Advance peekaboo decomposition state
         new_peekaboo = self._peekaboo_state >> y
 
-        cf_particles = self._carry_forward_cache.get(y, [])
-
-        # Translate carry-forward particles into the new DFA.
+        # Translate carry-forward particles `carry_forward[y]` into the new DFA.
         # Resume-frontier states persist directly; others are replayed
         # through the child DFA using the source path from the LM state.
+        carry = self._carry_forward.get(y, [])
         resume = self._peekaboo_state.resume_frontiers.get(y, set())
         new_dfa = new_peekaboo.dfa
 
         new_particles = []
-        for p in cf_particles:
+        for p in carry:
             if p.dfa_state in resume:
                 new_particles.append(p)
             else:
@@ -189,11 +189,12 @@ class TransducedState(LMState):
         # --- Accumulators ---
         scores = LogVector()
         carry_forward = defaultdict(list)   # y -> [particle, ...]
+        cf_paths = defaultdict(set)         # y -> set of source_paths added
 
-        def _update(particle):
-            """Classify particle, accumulate scores, save carry-forward.
+        def _score(particle):
+            """Classify particle and accumulate scores.
 
-            Returns True if the particle is at a quotient state (absorbed).
+            Returns (q_syms, r_syms) for the particle's DFA state.
             """
             d = particle.dfa_state
             w = particle.log_weight
@@ -218,11 +219,38 @@ class TransducedState(LMState):
                 for y in r_syms - q_syms:
                     scores.logaddexp(y, eos_w)
 
-            # Carry forward at any relevant state (Q, R, or resume frontier).
-            for y in q_syms | r_syms | resume_of.get(d, set()):
-                carry_forward[y].append(particle)
+            return q_syms, r_syms
 
-            return len(q_syms) > 0
+        def _add_carry_checked(y, particle):
+            """Add particle to carry_forward[y], skipping duplicates and prefix-dominated paths.
+
+            If the exact source_path or a shorter prefix is already in cf_paths[y],
+            this particle is redundant — either it's a duplicate or a shallower
+            particle will re-discover it.  Skipping eagerly avoids accumulating
+            O(budget) entries in carry_forward for cyclic FSTs.
+            """
+            path = particle.source_path
+            if path in cf_paths[y] or any(path[:k] in cf_paths[y] for k in range(len(path))):
+                return
+            carry_forward[y].append(particle)
+            cf_paths[y].add(path)
+
+        def _carry_forward(particle, q_syms, r_syms):
+            """Add particle to carry-forward sets for relevant symbols.
+
+            Q-absorbed particles are not expanded, so they cannot create
+            prefix-overlapping descendants — added directly without the
+            prefix check.  Non-Q carry-forward (R-only or resume-frontier
+            for a non-Q symbol) uses the prefix-domination check because
+            the particle will be expanded and its descendants may also
+            be carried forward for the same symbol.
+            """
+            d = particle.dfa_state
+            for y in q_syms:
+                carry_forward[y].append(particle)
+                cf_paths[y].add(particle.source_path)
+            for y in (r_syms | resume_of.get(d, set())) - q_syms:
+                _add_carry_checked(y, particle)
 
         # --- Best-first search ---
         queue = list(self._particles)
@@ -233,8 +261,14 @@ class TransducedState(LMState):
             expansions += 1
 
             particle = heapq.heappop(queue)
-            if _update(particle): continue  # absorbed by quotient
+            q_syms, r_syms = _score(particle)
+            _carry_forward(particle, q_syms, r_syms)
 
+            if q_syms:
+                # Q-absorbed: not expanded (exact marginalization).
+                continue
+
+            # Non-Q: expand by source symbols.
             lm_logp = particle.lm_state.logp_next
             for x, next_dfa_state in dfa.arcs(particle.dfa_state):
                 child_w = particle.log_weight + lm_logp[x]
@@ -246,12 +280,14 @@ class TransducedState(LMState):
                         particle.source_path + (x,),
                     ))
 
-        # Budget exhausted — score remaining items without expanding
+        # Budget exhausted — score and carry forward remaining items.
         while queue:
-            _update(heapq.heappop(queue))
+            particle = heapq.heappop(queue)
+            q_syms, r_syms = _score(particle)
+            _carry_forward(particle, q_syms, r_syms)
 
         self._logp_next_cache = scores.normalize()
-        self._carry_forward_cache = carry_forward
+        self._carry_forward = carry_forward
 
     def _repr_html_(self):
         decomp = self._peekaboo_state.decomp
