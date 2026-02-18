@@ -943,22 +943,31 @@ class TestCarryForwardExactness:
                 f"Step {step}: P(EOS) exact={exact_EOS:.12f}, got={lp[state.eos]:.12f}"
             state = state >> 'A'
 
-    def test_delete_b_carry_forward_has_overlap(self):
-        """Verify the test is actually triggering carry-forward overlap.
+    def test_delete_b_carry_forward_no_prefix_overlap(self):
+        """After dedup, carry-forward for 'A' has no prefix-overlapping paths.
 
-        After the initial BFS, carry-forward for 'A' should contain multiple
-        particles (from different BFS depths: source paths a, ba, bba, ...).
+        The BFS discovers particles at source paths (), (a,), (b,a,), etc.
+        that all map to carry-forward for 'A'.  After prefix deduplication,
+        no path should be a strict prefix of another.
         """
         inner_lm = TinyLM()
         fst = examples.delete_b()
 
-        tlm = TransducedLM(inner_lm, fst, K=10, max_expansions=10000)
+        # Use smaller budget to keep the test fast — overlap behavior
+        # doesn't depend on expansion budget.
+        tlm = TransducedLM(inner_lm, fst, K=10, max_expansions=200)
         state = tlm.initial()
         state._ensure_computed()
 
-        cf_A = state._carry_forward_cache.get('A', [])
-        assert len(cf_A) > 1, \
-            f"Expected multiple carry-forward particles for 'A', got {len(cf_A)}"
+        cf_A = state._carry_forward.get('A', [])
+        assert len(cf_A) >= 1, "Expected at least one carry-forward particle for 'A'"
+        paths = set(p.source_path for p in cf_A)
+        for p in cf_A:
+            for k in range(len(p.source_path)):
+                assert p.source_path[:k] not in paths, (
+                    f"Prefix overlap in carry_forward['A']: "
+                    f"{p.source_path[:k]} is a prefix of {p.source_path}"
+                )
 
     def test_duplicate_vs_reference(self):
         """TransducedLM on duplicate FST matches ReferenceTransducedLM."""
@@ -1498,3 +1507,141 @@ class TestReferenceTransducedLM:
         # Complete string logp = log(0.6).
         complete_logp = state.logp + state.logp_next['<EOS>']
         assert complete_logp == pytest.approx(np.log(0.6), abs=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# Carry-forward overlap regression tests (issue #6)
+# ---------------------------------------------------------------------------
+
+def _overlap_trigger_fst():
+    """Acyclic FST with non-deterministic output timing.
+
+    Source 'a' from state 0 either produces 'c' directly or produces epsilon
+    (buffering).  This creates R(c)\\Q(c) powerset states that previously
+    caused carry-forward overlap and duplicate particles.
+
+    Relation:
+      '' -> ''              (start is final)
+      'a' -> 'c'            (direct: a produces c immediately)
+      'ab' -> 'c'           (delayed: a produces eps, then b produces c)
+      'aa' -> 'cx'          (direct path continues)
+      'aba' -> 'cx'         (delayed path continues)
+    """
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(0)
+    fst.add_arc(0, 'a', 'c', 1)       # direct: a -> c
+    fst.add_arc(0, 'a', EPSILON, 2)    # delayed: a -> eps
+    fst.add_arc(2, 'b', 'c', 3)       # then b -> c
+    fst.add_stop(1)
+    fst.add_stop(3)
+    fst.add_arc(1, 'a', 'x', 4)       # continue: a -> x
+    fst.add_arc(3, 'a', 'x', 4)       # continue: a -> x
+    fst.add_stop(4)
+    return fst
+
+
+class TestOverlapTrigger:
+    """Regression tests for carry-forward overlap (issue #6).
+
+    The _overlap_trigger_fst has non-deterministic output timing: source 'a'
+    from the start state either produces target 'c' immediately (-> state 1)
+    or produces epsilon (-> state 2, then 'b' -> 'c').  This creates
+    R(c)\\Q(c) powerset states.  Before the fix, such states were both
+    expanded AND carried forward, causing prefix-overlapping source paths
+    that generated duplicate particles in subsequent steps.
+    """
+
+    @pytest.fixture
+    def overlap_setup(self):
+        fst = _overlap_trigger_fst()
+        inner_lm = FiniteLM({
+            (): 0.1,
+            ('a',): 0.3,
+            ('b',): 0.1,
+            ('a', 'b'): 0.2,
+            ('a', 'a'): 0.15,
+            ('a', 'b', 'a'): 0.15,
+        })
+        return inner_lm, fst
+
+    def test_no_duplicate_source_paths(self, overlap_setup):
+        """After advancing by 'c', no two particles should share a source_path."""
+        inner_lm, fst = overlap_setup
+        tlm = TransducedLM(inner_lm, fst, K=500, max_expansions=5000)
+        state = tlm >> 'c'
+        paths = [p.source_path for p in state._particles]
+        assert len(set(paths)) == len(paths), (
+            f"Duplicate source_paths in particles after advancing by 'c': "
+            f"{len(paths)} particles, {len(set(paths))} unique"
+        )
+
+    def test_no_prefix_overlap_in_carry_forward(self, overlap_setup):
+        """Carry-forward particles for 'c' should have no prefix-overlapping paths."""
+        inner_lm, fst = overlap_setup
+        tlm = TransducedLM(inner_lm, fst, K=500, max_expansions=5000)
+        state = tlm.initial()
+        state._ensure_computed()
+        cf_c = state._carry_forward.get('c', [])
+        paths = [p.source_path for p in cf_c]
+        # Check no path is a strict prefix of another
+        for i, p1 in enumerate(paths):
+            for j, p2 in enumerate(paths):
+                if i != j and len(p1) < len(p2) and p2[:len(p1)] == p1:
+                    assert False, (
+                        f"Prefix overlap in carry_forward['c']: "
+                        f"{p1} is a prefix of {p2}"
+                    )
+
+    def test_transduced_vs_reference(self, overlap_setup):
+        """TransducedLM matches ReferenceTransducedLM on the overlap-trigger FST."""
+        inner_lm, fst = overlap_setup
+        ref = ReferenceTransducedLM(inner_lm, fst)
+        tlm = TransducedLM(inner_lm, fst, K=500, max_expansions=5000)
+
+        ref_state = ref.initial()
+        tlm_state = tlm.initial()
+
+        for step, y in enumerate(['c', 'x']):
+            ref_lp = ref_state.logp_next
+            tlm_lp = tlm_state.logp_next
+            for sym in ref_lp:
+                if ref_lp[sym] > -20:
+                    assert abs(tlm_lp[sym] - ref_lp[sym]) < 1e-6, (
+                        f"Step {step}, sym={sym!r}: ref={ref_lp[sym]:.8f}, "
+                        f"tlm={tlm_lp[sym]:.8f}"
+                    )
+            ref_state = ref_state >> y
+            tlm_state = tlm_state >> y
+
+    def test_fused_vs_reference(self, overlap_setup):
+        """FusedTransducedLM matches ReferenceTransducedLM on the overlap-trigger FST."""
+        inner_lm, fst = overlap_setup
+        ref = ReferenceTransducedLM(inner_lm, fst)
+        tlm = FusedTransducedLM(inner_lm, fst, max_steps=5000, max_beam=500)
+
+        ref_state = ref.initial()
+        tlm_state = tlm.initial()
+
+        for step, y in enumerate(['c', 'x']):
+            ref_lp = ref_state.logp_next
+            tlm_lp = tlm_state.logp_next
+            for sym in ref_lp:
+                if ref_lp[sym] > -20:
+                    assert abs(tlm_lp[sym] - ref_lp[sym]) < 1e-6, (
+                        f"Step {step}, sym={sym!r}: ref={ref_lp[sym]:.8f}, "
+                        f"tlm={tlm_lp[sym]:.8f}"
+                    )
+            ref_state = ref_state >> y
+            tlm_state = tlm_state >> y
+
+    def test_fused_no_duplicate_source_paths(self, overlap_setup):
+        """FusedTransducedLM: after advancing by 'c', no duplicate source_paths."""
+        inner_lm, fst = overlap_setup
+        tlm = FusedTransducedLM(inner_lm, fst, max_steps=5000, max_beam=500)
+        state = tlm >> 'c'
+        paths = [p.source_path for p in state._particles]
+        assert len(set(paths)) == len(paths), (
+            f"Duplicate source_paths in FusedTransducedLM particles: "
+            f"{len(paths)} particles, {len(set(paths))} unique"
+        )
