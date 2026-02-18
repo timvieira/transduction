@@ -58,14 +58,16 @@ adding `DecompositionResult.__rshift__` so every implementation supports `>>`.
 
 ~11.5K lines of Python across 31 modules. No circular dependencies. Well-layered:
 
-```
-FST / FSA  (data structures)
-   |
-base.py  (DecompositionResult, abstract interfaces)
-   |
-algorithm implementations  (peekaboo, dirty, ...)
-   |
-lm/transduced.py  (TransducedLM — user-facing)
+```mermaid
+graph TD
+    A["<b>FST / FSA</b><br/>data structures"]
+    B["<b>base.py</b><br/>DecompositionResult, abstract interfaces"]
+    C["<b>Algorithm Implementations</b><br/>peekaboo, dirty, precover, ..."]
+    D["<b>lm/transduced.py</b><br/>TransducedLM — user-facing API"]
+    R["<b>Rust Backend</b><br/>optional acceleration (3–25x)"]
+
+    A --> B --> C --> D
+    C -. "PyO3 bridge" .-> R
 ```
 
 The Rust bridge is optional and degrades gracefully. The LM submodule (`lm/`)
@@ -105,6 +107,21 @@ via `_repr_html_` with unified visualization.
 The `TransducedLM` tests use a four-level cross-validation pyramid, where each
 level provides independent verification:
 
+```mermaid
+graph BT
+    L1["<b>1. Hand-computed exact</b><br/>FiniteLM + acyclic FSTs<br/><i>TestFiniteLMExact</i>"]
+    L2["<b>2. Brute-force enumeration</b><br/>fst.relation() over bounded lengths<br/><i>test_brute_force_comparison</i>"]
+    L3["<b>3. Oracle cross-validation</b><br/>ReferenceTransducedLM (exact Q/R)<br/><i>test_reference_vs_transduced</i>"]
+    L4["<b>4. Analytical closed-form</b><br/>Negative binomial series (infinite quotients)<br/><i>TestDeleteBExact</i>"]
+
+    L1 --- L2 --- L3 --- L4
+
+    style L1 fill:#d4edda
+    style L2 fill:#cce5ff
+    style L3 fill:#fff3cd
+    style L4 fill:#f8d7da
+```
+
 1. **Hand-computed exact values** — `FiniteLM` + acyclic FSTs where the
    pushforward can be computed by hand. With `FiniteLM`, zero-probability
    transitions are pruned, so beam-sum BFS terminates with the full support;
@@ -138,14 +155,14 @@ and carry-forward prefix-domination regression tests.
 
 ## Open Issues
 
-### Medium: No Batched LM Inference (#7)
+### Medium: No Batched LM Inference ([#7](https://github.com/timvieira/transduction/issues/7))
 
 `TransducedLM` processes one sequence at a time. The LM state advance
 (`lm_state >> x`) consumes 30-40% of `_compute_logp_next` time. Batching
 multiple source-symbol expansions into a single forward pass would improve
 GPU utilization for neural LMs.
 
-### Medium: DirtyPeekaboo Non-Monotonic Target Sequences (#5)
+### Medium: DirtyPeekaboo Non-Monotonic Target Sequences ([#5](https://github.com/timvieira/transduction/issues/5))
 
 `RustDirtyPeekabooDecomp.decompose_for_beam` produces incorrect results when
 called with a shorter target after a longer one (e.g., tree-branching decode).
@@ -160,7 +177,7 @@ defaults (K=100, max_expansions=1000) work for most FSTs, but
 high-branching-factor FSTs may need a larger ratio. This coupling is not
 documented in the user-facing API.
 
-### Low: StateLM KV Cache Sharing with DynamicCache (#1)
+### Low: StateLM KV Cache Sharing with DynamicCache ([#1](https://github.com/timvieira/transduction/issues/1))
 
 `StateLM` shares `past_key_values` between parent and child states. Works
 with GPT-2's tuple caches but will silently corrupt results with modern
@@ -191,9 +208,9 @@ with GPT-2's tuple caches but will silently corrupt results with modern
 
 | Item | Severity | Location | Effort |
 |------|----------|----------|--------|
-| DirtyPeekaboo non-monotonic targets (#5) | Medium | `rust_bridge.py`, `peekaboo.rs` | Medium |
-| No batched LM calls (#7) | Medium | `lm/transduced.py` | Medium |
-| StateLM KV cache with DynamicCache (#1) | Low | `lm/statelm.py` | Small |
+| DirtyPeekaboo non-monotonic targets ([#5](https://github.com/timvieira/transduction/issues/5)) | Medium | `rust_bridge.py`, `peekaboo.rs` | Medium |
+| No batched LM calls ([#7](https://github.com/timvieira/transduction/issues/7)) | Medium | `lm/transduced.py` | Medium |
+| StateLM KV cache with DynamicCache ([#1](https://github.com/timvieira/transduction/issues/1)) | Low | `lm/statelm.py` | Small |
 | K/max_expansions coupling undocumented | Low | `lm/transduced.py` | Small |
 | No type annotations | Medium | Public API modules | Large |
 
