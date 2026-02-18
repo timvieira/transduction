@@ -5,8 +5,7 @@
 Given a finite-state transducer $T$ over input alphabet $\mathcal{X}$ and output
 alphabet $\mathcal{Y}$, and a target string $\boldsymbol{y} \in \mathcal{Y}^*$, the
 **decomposition problem** partitions the source precover
-$\mathcal{P}(\boldsymbol{y}) = \text{proj}_\mathcal{X}(T \circ
-\boldsymbol{y}\mathcal{Y}^*)$ into a **quotient** $Q(\boldsymbol{y})$ and
+$\mathcal{P}(\boldsymbol{y}) = \text{proj}_\mathcal{X}(T \circ \boldsymbol{y}\mathcal{Y}^*)$ into a **quotient** $Q(\boldsymbol{y})$ and
 **remainder** $R(\boldsymbol{y})$:
 
 $$\mathcal{P}(\boldsymbol{y}) = Q(\boldsymbol{y}) \cdot \mathcal{X}^* \sqcup R(\boldsymbol{y})$$
@@ -145,8 +144,7 @@ its stored size, a subset (or superset) relationship has been found.
 
 ### 4.1 Key Insight
 
-When the target extends from $\boldsymbol{y}$ to $\boldsymbol{y} \cdot
-y_{n+1}$, most of the DFA is unchanged. The Precover NFA's transitions
+When the target extends from $\boldsymbol{y}$ to $\boldsymbol{y} \cdot y_{n+1}$, most of the DFA is unchanged. The Precover NFA's transitions
 only change for states whose buffer position $|\boldsymbol{b}|$ is at the
 **frontier** — the boundary where the old target ended. States with
 $|\boldsymbol{b}| < |\boldsymbol{y}|$ have arcs that depend only on earlier
@@ -187,8 +185,7 @@ The algorithm persists the entire DFA structure across calls:
 ### 4.3 Stable NFA State Packing
 
 A critical design requirement is **stable state identity across target
-extensions**. In the non-incremental setting, NFA states $(i,
-|\boldsymbol{b}|)$ are packed as:
+extensions**. In the non-incremental setting, NFA states $(i, |\boldsymbol{b}|)$ are packed as:
 
 $$\text{packed} = i \times (|\boldsymbol{y}| + 1) + |\boldsymbol{b}|$$
 
@@ -200,8 +197,7 @@ The dirty-state algorithm uses a **fixed stride**:
 
 $$\text{packed} = i \times S + |\boldsymbol{b}|$$
 
-where $S$ is chosen large enough for any future target length (e.g., $S =
-4096$). This ensures that the packed representation of state $(i, k)$ is the
+where $S$ is chosen large enough for any future target length (e.g., $S = 4096$). This ensures that the packed representation of state $(i, k)$ is the
 same regardless of the current target length, allowing PowersetArena entries
 from previous calls to remain valid.
 
@@ -279,8 +275,7 @@ Three caches require selective eviction on prefix extension:
 
 1. **Epsilon closure cache:** An entry $(s, \text{closure})$ is stale if the
    NFA state $s$ has $|\boldsymbol{b}| \geq \text{frontier}$ (its arcs
-   changed), or if any state in the closure has $|\boldsymbol{b}| \geq
-   \text{frontier}$ (the closure result changed). The `max_buf_pos` stored
+   changed), or if any state in the closure has $|\boldsymbol{b}| \geq \text{frontier}$ (the closure result changed). The `max_buf_pos` stored
    alongside each entry enables the second check without scanning the full
    closure vector.
 
@@ -468,7 +463,7 @@ $m = |\mathcal{Y}|$ (output alphabet).
 - **Reset:** $O((D + B) \cdot \bar{d}_{\text{out}})$ for reverse-arc cleanup.
 - **BFS:** $O((D + B + N_{\text{new}}) \cdot k)$ where $N_{\text{new}}$ is
   newly discovered states. Clean states are never re-expanded.
-- **Cache eviction:** $O(|\text{eps\_cache}|)$ scan for stale entries.
+- **Cache eviction:** O(|`eps_cache`|) scan for stale entries.
 
 The savings are proportional to $1 - (D + B)/n$: the fraction of clean
 states that are skipped. In BPE tokenization, the DFA typically has
@@ -553,7 +548,7 @@ over a fixed-target Precover NFA, peekaboo runs a sequence of **steps**
 $0, 1, \ldots, |\boldsymbol{y}|$, each using a `PeekabooNFAMapped`
 parameterized by `step_n`:
 
-- NFA states are $(i, \text{buf\_len}, \text{extra\_sym}, \text{truncated})$
+- NFA states are $(i, b, s, t)$ — FST state, buffer length, extra symbol, truncation flag —
   packed into `u64`.
 - At step $k$, the NFA reads `target[0..k]` and allows one symbol beyond
   the target prefix (`extra_sym`), which becomes the next-symbol index.

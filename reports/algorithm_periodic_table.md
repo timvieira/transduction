@@ -62,7 +62,7 @@ Note: `TruncatedIncrementalDFADecomp` and `RustDirtyState` use a frontier-marker
 
 ## Transduced Language Models
 
-The decomposition algorithms above compute *structural* Q/R decompositions. The transduced LM layer sits on top, combining a decomposition with an inner LM to compute the pushforward distribution P(target) = sum_{source in T^{-1}(target)} P_inner(source). All implementations conform to the `LM`/`LMState` interface: `state >> y` advances by one target symbol, `state.logp_next[y]` returns log P(y | target_so_far).
+The decomposition algorithms above compute *structural* Q/R decompositions. The transduced LM layer sits on top, combining a decomposition with an inner LM to compute the pushforward distribution $P(\text{target}) = \sum_{x \in T^{-1}(\text{target})} P_{\text{inner}}(x)$. All implementations conform to the `LM`/`LMState` interface: `state >> y` advances by one target symbol, `state.logp_next[y]` returns log P(y | target so far).
 
 ### Feature Matrix
 
@@ -76,7 +76,7 @@ The decomposition algorithms above compute *structural* Q/R decompositions. The 
 
 **`TransducedLM`** (`lm/transduced.py`) — The primary approximate inference engine. Maintains K particles (source-prefix hypotheses), each tracking a DFA state and an inner LM state. Per target step:
 1. The peekaboo decomposition classifies DFA states as Q(y), R(y), or preimage.
-2. Best-first search pops particles by weight. Quotient particles are *absorbed* — their full weight contributes to y's score (exact marginalization over all continuations). Remainder particles contribute weight × P_inner(EOS). Non-classified particles are expanded by source symbols weighted by P_inner.
+2. Best-first search pops particles by weight. Quotient particles are *absorbed* — their full weight contributes to y's score (exact marginalization over all continuations). Remainder particles contribute weight × $P_{\text{inner}}(\text{EOS})$. Non-classified particles are expanded by source symbols weighted by $P_{\text{inner}}$.
 3. After the expansion budget (`max_expansions`) is exhausted, remaining queued particles are scored without expansion.
 4. Carry-forward passes particles at Q/R/resume-frontier states to the next step; top-K pruning bounds the beam.
 

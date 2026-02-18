@@ -1,6 +1,6 @@
 # Project Assessment: Delivering on the Transduced LM Mission
 
-## 2026-02-17
+## 2026-02-18
 
 ---
 
@@ -20,8 +20,11 @@ implementations now support the `>>` operator via `DecompositionResult.__rshift_
 Rich notebook display (`_repr_html_`) enables interactive exploration.
 The LM integration layer uses clean log-space types (`LogVector`, `LogDistr`)
 replacing ad-hoc patterns. Test coverage is comprehensive: 881 tests across
-13 files, all passing with 0 skipped. The remaining path to production
-readiness: batch LM calls for GPU utilization.
+13 files, all passing with 0 skipped. Documentation now covers all public
+modules (module docstrings), constructors, abstract interfaces, and the Rust
+bridge classes; a tutorial notebook (`examples/tutorial.ipynb`) provides an
+end-to-end walkthrough with rich Graphviz and HTML display. The remaining
+path to production readiness: batch LM calls for GPU utilization.
 
 ---
 
@@ -102,7 +105,26 @@ Users don't need to understand precovers, peekaboo, or dirty states. The
 `TransducedState` and `FusedTransducedState` support rich notebook display
 via `_repr_html_` with unified visualization.
 
-### 6. Testing Strategy for TransducedLM
+### 6. Documentation
+
+- **Module docstrings** on all public modules (`fst.py`, `fsa.py`, `lm/base.py`,
+  `util.py`, `base.py`, `rust_bridge.py`, `lm/transduced.py`, `lm/ngram.py`)
+- **Constructor docstrings** on `FST.__init__`, `FSA.__init__` with Args blocks
+- **Abstract interface docs**: `LMState.logp_next`, `LMState.__rshift__`,
+  `AbstractAlgorithm` class docstring explaining the BFS hook pattern
+- **Rust bridge coverage**: `RustDirtyState` and `RustDirtyPeekaboo` — all
+  public methods documented (`__init__`, `quotient`, `remainder`, `__rshift__`,
+  `decompose_next`)
+- **K/max_expansions coupling** documented in `TransducedLM` docstring
+- **Utility coverage**: `Integerizer` methods, `dfs()` in `fsa.py`
+- **Tutorial notebook** (`examples/tutorial.ipynb`): end-to-end walkthrough
+  using Graphviz FST/FSA diagrams, `display_table` for relations, and
+  `_repr_html_` for TransducedState particle visualization
+- **Existing strength**: `base.py` has a 55-line module docstring covering the
+  precover decomposition theory; `README.md` is substantial with code examples,
+  performance tables, and architecture diagrams
+
+### 7. Testing Strategy for TransducedLM
 
 The `TransducedLM` tests use a four-level cross-validation pyramid, where each
 level provides independent verification:
@@ -169,13 +191,9 @@ called with a shorter target after a longer one (e.g., tree-branching decode).
 The dirty-state logic assumes monotonic forward extension; backward steps
 cause stale state to corrupt the decomposition.
 
-### Low: K and max_expansions Must Scale Together
+### ~~Low: K and max_expansions Must Scale Together~~ (Resolved)
 
-Beam-sum consistency requires both `K` (carry-forward budget) and
-`max_expansions` (per-step expansion budget) to grow to infinity. The
-defaults (K=100, max_expansions=1000) work for most FSTs, but
-high-branching-factor FSTs may need a larger ratio. This coupling is not
-documented in the user-facing API.
+Now documented in the `TransducedLM` docstring (Note section).
 
 ### Low: StateLM KV Cache Sharing with DynamicCache ([#1](https://github.com/timvieira/transduction/issues/1))
 
@@ -211,7 +229,7 @@ with GPT-2's tuple caches but will silently corrupt results with modern
 | DirtyPeekaboo non-monotonic targets ([#5](https://github.com/timvieira/transduction/issues/5)) | Medium | `rust_bridge.py`, `peekaboo.rs` | Medium |
 | No batched LM calls ([#7](https://github.com/timvieira/transduction/issues/7)) | Medium | `lm/transduced.py` | Medium |
 | StateLM KV cache with DynamicCache ([#1](https://github.com/timvieira/transduction/issues/1)) | Low | `lm/statelm.py` | Small |
-| K/max_expansions coupling undocumented | Low | `lm/transduced.py` | Small |
+| ~~K/max_expansions coupling undocumented~~ | ~~Low~~ | ~~`lm/transduced.py`~~ | ~~Resolved~~ |
 | No type annotations | Medium | Public API modules | Large |
 
 ---
@@ -262,12 +280,17 @@ with GPT-2's tuple caches but will silently corrupt results with modern
 | **Testing** | A+ | 881 tests across 13 files, 0 skipped; fst.py at 99% coverage; carry-forward regression tests |
 | **End-to-End Product** | A- | Particle-based beam-sum inference; quotient exact marginalization; rich notebook display |
 | **API/Packaging** | A- | Exports correct; Rust default; `_repr_html_`; all impls support `>>`; end-to-end example |
-| **Documentation** | B- | Core concepts documented; function-level docs still sparse |
+| **Documentation** | A- | Module, class, and method docstrings across public API; tutorial notebook with rich display |
 
 **Bottom line:** The hard parts — fast, correct FST decomposition AND a working
 `TransducedLM` with particle-based approximate inference — are done. The LM
 integration layer now uses clean log-space types (`LogVector` for mutable
 accumulation, `LogDistr` for immutable distributions) replacing the ad-hoc
 `LogpNext` class and `defaultdict` pattern. Test coverage stands at 881 tests
-with 0 skipped. The remaining work is performance (batched LM calls) and
-usability (types, benchmarks).
+with 0 skipped. Documentation is now comprehensive: every public module has a
+module docstring, all key classes and methods are documented (including the
+Rust bridge and abstract interfaces), the K/max_expansions coupling is
+documented in the API, and a tutorial notebook (`examples/tutorial.ipynb`)
+walks through the full pipeline with Graphviz and rich HTML display. The
+remaining work is performance (batched LM calls) and usability (type
+annotations, benchmarks).
