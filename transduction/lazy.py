@@ -311,155 +311,153 @@ class LazyWrapper(Lazy[A]):
 
 #_______________________________________________________________________________
 # EXPERIMENTAL SCC-based epsilon closure; written by ChatGPT but not tested extensively
-
-if 0:
-
-    class LazyEpsSCCIndex:
-        """
-        Incremental Tarjan SCC discovery over the ε-subgraph, driven lazily by ensure(i).
-        Discovers SCCs only in the ε-reachable region from queried states.
-        """
-
-        def __init__(self, fsa):
-            self.fsa = fsa
-
-            # Tarjan per-state metadata (only for discovered states)
-            self._index = 0
-            self._idx = {}          # state -> dfs index
-            self._low = {}          # state -> lowlink
-            self._onstack = set()
-            self._stack = []
-
-            # SCC data (only for discovered SCCs)
-            self._cid = 0
-            self.comp = {}          # state -> component id
-            self.members = {}       # component id -> frozenset(states)
-            self.eps_succ = defaultdict(set)   # component id -> set(component id)
-
-            # For building eps_succ when target component not known yet
-            self._pending_to_state = defaultdict(set)  # state -> set(source component ids)
-
-            # Optional per-component aggregates you'll likely want
-            self.comp_is_final = {}  # component id -> bool
-
-        def ensure(self, i):
-            """Ensure Tarjan has indexed i and all ε-reachable states from i."""
-            if i in self._idx:
-                return
-            self._strongconnect(i)
-
-        def _eps_succ_states(self, i):
-            # Iterates ε successors lazily from the underlying FSA.
-            return self.fsa.arcs_x(i, EPSILON)
-
-        def _strongconnect(self, v):
-            # Standard Tarjan, but driven from v only.
-            self._idx[v] = self._index
-            self._low[v] = self._index
-            self._index += 1
-
-            self._stack.append(v)
-            self._onstack.add(v)
-
-            for w in self._eps_succ_states(v):
-                if w not in self._idx:
-                    self._strongconnect(w)
-                    self._low[v] = min(self._low[v], self._low[w])
-                elif w in self._onstack:
-                    self._low[v] = min(self._low[v], self._idx[w])
-
-            # If v is a root node, pop the stack and generate an SCC
-            if self._low[v] == self._idx[v]:
-                nodes = []
-                while True:
-                    w = self._stack.pop()
-                    self._onstack.remove(w)
-                    nodes.append(w)
-                    if w == v:
-                        break
-
-                cid = self._cid
-                self._cid += 1
-
-                # Assign component id to members
-                for s in nodes:
-                    self.comp[s] = cid
-
-                nodes_fs = frozenset(nodes)
-                self.members[cid] = nodes_fs
-
-                # Aggregate final-ness (cheap, and helps is_final)
-                self.comp_is_final[cid] = any(self.fsa.is_final(s) for s in nodes_fs)
-
-                # Now that cid is known, resolve any pending incoming edges
-                for s in nodes_fs:
-                    if s in self._pending_to_state:
-                        for src_cid in self._pending_to_state.pop(s):
-                            if src_cid != cid:
-                                self.eps_succ[src_cid].add(cid)
-
-                # Record outgoing component edges by scanning ε-arcs from SCC members.
-                # Targets might not yet have a component id at this exact moment if they're
-                # not in the explored region — but in Tarjan DFS they *will* have been reached.
-                # Still, handle defensively via pending.
-                for s in nodes_fs:
-                    for t in self._eps_succ_states(s):
-                        tgt_cid = self.comp.get(t)
-                        if tgt_cid is not None:
-                            if tgt_cid != cid:
-                                self.eps_succ[cid].add(tgt_cid)
-                        else:
-                            # Haven't assigned t to a component yet; remember cid wants an edge to it.
-                            self._pending_to_state[t].add(cid)
-
-
-    class LazySCCDAGClosure:
-        def __init__(self, scc_index: LazyEpsSCCIndex):
-            self.I = scc_index
-            self._cache = {}  # cid -> frozenset[cid]
-
-        def closure_cid(self, cid):
-            got = self._cache.get(cid)
-            if got is not None:
-                return got
-            out = {cid}
-            for nxt in self.I.eps_succ.get(cid, ()):
-                out |= self.closure_cid(nxt)
-            out = frozenset(out)
-            self._cache[cid] = out
-            return out
-
-
-    class _EpsilonRemoveSCC(Lazy):
-
-        def __init__(self, fsa):
-            self.fsa = fsa
-            self.I = LazyEpsSCCIndex(fsa)
-            self.C = LazySCCDAGClosure(self.I)
-
-        def _closure(self, i):
-            self.I.ensure(i)                 # discover SCCs only as needed
-            cid = self.I.comp[i]             # now i has a component id
-            for u in self.C.closure_cid(cid):
-                yield from self.I.members[u]
-
-        def start(self):
-            for i in self.fsa.start():
-                yield from self._closure(i)
-
-        def is_final(self, i):
-            self.I.ensure(i)
-            cid = self.I.comp[i]
-            return any(self.I.comp_is_final[u] for u in self.C.closure_cid(cid))
-
-        def arcs(self, i):
-            for a, j in self.fsa.arcs(i):
-                if a == EPSILON:
-                    continue
-                yield from ((a, k) for k in self._closure(j))
-
-        def arcs_x(self, i, x):
-            if x == EPSILON:
-                return
-            for j in self.fsa.arcs_x(i, x):
-                yield from self._closure(j)
+#
+#class LazyEpsSCCIndex:
+#    """
+#    Incremental Tarjan SCC discovery over the ε-subgraph, driven lazily by ensure(i).
+#    Discovers SCCs only in the ε-reachable region from queried states.
+#    """
+#
+#    def __init__(self, fsa):
+#        self.fsa = fsa
+#
+#        # Tarjan per-state metadata (only for discovered states)
+#        self._index = 0
+#        self._idx = {}          # state -> dfs index
+#        self._low = {}          # state -> lowlink
+#        self._onstack = set()
+#        self._stack = []
+#
+#        # SCC data (only for discovered SCCs)
+#        self._cid = 0
+#        self.comp = {}          # state -> component id
+#        self.members = {}       # component id -> frozenset(states)
+#        self.eps_succ = defaultdict(set)   # component id -> set(component id)
+#
+#        # For building eps_succ when target component not known yet
+#        self._pending_to_state = defaultdict(set)  # state -> set(source component ids)
+#
+#        # Optional per-component aggregates you'll likely want
+#        self.comp_is_final = {}  # component id -> bool
+#
+#    def ensure(self, i):
+#        """Ensure Tarjan has indexed i and all ε-reachable states from i."""
+#        if i in self._idx:
+#            return
+#        self._strongconnect(i)
+#
+#    def _eps_succ_states(self, i):
+#        # Iterates ε successors lazily from the underlying FSA.
+#        return self.fsa.arcs_x(i, EPSILON)
+#
+#    def _strongconnect(self, v):
+#        # Standard Tarjan, but driven from v only.
+#        self._idx[v] = self._index
+#        self._low[v] = self._index
+#        self._index += 1
+#
+#        self._stack.append(v)
+#        self._onstack.add(v)
+#
+#        for w in self._eps_succ_states(v):
+#            if w not in self._idx:
+#                self._strongconnect(w)
+#                self._low[v] = min(self._low[v], self._low[w])
+#            elif w in self._onstack:
+#                self._low[v] = min(self._low[v], self._idx[w])
+#
+#        # If v is a root node, pop the stack and generate an SCC
+#        if self._low[v] == self._idx[v]:
+#            nodes = []
+#            while True:
+#                w = self._stack.pop()
+#                self._onstack.remove(w)
+#                nodes.append(w)
+#                if w == v:
+#                    break
+#
+#            cid = self._cid
+#            self._cid += 1
+#
+#            # Assign component id to members
+#            for s in nodes:
+#                self.comp[s] = cid
+#
+#            nodes_fs = frozenset(nodes)
+#            self.members[cid] = nodes_fs
+#
+#            # Aggregate final-ness (cheap, and helps is_final)
+#            self.comp_is_final[cid] = any(self.fsa.is_final(s) for s in nodes_fs)
+#
+#            # Now that cid is known, resolve any pending incoming edges
+#            for s in nodes_fs:
+#                if s in self._pending_to_state:
+#                    for src_cid in self._pending_to_state.pop(s):
+#                        if src_cid != cid:
+#                            self.eps_succ[src_cid].add(cid)
+#
+#            # Record outgoing component edges by scanning ε-arcs from SCC members.
+#            # Targets might not yet have a component id at this exact moment if they're
+#            # not in the explored region — but in Tarjan DFS they *will* have been reached.
+#            # Still, handle defensively via pending.
+#            for s in nodes_fs:
+#                for t in self._eps_succ_states(s):
+#                    tgt_cid = self.comp.get(t)
+#                    if tgt_cid is not None:
+#                        if tgt_cid != cid:
+#                            self.eps_succ[cid].add(tgt_cid)
+#                    else:
+#                        # Haven't assigned t to a component yet; remember cid wants an edge to it.
+#                        self._pending_to_state[t].add(cid)
+#
+#
+#class LazySCCDAGClosure:
+#    def __init__(self, scc_index: LazyEpsSCCIndex):
+#        self.I = scc_index
+#        self._cache = {}  # cid -> frozenset[cid]
+#
+#    def closure_cid(self, cid):
+#        got = self._cache.get(cid)
+#        if got is not None:
+#            return got
+#        out = {cid}
+#        for nxt in self.I.eps_succ.get(cid, ()):
+#            out |= self.closure_cid(nxt)
+#        out = frozenset(out)
+#        self._cache[cid] = out
+#        return out
+#
+#
+#class _EpsilonRemoveSCC(Lazy):
+#
+#    def __init__(self, fsa):
+#        self.fsa = fsa
+#        self.I = LazyEpsSCCIndex(fsa)
+#        self.C = LazySCCDAGClosure(self.I)
+#
+#    def _closure(self, i):
+#        self.I.ensure(i)                 # discover SCCs only as needed
+#        cid = self.I.comp[i]             # now i has a component id
+#        for u in self.C.closure_cid(cid):
+#            yield from self.I.members[u]
+#
+#    def start(self):
+#        for i in self.fsa.start():
+#            yield from self._closure(i)
+#
+#    def is_final(self, i):
+#        self.I.ensure(i)
+#        cid = self.I.comp[i]
+#        return any(self.I.comp_is_final[u] for u in self.C.closure_cid(cid))
+#
+#    def arcs(self, i):
+#        for a, j in self.fsa.arcs(i):
+#            if a == EPSILON:
+#                continue
+#            yield from ((a, k) for k in self._closure(j))
+#
+#    def arcs_x(self, i, x):
+#        if x == EPSILON:
+#            return
+#        for j in self.fsa.arcs_x(i, x):
+#            yield from self._closure(j)
