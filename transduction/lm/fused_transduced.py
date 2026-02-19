@@ -143,7 +143,7 @@ class _FusedSearch:
         if result.is_preimage or r_syms:
             eos_lp = item.lm_state.logp_next[self._inner_eos]
 
-            if result.is_preimage:
+            if result.is_preimage and q_sym is None:
                 self.eos_score = np.logaddexp(self.eos_score, item.log_weight + eos_lp)
 
             # Non-Q carry-forward: uses prefix check.

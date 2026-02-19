@@ -202,7 +202,7 @@ class TransducedState(LMState):
             q_syms = q_of.get(d, set())
             r_syms = r_of.get(d, set())
 
-            # Quotient:
+            # Quotient: prefix probability p_X→(source) = P(source).
             for y in q_syms:
                 scores.logaddexp(y, w)
 
@@ -211,8 +211,13 @@ class TransducedState(LMState):
             if eos_lp > -np.inf:
                 eos_w = w + eos_lp
 
-                # preimage (EOS)
-                if d in self._peekaboo_state.preimage_stops:
+                # preimage (EOS): skip when particle is Q-absorbed.
+                # A Q-classified particle's full prefix probability already
+                # accounts for ALL continuations (including EOS) going to
+                # the Q symbol.  Adding the preimage P_X(source) to EOS
+                # would double-count: once in the Q's prefix probability
+                # and once in the preimage.
+                if d in self._peekaboo_state.preimage_stops and not q_syms:
                     scores.logaddexp(self.eos, eos_w)
 
                 # Remainder
