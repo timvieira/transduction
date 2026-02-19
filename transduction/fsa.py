@@ -38,9 +38,9 @@ def dfs(Ps: Iterable[State], arcs: Callable[[State], Iterable[tuple[A, State]]])
     """
     stack = list(Ps)
     m: FSA[A] = FSA()
-    for P in Ps: m.add_start(P)  # pyright: ignore[reportConstantRedefinition]
+    for P in Ps: m.add_start(P)
     while stack:
-        P = stack.pop()  # pyright: ignore[reportConstantRedefinition]
+        P = stack.pop()
         for a, Q in arcs(P):
             if Q not in m.states:
                 stack.append(Q)
@@ -446,7 +446,7 @@ class FSA(Generic[A]):
         final = self.stop
         nonfinal = self.states - final
 
-        P: list[set[Any]] = [final, nonfinal]  # pyright: ignore[reportConstantRedefinition]
+        P: list[set[Any]] = [final, nonfinal]
         W: list[set[Any]] = [final, nonfinal]
 
         while W:
@@ -463,7 +463,7 @@ class FSA(Generic[A]):
                         R.append(YX)
                         R.append(Y_X)
                         W.append(YX if len(YX) < len(Y_X) else Y_X)
-                P = R  # pyright: ignore[reportConstantRedefinition]
+                P = R
 
         # create new equivalence classes of states
         minstates: dict[Any, int] = {}
@@ -489,7 +489,7 @@ class FSA(Generic[A]):
         final = self.stop
         nonfinal = self.states - final
 
-        P: list[set[Any]] = [final, nonfinal]  # pyright: ignore[reportConstantRedefinition]
+        P: list[set[Any]] = [final, nonfinal]
         W: list[set[Any]] = [final, nonfinal]
 
         find: dict[Any, int] = {i: block for block, elements in enumerate(P) for i in elements}

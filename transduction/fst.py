@@ -151,9 +151,9 @@ class FST(Generic[A, B]):
         arcs_ix: dict[tuple[State, A], tuple[tuple[B, State], ...]] = {}
         for i, d in self.delta.items():
             all_arcs: list[tuple[A, B, State]] = []
-            for a, A in d.items():  # pyright: ignore[reportConstantRedefinition]
+            for a, A in d.items():
                 by_input: list[tuple[B, State]] = []
-                for b, B in A.items():  # pyright: ignore[reportConstantRedefinition]
+                for b, B in A.items():
                     for j in B:
                         all_arcs.append((a, b, j))
                         by_input.append((b, j))
@@ -306,7 +306,7 @@ class FST(Generic[A, B]):
         and with 1 we project onto the right.
         """
         assert axis in [0, 1]
-        A: FSA[Any] = FSA()  # pyright: ignore[reportConstantRedefinition]
+        A: FSA[Any] = FSA()
         for i in self.states:
             for a, b, j in self.arcs(i):
                 if axis == 0:
@@ -386,7 +386,7 @@ class FST(Generic[A, B]):
         for the public composition API.
         """
 
-        C: FST[Any, Any] = FST()  # pyright: ignore[reportConstantRedefinition]
+        C: FST[Any, Any] = FST()
 
         # index arcs in `other` to so that they are fast against later
         tmp: defaultdict[tuple[Any, Any], list[tuple[Any, Any]]] = defaultdict(list)
@@ -398,16 +398,16 @@ class FST(Generic[A, B]):
         stack: list[tuple[Any, Any]] = []
 
         # add initial states
-        for P in self.start:  # pyright: ignore[reportConstantRedefinition]
-            for Q in other.start:  # pyright: ignore[reportConstantRedefinition]
-                PQ = (P, Q)  # pyright: ignore[reportConstantRedefinition]
+        for P in self.start:
+            for Q in other.start:
+                PQ = (P, Q)
                 C.add_start(PQ)
                 visited.add(PQ)
                 stack.append(PQ)
 
         # traverse the machine using depth-first search
         while stack:
-            P, Q = PQ = stack.pop()  # pyright: ignore[reportConstantRedefinition]
+            P, Q = PQ = stack.pop()
 
             # (q,p) is simultaneously a final state in the respective machines
             if P in self.stop and Q in other.stop:
@@ -446,7 +446,7 @@ class FST(Generic[A, B]):
         """
         assert idx in [0, 1]
 
-        T: FST[Any, Any] = self.spawn(keep_init=True, keep_stop=True)  # pyright: ignore[reportConstantRedefinition]
+        T: FST[Any, Any] = self.spawn(keep_init=True, keep_stop=True)
 
         for i in self.states:
             if idx == 0:
@@ -455,9 +455,9 @@ class FST(Generic[A, B]):
                 T.add_arc(i, ε_2, EPSILON, i)  # pyright: ignore[reportArgumentType]
             for a, b, j in self.arcs(i):
                 if idx == 0 and b == EPSILON:
-                    b = ε_2  # pyright: ignore[reportConstantRedefinition]
+                    b = ε_2
                 elif idx == 1 and a == EPSILON:
-                    a = ε_1  # pyright: ignore[reportConstantRedefinition]
+                    a = ε_1
                 T.add_arc(i, a, b, j)  # pyright: ignore[reportArgumentType]
 
         return T
@@ -958,7 +958,7 @@ def epsilon_filter_fst(Sigma: set[Any]) -> FST[Any, Any]:
     epsilon-related ambiguity when composing WFST with epsilons.
     """
 
-    F: FST[Any, Any] = FST()  # pyright: ignore[reportConstantRedefinition]
+    F: FST[Any, Any] = FST()
 
     F.add_start(0)
 
