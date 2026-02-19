@@ -1,9 +1,16 @@
+from __future__ import annotations
+
 from collections import defaultdict, deque
+from collections.abc import Iterable, Iterator
+from typing import Any, Generic, TypeVar
+
 from transduction.fsa import FSA, EPSILON, frozenset
 from transduction.util import Integerizer
 
+A = TypeVar('A')
 
-def is_universal(dfa, state, alphabet):
+
+def is_universal(dfa: Lazy[A], state: Any, alphabet: Iterable[A]) -> bool:
     """Check whether ``state`` accepts the universal language (alphabet*)."
 
     A DFA state accepts alphabet* iff all reachable states are accepting
@@ -13,8 +20,8 @@ def is_universal(dfa, state, alphabet):
     not terminate (as expected, NFA universality is PSPACE-complete in
     general), but in many practical FSAs this halts quickly.
     """
-    visited = set()
-    worklist = deque()
+    visited: set[Any] = set()
+    worklist: deque[Any] = deque()
 
     visited.add(state)
     worklist.append(state)
@@ -38,7 +45,7 @@ def is_universal(dfa, state, alphabet):
     return True
 
 
-class Lazy:
+class Lazy(Generic[A]):
     """Abstract base class for lazy (on-demand) automata.
 
     Subclasses implement the four abstract methods below to define an
@@ -51,11 +58,11 @@ class Lazy:
     #____________________________________________________________
     # Abstract interface
 
-    def arcs(self, i):
+    def arcs(self, i: Any) -> Iterable[tuple[A, Any]]:
         """Yield ``(label, dest)`` pairs for all outgoing arcs from ``i``."""
         raise NotImplementedError()
 
-    def arcs_x(self, i, x):
+    def arcs_x(self, i: Any, x: A) -> Iterable[Any]:
         """Yield destination states reachable from ``i`` on input ``x``.
 
         Default implementation filters ``arcs()``; subclasses may override
@@ -66,15 +73,15 @@ class Lazy:
             if X == x:
                 yield j
 
-    def start(self):
+    def start(self) -> Iterable[Any]:
         """Yield the start state(s) of this automaton."""
         raise NotImplementedError()
 
-    def is_final(self, i):
+    def is_final(self, i: Any) -> bool:
         """Return True if ``state`` is an accepting state."""
         raise NotImplementedError()
 
-    def run(self, source_path):
+    def run(self, source_path: Iterable[A]) -> Any | None:
         """Run a source path from start, returning the reached DFA state (or None for dead).
 
         Assumes the automaton is deterministic (at most one successor per label).
@@ -90,24 +97,24 @@ class Lazy:
     #____________________________________________________________
     # Abstract class provides the methods below
 
-    def start_at(self, s):
+    def start_at(self, s: Any) -> StartAt[A]:
         return StartAt(self, s)
 
-    def det(self):
+    def det(self) -> LazyDeterminize[A]:
         return LazyDeterminize(self)
 
-    def min(self):
+    def min(self) -> FSA[A]:
         "Warning: not lazy."
         return self.materialize().min()
 
-    def epsremove(self):
+    def epsremove(self) -> EpsilonRemove[A]:
         return EpsilonRemove(self)
 
-    def materialize(self, max_steps=float('inf')):
+    def materialize(self, max_steps: float = float('inf')) -> FSA[A]:
         "Materialized this automaton using a depth-first traversal from its initial states."
-        m = FSA()
-        worklist = deque()
-        visited = set()
+        m: FSA[A] = FSA()
+        worklist: deque[Any] = deque()
+        visited: set[Any] = set()
         for i in self.start():
             worklist.append(i)
             visited.add(i)
@@ -126,7 +133,7 @@ class Lazy:
                 m.add(i,a,j)
         return m
 
-    def accepts_universal(self, state, alphabet):
+    def accepts_universal(self, state: Any, alphabet: Iterable[A]) -> bool:
         """Check whether ``state`` accepts the universal language (alphabet*).
 
         Determinizes the NFA starting from ``state``, then delegates to the
@@ -136,14 +143,14 @@ class Lazy:
         [start] = list(dfa.start())
         return is_universal(dfa, start, alphabet)
 
-    def cache(self):
+    def cache(self) -> Cached[A]:
         return Cached(self)
 
-    def renumber(self):
+    def renumber(self) -> Renumber[A]:
         return Renumber(self)
 
 
-class EpsilonRemove(Lazy):
+class EpsilonRemove(Lazy[A]):
     """Lazy epsilon removal: wraps an NFA and presents an equivalent
     epsilon-free automaton by expanding epsilon closures on demand.
 
@@ -152,152 +159,152 @@ class EpsilonRemove(Lazy):
     and finality are similarly lifted through epsilon closures.
     """
 
-    def __init__(self, fsa):
+    def __init__(self, fsa: Lazy[A]) -> None:
         self.fsa = fsa
-        self._closure_cache = {}    # NOTE: caching should be optional/configurable
+        self._closure_cache: dict[Any, set[Any]] = {}    # NOTE: caching should be optional/configurable
 
-    def start(self):
+    def start(self) -> Iterator[Any]:
         for i in self.fsa.start():
             yield from self._closure(i)
 
-    def is_final(self, i):
+    def is_final(self, i: Any) -> bool:
         return any(self.fsa.is_final(j) for j in self._closure(i))
 
-    def arcs(self, i):
+    def arcs(self, i: Any) -> Iterator[tuple[A, Any]]:
         for a, j in self.fsa.arcs(i):
             if a == EPSILON: continue
             for k in self._closure(j):
                 yield a, k
 
-    def arcs_x(self, i, x):
+    def arcs_x(self, i: Any, x: A) -> Iterator[Any]:
         if x == EPSILON: return
         for j in self.fsa.arcs_x(i, x):
             for k in self._closure(j):
                 yield k
 
-    def _closure(self, i):
+    def _closure(self, i: Any) -> set[Any]:
         value = self._closure_cache.get(i)
         if value is None:
             value = set(self.__closure(i))
             self._closure_cache[i] = value
         return value
 
-    def __closure(self, i):
-        pushed = {i}
+    def __closure(self, i: Any) -> Iterator[Any]:
+        pushed: set[Any] = {i}
         worklist = [i]
         while worklist:
             i = worklist.pop()
             yield i
-            for j in self.fsa.arcs_x(i, EPSILON):
+            for j in self.fsa.arcs_x(i, EPSILON):  # type: ignore[arg-type]
                 if j not in pushed:
                     worklist.append(j)
                     pushed.add(j)
 
 
-class LazyDeterminize(Lazy):
+class LazyDeterminize(Lazy[A]):
 
-    def __init__(self, fsa):
+    def __init__(self, fsa: Lazy[A]) -> None:
         self.fsa = fsa.epsremove()
 
-    def start(self):
+    def start(self) -> Iterator[Any]:
         yield frozenset(self.fsa.start())
 
-    def is_final(self, Q):
-        return any(self.fsa.is_final(i) for i in Q)
+    def is_final(self, i: Any) -> bool:
+        return any(self.fsa.is_final(q) for q in i)
 
-    def arcs(self, Q):
-        tmp = defaultdict(set)
-        for i in Q:
-            for a, j in self.fsa.arcs(i):
+    def arcs(self, i: Any) -> Iterator[tuple[A, Any]]:
+        tmp: defaultdict[A, set[Any]] = defaultdict(set)
+        for q in i:
+            for a, j in self.fsa.arcs(q):
                 tmp[a].add(j)
-        for a, j in tmp.items():
-            yield a, frozenset(j)
+        for a, js in tmp.items():
+            yield a, frozenset(js)
 
-    def arcs_x(self, Q, x):
-        result = frozenset(j for i in Q for j in self.fsa.arcs_x(i, x))
+    def arcs_x(self, i: Any, x: A) -> Iterator[Any]:
+        result = frozenset(j for q in i for j in self.fsa.arcs_x(q, x))
         if result:
             yield result
 
 
-class Cached(Lazy):
+class Cached(Lazy[A]):
     """Caches arcs and finality per state -- a lazy version of materialize."""
 
-    def __init__(self, base):
+    def __init__(self, base: Lazy[A]) -> None:
         self.base = base
-        self._arcs_cache = {}
-        self._final_cache = {}
+        self._arcs_cache: dict[Any, list[tuple[A, Any]]] = {}
+        self._final_cache: dict[Any, bool] = {}
 
-    def start(self):
+    def start(self) -> Iterable[Any]:
         return self.base.start()
 
-    def arcs(self, state):
-        if state not in self._arcs_cache:
-            self._arcs_cache[state] = list(self.base.arcs(state))
-        return self._arcs_cache[state]
+    def arcs(self, i: Any) -> list[tuple[A, Any]]:
+        if i not in self._arcs_cache:
+            self._arcs_cache[i] = list(self.base.arcs(i))
+        return self._arcs_cache[i]
 
-    def is_final(self, state):
-        if state not in self._final_cache:
-            self._final_cache[state] = self.base.is_final(state)
-        return self._final_cache[state]
+    def is_final(self, i: Any) -> bool:
+        if i not in self._final_cache:
+            self._final_cache[i] = self.base.is_final(i)
+        return self._final_cache[i]
 
 
-class StartAt(Lazy):
+class StartAt(Lazy[A]):
     "Clone base FSA so that it starts at s."
 
-    def __init__(self, base, s):
+    def __init__(self, base: Lazy[A], s: Any) -> None:
         self.base = base
         self.s = s
 
-    def start(self):
+    def start(self) -> Iterator[Any]:
         yield self.s
 
-    def is_final(self, i):
+    def is_final(self, i: Any) -> bool:
         return self.base.is_final(i)
 
-    def arcs(self, i):
+    def arcs(self, i: Any) -> Iterable[tuple[A, Any]]:
         return self.base.arcs(i)
 
-    def arcs_x(self, i, x):
+    def arcs_x(self, i: Any, x: A) -> Iterable[Any]:
         return self.base.arcs_x(i, x)
 
 
-class Renumber(Lazy):
+class Renumber(Lazy[A]):
 
-    def __init__(self, fsa):
+    def __init__(self, fsa: Lazy[A]) -> None:
         self.fsa = fsa
-        self.m = Integerizer()
+        self.m: Integerizer[Any] = Integerizer()
 
-    def start(self):
+    def start(self) -> Iterator[Any]:
         for i in self.fsa.start():
             yield self.m(i)
 
-    def is_final(self, i):
+    def is_final(self, i: Any) -> bool:
         return self.fsa.is_final(self.m[i])
 
-    def arcs(self, i):
+    def arcs(self, i: Any) -> Iterator[tuple[A, Any]]:
         for a, j in self.fsa.arcs(self.m[i]):
             yield a, self.m(j)
 
-    def arcs_x(self, i, x):
+    def arcs_x(self, i: Any, x: A) -> Iterator[Any]:
         for j in self.fsa.arcs_x(self.m[i], x):
             yield self.m(j)
 
 
-class LazyWrapper(Lazy):
+class LazyWrapper(Lazy[A]):
 
-    def __init__(self, base):
+    def __init__(self, base: FSA[A]) -> None:
         self.base = base
 
-    def start(self):
+    def start(self) -> Iterator[Any]:
         return iter(self.base.start)
 
-    def is_final(self, i):
+    def is_final(self, i: Any) -> bool:
         return self.base.is_final(i)
 
-    def arcs(self, i):
+    def arcs(self, i: Any) -> Iterator[tuple[A, Any]]:
         return self.base.arcs(i)
 
-    def arcs_x(self, i, x):
+    def arcs_x(self, i: Any, x: A) -> set[Any]:
         return self.base.arcs_x(i, x)
 
 
@@ -332,7 +339,7 @@ if 0:
             # For building eps_succ when target component not known yet
             self._pending_to_state = defaultdict(set)  # state -> set(source component ids)
 
-            # Optional per-component aggregates you’ll likely want
+            # Optional per-component aggregates you'll likely want
             self.comp_is_final = {}  # component id -> bool
 
         def ensure(self, i):
@@ -392,7 +399,7 @@ if 0:
                                 self.eps_succ[src_cid].add(cid)
 
                 # Record outgoing component edges by scanning ε-arcs from SCC members.
-                # Targets might not yet have a component id at this exact moment if they’re
+                # Targets might not yet have a component id at this exact moment if they're
                 # not in the explored region — but in Tarjan DFS they *will* have been reached.
                 # Still, handle defensively via pending.
                 for s in nodes_fs:
@@ -423,7 +430,7 @@ if 0:
             return out
 
 
-    class EpsilonRemove(Lazy):
+    class _EpsilonRemoveSCC(Lazy):
 
         def __init__(self, fsa):
             self.fsa = fsa

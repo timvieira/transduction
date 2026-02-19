@@ -59,8 +59,8 @@ def test_from_pairs():
 
     # Should accept the pairs as part of its relation
     rel = set(fst.relation(5))
-    assert ('ab', 'xy') in rel
-    assert ('c', 'z') in rel
+    assert (('a', 'b'), ('x', 'y')) in rel
+    assert (('c',), ('z',)) in rel
 
 
 def test_from_pairs_unequal_lengths():
@@ -68,7 +68,7 @@ def test_from_pairs_unequal_lengths():
     pairs = [('a', 'xyz')]
     fst = FST.from_pairs(pairs)
     rel = set(fst.relation(5))
-    assert ('a', 'xyz') in rel
+    assert (('a',), ('x', 'y', 'z')) in rel
 
 
 # ── __call__ (cross-section queries) ─────────────────────────────────────────
@@ -380,7 +380,7 @@ def test_compose_with_epsilon_output():
     # fst1 maps 'a' → ε, fst2 can't contribute since fst1 produces no output
     # So the composed relation maps 'a' → ε
     rel = set(composed.relation(3))
-    assert ('a', '') in rel
+    assert (('a',), ()) in rel
 
 
 def test_compose_with_epsilon_input():
@@ -400,7 +400,7 @@ def test_compose_with_epsilon_input():
     composed = fst1 @ fst2
     # fst2 can produce 'x' without consuming input from fst1
     rel = set(composed.relation(3))
-    assert ('', 'x') in rel
+    assert ((), ('x',)) in rel
 
 
 def test_compose_both_epsilon():
@@ -420,7 +420,7 @@ def test_compose_both_epsilon():
 
     composed = fst1 @ fst2
     rel = set(composed.relation(3))
-    assert ('a', 'c') in rel
+    assert (('a',), ('c',)) in rel
 
 
 # ── from_string (lines 225-230, covered via __call__ but also directly) ──────
@@ -429,7 +429,7 @@ def test_from_string():
     """FST.from_string builds a diagonal identity FST for the string."""
     fst = FST.from_string('abc')
     rel = set(fst.relation(5))
-    assert ('abc', 'abc') in rel
+    assert (('a', 'b', 'c'), ('a', 'b', 'c')) in rel
     assert len(rel) == 1
 
 
@@ -472,7 +472,7 @@ def test_compose_smaller_left():
 
     composed = left @ right
     rel = set(composed.relation(5))
-    assert ('aaa', 'xyz') in rel
+    assert (('a', 'a', 'a'), ('x', 'y', 'z')) in rel
 
 
 def test_compose_smaller_right():
@@ -493,7 +493,7 @@ def test_compose_smaller_right():
 
     composed = left @ right
     rel = set(composed.relation(5))
-    assert ('aaa', 'xxx') in rel
+    assert (('a', 'a', 'a'), ('x', 'x', 'x')) in rel
 
 
 # ── Deprecated properties (lines 41, 45) ─────────────────────────────────────
@@ -538,11 +538,11 @@ def test_make_total():
     t = fst.make_total('FAIL')
     rel = dict(t.relation(3))
     # Original mapping preserved
-    assert rel['a'] == 'x'
+    assert rel[('a',)] == ('x',)
     # All other inputs produce FAIL
-    assert rel['b'] == 'FAIL'
-    assert rel[''] == 'FAIL'
-    assert rel['aa'] == 'FAIL'
+    assert rel[('b',)] == ('FAIL',)
+    assert rel[()] == ('FAIL',)
+    assert rel[('a', 'a')] == ('FAIL',)
 
 
 # ── diag and fst @ fsa coercion (lines 296, 411-419) ─────────────────────────
@@ -573,9 +573,9 @@ def test_compose_fst_with_fsa():
     fsa = FSA.from_strings({'x', 'y', 'xy'})
     composed = fst @ fsa
     rel = set(composed.relation(3))
-    assert ('a', 'x') in rel
-    assert ('b', 'y') in rel
-    assert ('ab', 'xy') in rel
+    assert (('a',), ('x',)) in rel
+    assert (('b',), ('y',)) in rel
+    assert (('a', 'b'), ('x', 'y')) in rel
 
 
 # ── __call__ with FST objects (branch coverage for isinstance checks) ─────────

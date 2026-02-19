@@ -18,16 +18,16 @@ def test_partial_becomes_total():
     f.add_arc(0, 'b', 'y', 1)  # state 1 is a dead end (no arcs out, not final)
 
     # Before: 'b' is in the alphabet but not in the domain
-    assert '' in domain(f, 3)    # empty string accepted (start is final)
-    assert 'a' in domain(f, 3)
-    assert 'b' not in domain(f, 3)
+    assert () in domain(f, 3)    # empty string accepted (start is final)
+    assert ('a',) in domain(f, 3)
+    assert ('b',) not in domain(f, 3)
 
     g = f.make_total('FAIL')
 
     # After: 'b' should be accepted
-    assert 'b' in domain(g, 3)
-    assert 'bb' in domain(g, 3)
-    assert 'ab' in domain(g, 3)
+    assert ('b',) in domain(g, 3)
+    assert ('b', 'b') in domain(g, 3)
+    assert ('a', 'b') in domain(g, 3)
 
 
 def test_total_fst_unchanged():
@@ -56,10 +56,10 @@ def test_marker_appears_in_output():
     g = f.make_total('FAIL')
 
     # 'b' should now be accepted, and its output should contain FAIL
-    outputs_for_b = {y for x, y in g.relation(3) if x == 'b'}
+    outputs_for_b = {y for x, y in g.relation(3) if x == ('b',)}
     assert len(outputs_for_b) > 0
     assert all('FAIL' in y for y in outputs_for_b)
 
     # 'a' should still map to 'x'
-    outputs_for_a = {y for x, y in g.relation(3) if x == 'a'}
-    assert 'x' in outputs_for_a
+    outputs_for_a = {y for x, y in g.relation(3) if x == ('a',)}
+    assert ('x',) in outputs_for_a

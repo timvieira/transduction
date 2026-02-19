@@ -9,10 +9,13 @@ visualization.
 See :mod:`transduction.fsa` for the acceptor (single-tape) counterpart.
 """
 
+from __future__ import annotations
+
 from collections import defaultdict, deque
 from functools import cached_property
 from itertools import zip_longest
-from typing import Generic, TypeVar
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from typing import Any, Generic, TypeVar, overload
 
 from transduction.fsa import FSA, EPSILON
 
@@ -20,6 +23,7 @@ from transduction.util import Integerizer
 
 A = TypeVar('A')
 B = TypeVar('B')
+C = TypeVar('C')
 
 
 class _EpsilonVariant:
@@ -53,7 +57,7 @@ class FST(Generic[A, B]):
         stop: Set of final (accepting) states.
     """
 
-    def __init__(self, start=(), arcs=(), stop=()):
+    def __init__(self, start: Iterable[Any] = (), arcs: Iterable[tuple[Any, A, B, Any]] = (), stop: Iterable[Any] = ()) -> None:
         """Create an FST, optionally populating it from iterables.
 
         Args:
@@ -95,11 +99,11 @@ class FST(Generic[A, B]):
         output.append('}')
         return '\n'.join(output)
 
-    def is_final(self, i):
+    def is_final(self, i: Any) -> bool:
         """Return True if state ``i`` is a final (accepting) state."""
         return i in self.stop
 
-    def add_arc(self, i, a, b, j):  # pylint: disable=arguments-renamed
+    def add_arc(self, i: Any, a: A, b: B, j: Any) -> None:  # pylint: disable=arguments-renamed
         """Add arc from state ``i`` to state ``j`` with input label ``a`` and output label ``b``.
 
         Use ``EPSILON`` (the empty string ``''``) for either label to create
@@ -113,12 +117,12 @@ class FST(Generic[A, B]):
         self.B.add(b)
         self._arcs_i = None   # invalidate arc indexes
 
-    def add_start(self, q):
+    def add_start(self, q: Any) -> None:
         """Mark state ``q`` as an initial state (creates it if needed)."""
         self.states.add(q)
         self.start.add(q)
 
-    def add_stop(self, q):
+    def add_stop(self, q: Any) -> None:
         """Mark state ``q`` as a final (accepting) state (creates it if needed)."""
         self.states.add(q)
         self.stop.add(q)
@@ -127,7 +131,7 @@ class FST(Generic[A, B]):
     add_I = add_start
     add_F = add_stop
 
-    def ensure_arc_indexes(self):
+    def ensure_arc_indexes(self) -> None:
         """Build secondary arc indexes for O(1) lookup by various key combinations.
 
         Naming scheme: ``index_{keys}_{values}`` where i=source state,
@@ -152,7 +156,7 @@ class FST(Generic[A, B]):
         self.index_ix_j = index_ix_j
         self.index_ixy_j = index_ixy_j
 
-    def _build_arc_index(self):
+    def _build_arc_index(self) -> None:
         """Build flat arc indexes for O(1) lookup, called lazily on first arcs() call."""
         # state → tuple[(input, output, dest), ...]
         arcs_i = {}
@@ -171,7 +175,12 @@ class FST(Generic[A, B]):
         self._arcs_i = arcs_i
         self._arcs_ix = arcs_ix
 
-    def arcs(self, i, x=None):
+    @overload
+    def arcs(self, i: Any) -> tuple[tuple[A, B, Any], ...]: ...
+    @overload
+    def arcs(self, i: Any, x: A) -> tuple[tuple[B, Any], ...]: ...
+
+    def arcs(self, i: Any, x: A | None = None) -> tuple[tuple[A, B, Any], ...] | tuple[tuple[B, Any], ...]:
         """Iterate over arcs from state ``i``.
 
         With ``x=None``, yields ``(a, b, j)`` triples for all arcs from ``i``.
@@ -184,7 +193,7 @@ class FST(Generic[A, B]):
         else:
             return self._arcs_ix.get((i, x), ())
 
-    def rename(self, f):
+    def rename(self, f: Callable[[Any], Any]) -> FST[A, B]:
         """Return a new FST with states relabeled by ``f(state)``.
 
         If ``f`` is not injective, distinct states may merge.
@@ -199,7 +208,7 @@ class FST(Generic[A, B]):
                 m.add_arc(f(i), a, b, f(j))
         return m
 
-    def map_labels(self, f):
+    def map_labels(self, f: Callable[[A, B], tuple[Any, Any]]) -> FST:
         "Transform arc labels by applying f(a, b) -> (a', b') to each arc."
         m = self.spawn(keep_init=True, keep_stop=True)
         for i in self.states:
@@ -208,11 +217,11 @@ class FST(Generic[A, B]):
                 m.add_arc(i, a2, b2, j)
         return m
 
-    def renumber(self):
+    def renumber(self) -> FST[A, B]:
         """Return a copy with states relabeled as consecutive integers."""
         return self.rename(Integerizer())
 
-    def spawn(self, *, keep_init=False, keep_arcs=False, keep_stop=False):
+    def spawn(self, *, keep_init: bool = False, keep_arcs: bool = False, keep_stop: bool = False) -> FST[A, B]:
         """Create a new empty FST, optionally copying start states, arcs, and/or stop states."""
         m = self.__class__()
         if keep_init:
@@ -273,7 +282,7 @@ class FST(Generic[A, B]):
             return self
 
     @classmethod
-    def from_string(cls, xs):
+    def from_string(cls, xs: Sequence[A]) -> FST[A, A]:
         """Build a linear identity FST that accepts exactly the string ``xs``.
 
         Each arc copies one symbol (input = output).  The resulting FST
@@ -287,7 +296,7 @@ class FST(Generic[A, B]):
         return m
 
     @staticmethod
-    def from_pairs(pairs):
+    def from_pairs(pairs: Sequence[tuple[Sequence[A], Sequence[B]]]) -> FST[A, B]:
         """Build an FST whose relation is the union of the given (input, output) pairs.
 
         Each ``(xs, ys)`` pair becomes a separate path.  Inputs and outputs
@@ -303,7 +312,7 @@ class FST(Generic[A, B]):
             p.add_arc((i, max(len(xs), len(ys))), EPSILON, EPSILON, 1)
         return p
 
-    def project(self, axis):
+    def project(self, axis: int) -> FSA:
         """
         Project the FST into a FSA when `component` is 0, we project onto the left,
         and with 1 we project onto the right.
@@ -322,7 +331,7 @@ class FST(Generic[A, B]):
             A.add_stop(i)
         return A
 
-    def make_total(self, marker):
+    def make_total(self, marker: B) -> FST[A, B]:
         "If `self` is a partial function, this method will make it total by extending the range with a failure `marker`."
         assert marker not in self.B
 
@@ -347,11 +356,11 @@ class FST(Generic[A, B]):
         return m
 
     @cached_property
-    def T(self):
+    def T(self) -> FST[B, A]:
         "transpose swap left <-> right"
         return self.map_labels(lambda a, b: (b, a))
 
-    def __matmul__(self, other):
+    def __matmul__(self, other: FST[B, C]) -> FST[A, C]:
         "Relation composition; may coerce `other` to an appropriate type if need be."
 
         if isinstance(other, FSA):
@@ -380,7 +389,7 @@ class FST(Generic[A, B]):
             )
 
     # TODO: use lazy machine pattern
-    def _compose(self, other):
+    def _compose(self, other: FST) -> FST:
         """
         Implements the on-the-fly composition of the FST `self` with the FST `other`.
 
@@ -439,7 +448,7 @@ class FST(Generic[A, B]):
         return C
 
     # TODO: use lazy pattern here too.
-    def _augment_epsilon_transitions(self, idx):
+    def _augment_epsilon_transitions(self, idx: int) -> FST:
         """
         Augments the FST by changing the appropriate epsilon transitions to
         epsilon_1 or epsilon_2 transitions to be able to perform the composition
@@ -466,7 +475,7 @@ class FST(Generic[A, B]):
         return T
 
     @classmethod
-    def diag(cls, fsa):
+    def diag(cls, fsa: FSA[A]) -> FST[A, A]:
         """
         Convert a FSA A to diagonal relation T wich that T(x,x) = A(x) for all strings x.
         """
@@ -480,7 +489,7 @@ class FST(Generic[A, B]):
             fst.add_stop(i)
         return fst
 
-    def paths(self):
+    def paths(self) -> Iterator[tuple[Any, ...]]:
         "Enumerate paths in the FST using breadth-first order."
         worklist = deque()
         for i in self.start:
@@ -493,10 +502,10 @@ class FST(Generic[A, B]):
             for a, b, j in self.arcs(i):
                 worklist.append((*path, (a,b), j))
 
-    def relation(self, max_length):
+    def relation(self, max_length: int) -> Iterator[tuple[tuple[A, ...], tuple[B, ...]]]:
         "Enumerate string pairs in the relation of this FST up to length `max_length`."
         worklist = deque()
-        worklist.extend([(i, '', '') for i in self.start])
+        worklist.extend([(i, (), ()) for i in self.start])
         while worklist:
             (i, xs, ys) = worklist.popleft()
             if self.is_final(i):
@@ -504,9 +513,11 @@ class FST(Generic[A, B]):
             if len(xs) >= max_length or len(ys) >= max_length:
                 continue
             for x, y, j in self.arcs(i):
-                worklist.append((j, xs + x, ys + y))
+                new_xs = (*xs, x) if x != EPSILON else xs
+                new_ys = (*ys, y) if y != EPSILON else ys
+                worklist.append((j, new_xs, new_ys))
 
-    def transduce(self, input_seq):
+    def transduce(self, input_seq: Sequence[A]) -> tuple[B, ...]:
         """Transduce input_seq through this FST via BFS NFA simulation.
         Returns one accepting output tuple, or raises ValueError if no
         accepting path exists.
@@ -542,7 +553,7 @@ class FST(Generic[A, B]):
                     queue.append(key)
         raise ValueError("No accepting path found")
 
-    def is_functional(self):
+    def is_functional(self) -> tuple[bool, tuple[tuple[A, ...], tuple[B, ...], tuple[B, ...]] | None]:
         """Check whether this FST defines a (partial) function.
 
         An FST is functional if every input string maps to at most one
@@ -667,7 +678,7 @@ class FST(Generic[A, B]):
 
         return (True, None)
 
-    def trim(self):
+    def trim(self) -> FST[A, B]:
         """
         Return a new FST containing only the states and arcs lying on
         some start → stop path.
@@ -687,7 +698,7 @@ class FST(Generic[A, B]):
 
         return trimmed
 
-    def push_labels(self):
+    def push_labels(self) -> FST[A, B]:
         """Push output labels toward initial states to reduce output delay.
 
         Returns a new FST that realizes the same relation but with output
@@ -808,7 +819,7 @@ class FST(Generic[A, B]):
 
         return result.trim()
 
-    def reachable(self):
+    def reachable(self) -> set[Any]:
         """Return the set of states reachable from any start state."""
         reachable = set()
         dq = deque(self.start)
@@ -822,7 +833,7 @@ class FST(Generic[A, B]):
                     dq.append(t)
         return reachable
 
-    def coreachable(self):
+    def coreachable(self) -> set[Any]:
         """Return the set of states from which some stop state is reachable."""
         radj = defaultdict(set)
         for q in self.states:
@@ -843,7 +854,7 @@ class FST(Generic[A, B]):
     #___________________________________________________________________________
     #
 
-    def strongly_connected_components(self):
+    def strongly_connected_components(self) -> list[list[Any]]:
         """
         Return list of SCCs, each a list of states.
         """

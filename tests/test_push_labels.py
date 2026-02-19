@@ -172,7 +172,7 @@ def test_single_final_no_arcs():
     fst.add_stop(0)
     pushed = fst.push_labels()
     assert_relation_equal(fst, pushed)
-    assert list(pushed.relation(5)) == [('', '')]
+    assert list(pushed.relation(5)) == [((), ())]
 
 
 def test_cycle_uniform_output():
@@ -312,7 +312,7 @@ def test_newspeak2_long_delay():
     # Spot check: specific input/output pairs should be preserved
     orig_rel = dict(fst.relation(4))
     push_rel = dict(pushed.relation(4))
-    for inp in ['a', 'ab', 'ba', 'bad']:
+    for inp in [('a',), ('a', 'b'), ('b', 'a'), ('b', 'a', 'd')]:
         if inp in orig_rel:
             assert inp in push_rel, f'{inp} missing from pushed'
             assert orig_rel[inp] == push_rel[inp], f'{inp}: {orig_rel[inp]} != {push_rel[inp]}'

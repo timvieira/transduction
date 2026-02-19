@@ -267,9 +267,9 @@ class TestTransducedLM:
 
         # P(next = 'a' | empty prefix)
         # = sum over all strings starting with 'a' / Z
-        a_strings = {k: v for k, v in bf.items() if k.startswith('a')}
-        b_strings = {k: v for k, v in bf.items() if k.startswith('b')}
-        _eos_strings = {k: v for k, v in bf.items() if k == ''}
+        a_strings = {k: v for k, v in bf.items() if k and k[0] == 'a'}
+        b_strings = {k: v for k, v in bf.items() if k and k[0] == 'b'}
+        _eos_strings = {k: v for k, v in bf.items() if k == ()}
 
         bf_a = logsumexp(list(a_strings.values())) - Z if a_strings else -np.inf
         bf_b = logsumexp(list(b_strings.values())) - Z if b_strings else -np.inf
@@ -568,8 +568,8 @@ class TestFusedTransducedLM:
         bf = brute_force_pushforward(inner_lm, fst, '', max_source_len=6)
         Z = logsumexp(list(bf.values()))
 
-        a_strings = {k: v for k, v in bf.items() if k.startswith('a')}
-        b_strings = {k: v for k, v in bf.items() if k.startswith('b')}
+        a_strings = {k: v for k, v in bf.items() if k and k[0] == 'a'}
+        b_strings = {k: v for k, v in bf.items() if k and k[0] == 'b'}
 
         bf_a = logsumexp(list(a_strings.values())) - Z if a_strings else -np.inf
         bf_b = logsumexp(list(b_strings.values())) - Z if b_strings else -np.inf
@@ -735,7 +735,7 @@ class TestMultiStateFSTs:
         bf = brute_force_pushforward(inner_lm, fst, '', max_source_len=6)
         Z = logsumexp(list(bf.values()))
 
-        a_strings = {k: v for k, v in bf.items() if k.startswith('a')}
+        a_strings = {k: v for k, v in bf.items() if k and k[0] == 'a'}
         bf_a = logsumexp(list(a_strings.values())) - Z if a_strings else -np.inf
 
         tlm_a = state.logp_next['a']
@@ -1037,10 +1037,10 @@ def _brute_force_conditional(inner_lm, fst, prefix, max_source_len):
     # Partition output strings by whether they extend the prefix
     mass = {}     # next_symbol -> log P
     for out_str, lp in bf.items():
-        if not out_str.startswith(prefix):
+        if out_str[:len(prefix)] != prefix:
             continue
         suffix = out_str[len(prefix):]
-        y = '<EOS>' if suffix == '' else suffix[0]
+        y = '<EOS>' if len(suffix) == 0 else suffix[0]
         if y not in mass:
             mass[y] = lp
         else:
@@ -1073,7 +1073,7 @@ class TestFiniteLMExact:
         tlm = TransducedLM(inner_lm, fst, K=500, max_expansions=5000)
 
         state = tlm.initial()
-        for step, prefix in enumerate(['', 'A', 'AA', 'AAA']):
+        for step, prefix in enumerate([(), ('A',), ('A', 'A'), ('A', 'A', 'A')]):
             bf_cond = _brute_force_conditional(inner_lm, fst, prefix, max_len)
             tlm_lp = state.logp_next
             for y, bf_val in bf_cond.items():
@@ -1089,7 +1089,7 @@ class TestFiniteLMExact:
         tlm = FusedTransducedLM(inner_lm, fst, max_steps=5000, max_beam=500)
 
         state = tlm.initial()
-        for step, prefix in enumerate(['', 'A', 'AA', 'AAA']):
+        for step, prefix in enumerate([(), ('A',), ('A', 'A'), ('A', 'A', 'A')]):
             bf_cond = _brute_force_conditional(inner_lm, fst, prefix, max_len)
             tlm_lp = state.logp_next
             for y, bf_val in bf_cond.items():
@@ -1114,7 +1114,7 @@ class TestFiniteLMExact:
         tlm = TransducedLM(inner_lm, fst, K=500, max_expansions=5000)
 
         state = tlm.initial()
-        bf_cond = _brute_force_conditional(inner_lm, fst, '', max_source_len=6)
+        bf_cond = _brute_force_conditional(inner_lm, fst, (), max_source_len=6)
         tlm_lp = state.logp_next
         for y, bf_val in bf_cond.items():
             tlm_val = tlm_lp.get(y, -np.inf)
@@ -1401,7 +1401,7 @@ class TestReferenceTransducedLM:
         state = tlm.initial()
 
         for y in ['a', 'b']:
-            matching = [lp for out, lp in bf.items() if out.startswith(y)]
+            matching = [lp for out, lp in bf.items() if out and out[0] == y]
             bf_y = logsumexp(matching) - Z if matching else -np.inf
             ref_y = state.logp_next[y]
             assert ref_y == pytest.approx(bf_y, abs=1e-8), \
@@ -1414,8 +1414,8 @@ class TestReferenceTransducedLM:
         bf = brute_force_pushforward(inner, fst, '', max_source_len=5)
 
         # P(next='b' | seen 'a') = P(starts with 'ab') / P(starts with 'a')
-        a_strings = [lp for out, lp in bf.items() if out.startswith('a')]
-        ab_strings = [lp for out, lp in bf.items() if out.startswith('ab')]
+        a_strings = [lp for out, lp in bf.items() if out and out[0] == 'a']
+        ab_strings = [lp for out, lp in bf.items() if out[:2] == ('a', 'b')]
         Z_a = logsumexp(a_strings)
         bf_b_given_a = logsumexp(ab_strings) - Z_a if ab_strings else -np.inf
 
@@ -1436,7 +1436,7 @@ class TestReferenceTransducedLM:
         state = tlm.initial()
 
         for y in ['x', 'y']:
-            matching = [lp for out, lp in bf.items() if out.startswith(y)]
+            matching = [lp for out, lp in bf.items() if out and out[0] == y]
             bf_y = logsumexp(matching) - Z if matching else -np.inf
             ref_y = state.logp_next[y]
             assert ref_y == pytest.approx(bf_y, abs=1e-8), \
