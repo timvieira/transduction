@@ -1645,3 +1645,105 @@ class TestOverlapTrigger:
             f"Duplicate source_paths in FusedTransducedLM particles: "
             f"{len(paths)} particles, {len(set(paths))} unique"
         )
+
+
+# ---------------------------------------------------------------------------
+# PeekabooState EOS double-counting regression test (samuel at context 'c')
+# ---------------------------------------------------------------------------
+
+from transduction.peekaboo_incremental import PeekabooState, FstUniversality
+
+
+class TestPeekabooSamuelDoubleCounting:
+    """PeekabooState double-counts EOS mass at samuel context ('c',).
+
+    Samuel's topology creates a catching-up beam through states 1->3.
+    State 3 is final and has only an eps-output arc (eps/x -> 4).  The
+    eps-closure splits into at-boundary state 3 (final) and beyond state 4
+    (universal).  PeekabooState counts BOTH the at-boundary EOS from state 3
+    AND the quotient contribution from state 4, but state 4's prefix
+    probability already includes the EOS path through state 3.
+
+    The exact ReferenceTransducedLM (which rebuilds the full Precover DFA
+    per prefix) gives the correct answer.  This test documents the mismatch.
+    """
+
+    @pytest.fixture
+    def samuel_setup(self):
+        fst = examples.samuel_example()
+        inner_lm = CharNgramLM.train("aabbaabb" * 5, n=2, alpha=0.5)
+        return inner_lm, fst
+
+    def test_exact_at_empty_context(self, samuel_setup):
+        """Sanity: PeekabooState and exact reference agree at empty context."""
+        inner_lm, fst = samuel_setup
+        ref = ReferenceTransducedLM(inner_lm, fst)
+        tlm = TransducedLM(inner_lm, fst, K=500, max_expansions=5000,
+                           decomp_state_cls=PeekabooState, univ_cls=FstUniversality)
+
+        ref_state = ref.initial()
+        tlm_state = tlm.initial()
+
+        for sym in ref_state.logp_next:
+            r = float(ref_state.logp_next[sym])
+            t = float(tlm_state.logp_next[sym])
+            if np.isfinite(r):
+                assert abs(r - t) < 1e-6, (
+                    f"Mismatch at empty context: {sym!r}: "
+                    f"ref={r:.6f}, peekaboo={t:.6f}"
+                )
+
+    def test_peekaboo_vs_exact_at_c(self, samuel_setup):
+        """PeekabooState disagrees with exact reference at context ('c',).
+
+        Expected to fail until the double-counting bug is fixed.
+        """
+        inner_lm, fst = samuel_setup
+
+        ref = ReferenceTransducedLM(inner_lm, fst)
+        ref_state = ref.initial() >> 'c'
+
+        tlm = TransducedLM(inner_lm, fst, K=500, max_expansions=5000,
+                           decomp_state_cls=PeekabooState, univ_cls=FstUniversality)
+        tlm_state = tlm.initial() >> 'c'
+
+        for sym in ref_state.logp_next:
+            r = float(ref_state.logp_next[sym])
+            t = float(tlm_state.logp_next[sym])
+            if np.isfinite(r):
+                assert abs(r - t) < 0.01, (
+                    f"PeekabooState double-counting at samuel context ('c',): "
+                    f"{sym!r}: exact={r:.6f}, peekaboo={t:.6f}, "
+                    f"diff={abs(r - t):.6f}"
+                )
+
+    def test_peekaboo_normalization_at_c(self, samuel_setup):
+        """Distribution sums to ~1 even with the double-counting bug."""
+        inner_lm, fst = samuel_setup
+        tlm = TransducedLM(inner_lm, fst, K=500, max_expansions=5000,
+                           decomp_state_cls=PeekabooState, univ_cls=FstUniversality)
+        state = tlm.initial() >> 'c'
+        lp = state.logp_next
+        all_logps = [float(lp[y]) for y in lp if np.isfinite(float(lp[y]))]
+        total = logsumexp(all_logps)
+        assert abs(total) < 0.01, f"Should sum to ~1, got log-sum={total}"
+
+    def test_brute_force_converges_to_exact(self, samuel_setup):
+        """Brute-force enumeration converges toward exact reference as
+        max_source_len increases, confirming the reference is correct."""
+        inner_lm, fst = samuel_setup
+
+        ref = ReferenceTransducedLM(inner_lm, fst)
+        ref_state = ref.initial() >> 'c'
+        ref_x = float(ref_state.logp_next['x'])
+
+        prev_diff = np.inf
+        for max_len in [6, 8, 10, 12]:
+            bf = _brute_force_conditional(inner_lm, fst, ('c',), max_len)
+            if 'x' in bf:
+                diff = abs(bf['x'] - ref_x)
+                assert diff <= prev_diff + 1e-10, (
+                    f"Brute force should converge: max_len={max_len}, "
+                    f"diff={diff:.6f}, prev={prev_diff:.6f}"
+                )
+                prev_diff = diff
