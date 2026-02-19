@@ -200,6 +200,9 @@ class EpsilonRemove(Lazy[A]):
                     worklist.append(j)
                     pushed.add(j)
 
+    def epsremove(self) -> EpsilonRemove[A]:
+        return self
+
 
 class LazyDeterminize(Lazy[A]):
 
@@ -224,6 +227,9 @@ class LazyDeterminize(Lazy[A]):
         result = frozenset(j for q in i for j in self.fsa.arcs_x(q, x))
         if result:
             yield result
+
+    def epsremove(self):
+        return self
 
 
 class Cached(Lazy[A]):
