@@ -279,6 +279,22 @@ def logsumexp(arr: npt.ArrayLike) -> float:
     return float(out)
 
 
+def log1mexp(x: float) -> float:
+    """Compute ``log(1 - exp(x))`` for *x* < 0, numerically stable.
+
+    Uses the two-branch formula from Mächler (2012):
+    - *x* < -log(2): ``log1p(-exp(x))`` (exp(x) < 0.5, no cancellation)
+    - -log(2) ≤ *x* < 0: ``log(-expm1(x))`` (expm1 accurate near 0)
+
+    Returns -inf when *x* = 0 (i.e., exp(x) = 1).
+    """
+    if x >= 0:
+        return _NEG_INF
+    if x < -0.6931471805599453:   # -log(2)
+        return float(np.log1p(-np.exp(x)))
+    return float(np.log(-np.expm1(x)))
+
+
 #_______________________________________________________________________________
 # Sparse log-space mappings: LogVector (mutable) and LogDistr (immutable)
 

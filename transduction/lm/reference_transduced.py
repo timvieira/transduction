@@ -25,7 +25,7 @@ from functools import cached_property
 
 from transduction.fsa import EPSILON
 from transduction.lm.base import LM, LMState
-from transduction.util import LogDistr
+from transduction.util import LogDistr, log1mexp, logsumexp
 from transduction.precover import Precover
 
 
@@ -41,7 +41,7 @@ class ReferenceTransducedLM(LM):
         self.fst = fst
         self.eos = eos
         self._decomp = Precover.factory(fst)
-        self._target_alphabet = sorted(fst.B - {EPSILON})
+        self._target_alphabet = fst.B - {EPSILON}
 
     def initial(self):
         return ReferenceTransducedState(self, (), 0.0)
@@ -70,8 +70,12 @@ class ReferenceTransducedState(LMState):
         Uses the Precover decomposition:
         - Q strings contribute prefix probability (marginalized over continuations).
         - R strings contribute exact string probability (with EOS).
+
+        Note: R(prefix) includes source strings whose output *starts with*
+        prefix (possibly longer), not just those equal to prefix.  So R alone
+        cannot give P(output = prefix exactly); use the residual instead.
         """
-        # TODO: these strings could be structured into a trie to reduce the number 
+        # TODO: these strings could be structured into a trie to reduce the number
         # of inner LM state updates
         result = self.tlm._decomp(prefix)
         inner_eos = self.tlm.inner_lm.eos
@@ -82,7 +86,7 @@ class ReferenceTransducedState(LMState):
         for src in result.remainder.language():
             state = self.tlm.inner_lm(src)
             parts.append(state.logp + state.logp_next[inner_eos])
-        return float(np.logaddexp.reduce(parts)) if parts else -np.inf
+        return logsumexp(parts)
 
     @cached_property
     def logp_next(self):
@@ -92,12 +96,10 @@ class ReferenceTransducedState(LMState):
             s = self._score(self._target + (y,))
             if s > -np.inf:
                 scores[y] = s - Z
-        # EOS = residual: P(EOS) = 1 - sum_y P(y)
-        if scores:
-            p_non_eos = sum(np.exp(lp) for lp in scores.values())
-            scores[self.eos] = float(np.log1p(-p_non_eos)) if p_non_eos < 1 else -np.inf
-        else:
-            scores[self.eos] = 0.0
+        # EOS as residual: log P(EOS) = log(1 - Σ_y P(y)) = log1mexp(log Σ_y P(y))
+        # (No direct decomposition for P(output = target exactly) because
+        # R(target) includes strings with output *longer* than target.)
+        scores[self.eos] = log1mexp(logsumexp(list(scores.values())))
         return LogDistr(scores)
 
     def __rshift__(self, y):
