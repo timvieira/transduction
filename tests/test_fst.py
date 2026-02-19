@@ -699,18 +699,26 @@ def test_strip_prefix():
 
 # ── Coverage: _build_indexes (lines 91-106) ─────────────────────────────────
 
-def test_ensure_arc_indexes():
-    """ensure_arc_indexes creates index_iy_xj and friends."""
+def test_ensure_trie_index():
+    """ensure_trie_index creates _arcs_by_output and friends."""
     fst = FST()
     fst.add_start(0); fst.add_stop(1)
     fst.add_arc(0, 'a', 'x', 1)
-    fst.ensure_arc_indexes()
-    assert (0, 'x') in fst.index_iy_xj
-    assert 0 in fst.index_i_xj
-    assert (0, 'a') in fst.index_ix_j
-    assert (0, 'a', 'x') in fst.index_ixy_j
+    fst.ensure_trie_index()
+    assert (0, 'x') in fst._arcs_by_output
+    assert fst._arcs_by_output[(0, 'x')] == (('a', 1),)
+    assert 0 in fst._arcs_all
+    assert fst._arcs_all[0] == (('a', 1),)
+    assert (0, 'a') in fst._arcs_by_input
+    assert fst._arcs_by_input[(0, 'a')] == (('x', 1),)
     # Second call is a no-op (early return on hasattr check)
-    fst.ensure_arc_indexes()
+    fst.ensure_trie_index()
+    # Legacy wrapper still works
+    fst2 = FST()
+    fst2.add_start(0); fst2.add_stop(1)
+    fst2.add_arc(0, 'a', 'x', 1)
+    fst2.ensure_arc_indexes()
+    assert hasattr(fst2, '_arcs_by_output')
 
 
 # ── Coverage: arcs with x argument (line 138, branch 135->138) ──────────────

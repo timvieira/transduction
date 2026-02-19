@@ -514,3 +514,55 @@ class RustPeekabooState:
             self.fst, self.target + (y,),
             _rust_state=self._rust_state,
         )
+
+
+# ---------------------------------------------------------------------------
+# RustRhoDeterminize: rho-factored precover DFA
+# ---------------------------------------------------------------------------
+
+class RustRhoDeterminize:
+    """Rust-backed rho-factored determinization of the PrecoverNFA.
+
+    Mirrors Python's SymbolicLazyDeterminize + ExpandRho pipeline but runs
+    the BFS subset construction and rho factoring in Rust.
+    """
+
+    def __init__(self, fst, target):
+        import transduction_core
+
+        self.fst = fst
+        self.target = tuple(target)
+
+        rust_fst, sym_map, _state_map = to_rust_fst(fst)
+        target_u32 = [sym_map(y) for y in self.target]
+
+        self._rust = transduction_core.rust_rho_determinize(rust_fst, target_u32)
+        self._sym_map = sym_map
+
+    @property
+    def num_rho_arcs(self):
+        return self._rust.num_rho_arcs()
+
+    @property
+    def num_explicit_arcs(self):
+        return self._rust.num_explicit_arcs()
+
+    @property
+    def complete_states(self):
+        return self._rust.complete_states()
+
+    @property
+    def total_ms(self):
+        return self._rust.total_ms()
+
+    @property
+    def num_states(self):
+        return self._rust.num_states()
+
+    @property
+    def total_arcs(self):
+        return self.num_rho_arcs + self.num_explicit_arcs
+
+    def expand(self):
+        """Expand RHO arcs and return a Python FSA."""
+        return to_python_fsa(self._rust.expand(), self._sym_map)

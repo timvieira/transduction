@@ -118,30 +118,32 @@ class FST(Generic[A, B]):
         self.states.add(q)
         self.stop.add(q)
 
-    def ensure_arc_indexes(self) -> None:
-        """Build secondary arc indexes for O(1) lookup by various key combinations.
+    def ensure_trie_index(self) -> None:
+        """Build secondary arc indexes for O(1) lookup by output or input.
 
-        Naming scheme: ``index_{keys}_{values}`` where i=source state,
-        x=input label, y=output label, j=destination state.  For example,
-        ``index_iy_xj[(i, y)]`` returns ``{(x, j), ...}`` — all arcs from
-        state ``i`` with output label ``y``.
+        Builds three dicts (down from the previous four hash-map indexes):
+
+        - ``_arcs_by_output[(i, y)]`` → ``tuple[(x, j), ...]``
+        - ``_arcs_all[i]`` → ``tuple[(x, j), ...]``
+        - ``_arcs_by_input[(i, x)]`` → ``tuple[(y, j), ...]``
         """
-        if hasattr(self, 'index_iy_xj'):
+        if hasattr(self, '_arcs_by_output'):
             return
-        index_iy_xj: dict[tuple[State, B], set[tuple[A, State]]] = {}
-        index_i_xj: dict[State, set[tuple[A, State]]] = {}
-        index_ix_j: dict[tuple[State, A], set[State]] = {}
-        index_ixy_j: dict[tuple[State, A, B], set[State]] = {}
+        arcs_by_output: dict[tuple[State, B], list[tuple[A, State]]] = {}
+        arcs_all: dict[State, list[tuple[A, State]]] = {}
+        arcs_by_input: dict[tuple[State, A], list[tuple[B, State]]] = {}
         for i in self.states:
             for x, y, j in self.arcs(i):
-                index_iy_xj.setdefault((i, y), set()).add((x, j))
-                index_i_xj.setdefault(i, set()).add((x, j))
-                index_ix_j.setdefault((i, x), set()).add(j)
-                index_ixy_j.setdefault((i, x, y), set()).add(j)
-        self.index_iy_xj = index_iy_xj
-        self.index_i_xj = index_i_xj
-        self.index_ix_j = index_ix_j
-        self.index_ixy_j = index_ixy_j
+                arcs_by_output.setdefault((i, y), []).append((x, j))
+                arcs_all.setdefault(i, []).append((x, j))
+                arcs_by_input.setdefault((i, x), []).append((y, j))
+        self._arcs_by_output = {k: tuple(v) for k, v in arcs_by_output.items()}
+        self._arcs_all = {k: tuple(v) for k, v in arcs_all.items()}
+        self._arcs_by_input = {k: tuple(v) for k, v in arcs_by_input.items()}
+
+    def ensure_arc_indexes(self) -> None:
+        """Legacy wrapper — calls ensure_trie_index() and sets old attribute aliases."""
+        self.ensure_trie_index()
 
     def _build_arc_index(self) -> None:
         """Build flat arc indexes for O(1) lookup, called lazily on first arcs() call."""

@@ -1,6 +1,6 @@
 use pyo3::prelude::*;
 use crate::fst::{Fst, compute_ip_universal_states};
-use crate::{decompose, peekaboo, incremental, minimize};
+use crate::{decompose, peekaboo, incremental, minimize, rho};
 use std::time::Instant;
 
 /// Python-visible FST wrapper. Constructed once from Python arrays, then
@@ -833,6 +833,79 @@ impl RustLazyPeekabooDFA {
     /// Return the idx→symbol mapping for decoding extra_sym_idx values.
     fn idx_to_sym_map(&self) -> Vec<u32> {
         self.idx_to_sym.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rho-arc compressed DFA
+// ---------------------------------------------------------------------------
+
+/// Python-visible rho-factored DFA result.
+#[pyclass]
+pub struct RustRhoDfa {
+    inner: rho::RhoDfaResult,
+    source_alphabet: Vec<u32>,
+}
+
+#[pymethods]
+impl RustRhoDfa {
+    fn num_states(&self) -> u32 {
+        self.inner.num_states
+    }
+
+    fn start_states(&self) -> Vec<u32> {
+        self.inner.start.clone()
+    }
+
+    fn final_states(&self) -> Vec<u32> {
+        self.inner.stop.clone()
+    }
+
+    fn arcs(&self) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+        (self.inner.arc_src.clone(), self.inner.arc_lbl.clone(), self.inner.arc_dst.clone())
+    }
+
+    fn num_rho_arcs(&self) -> u32 {
+        self.inner.num_rho_arcs
+    }
+
+    fn num_explicit_arcs(&self) -> u32 {
+        self.inner.num_explicit_arcs
+    }
+
+    fn complete_states(&self) -> u32 {
+        self.inner.complete_states
+    }
+
+    fn rho_label(&self) -> u32 {
+        rho::RHO
+    }
+
+    fn total_ms(&self) -> f64 {
+        self.inner.total_ms
+    }
+
+    /// Expand RHO arcs into explicit arcs, returning a RustFsa.
+    fn expand(&self, py: Python<'_>) -> PyResult<Py<RustFsa>> {
+        let expanded = rho::expand_rho(&self.inner, &self.source_alphabet);
+        Py::new(py, RustFsa {
+            num_states: expanded.num_states,
+            start: expanded.start,
+            stop: expanded.stop,
+            src: expanded.arc_src,
+            lbl: expanded.arc_lbl,
+            dst: expanded.arc_dst,
+        })
+    }
+}
+
+/// Perform rho-factored determinization of the PrecoverNFA.
+#[pyfunction]
+pub fn rust_rho_determinize(fst: &RustFst, target: Vec<u32>) -> RustRhoDfa {
+    let result = rho::rho_determinize(&fst.inner, &target);
+    RustRhoDfa {
+        inner: result,
+        source_alphabet: fst.inner.source_alphabet.clone(),
     }
 }
 

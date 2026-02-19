@@ -121,19 +121,18 @@ impl<'a> PrecoverNFA<'a> {
         let mut result = Vec::new();
 
         if n == self.target_len {
-            for &(x, j) in &self.fst.index_i_xj[i as usize] {
-                result.push((x, self.pack_state(j, self.target_len)));
+            // Boundary phase: all arcs from FST state i
+            for arc in self.fst.arcs_from(i) {
+                result.push((arc.input, self.pack_state(arc.dest, self.target_len)));
             }
         } else {
-            if let Some(eps_arcs) = self.fst.index_iy_xj.get(&(i, EPSILON)) {
-                for &(x, j) in eps_arcs {
-                    result.push((x, self.pack_state(j, n)));
-                }
+            // Growing phase: arcs with output=EPSILON (buffer unchanged)
+            for arc in self.fst.arcs_by_output(i, EPSILON) {
+                result.push((arc.input, self.pack_state(arc.dest, n)));
             }
-            if let Some(match_arcs) = self.fst.index_iy_xj.get(&(i, self.target[n as usize])) {
-                for &(x, j) in match_arcs {
-                    result.push((x, self.pack_state(j, n + 1)));
-                }
+            // Growing phase: arcs with output=target[n] (buffer advances)
+            for arc in self.fst.arcs_by_output(i, self.target[n as usize]) {
+                result.push((arc.input, self.pack_state(arc.dest, n + 1)));
             }
         }
 
@@ -141,27 +140,26 @@ impl<'a> PrecoverNFA<'a> {
     }
 
     /// Successors for a given input symbol x.
+    /// Note: this is only ever called with x=EPSILON (by eps_closure_single_cached).
     #[inline]
     pub fn arcs_x(&self, packed: u64, x: u32) -> Vec<u64> {
+        debug_assert!(x == EPSILON, "arcs_x called with non-EPSILON x={}", x);
         let (i, n) = self.unpack_state(packed);
         let mut result = Vec::new();
 
         if n == self.target_len {
-            if let Some(dests) = self.fst.index_ix_j.get(&(i, x)) {
-                for &j in dests {
-                    result.push(self.pack_state(j, self.target_len));
-                }
+            // Boundary phase: epsilon-input arcs from FST state i
+            for ea in self.fst.eps_input_arcs(i) {
+                result.push(self.pack_state(ea.dest, self.target_len));
             }
         } else {
-            if let Some(dests) = self.fst.index_ixy_j.get(&(i, x, EPSILON)) {
-                for &j in dests {
-                    result.push(self.pack_state(j, n));
-                }
+            // Growing phase: epsilon-input arcs with output=EPSILON
+            for ea in self.fst.eps_input_arcs_by_output(i, EPSILON) {
+                result.push(self.pack_state(ea.dest, n));
             }
-            if let Some(dests) = self.fst.index_ixy_j.get(&(i, x, self.target[n as usize])) {
-                for &j in dests {
-                    result.push(self.pack_state(j, n + 1));
-                }
+            // Growing phase: epsilon-input arcs with output=target[n]
+            for ea in self.fst.eps_input_arcs_by_output(i, self.target[n as usize]) {
+                result.push(self.pack_state(ea.dest, n + 1));
             }
         }
 

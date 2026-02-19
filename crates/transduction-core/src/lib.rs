@@ -5,6 +5,7 @@ pub mod decompose;
 pub mod peekaboo;
 pub mod minimize;
 pub mod incremental;
+pub mod rho;
 pub mod py;
 
 use pyo3::prelude::*;
@@ -24,6 +25,8 @@ fn transduction_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<py::PeekabooBeamView>()?;
     m.add_class::<py::RustLazyPeekabooDFA>()?;
     m.add_class::<py::PeekabooClassifyResult>()?;
+    m.add_class::<py::RustRhoDfa>()?;
     m.add_function(wrap_pyfunction!(py::rust_decompose, m)?)?;
+    m.add_function(wrap_pyfunction!(py::rust_rho_determinize, m)?)?;
     Ok(())
 }

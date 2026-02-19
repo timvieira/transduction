@@ -48,7 +48,7 @@ class PrecoverNFA(Lazy):
         self.fst = fst
         self.target = tuple(target)
         self.N = len(self.target)
-        fst.ensure_arc_indexes()
+        fst.ensure_trie_index()
         self._has_eps = EPSILON in fst.A
 
     def epsremove(self):
@@ -63,12 +63,12 @@ class PrecoverNFA(Lazy):
         if self.target[:m] != ys[:m]:      # target and ys are not prefixes of one another.
             return
         if m == self.N:                    # i.e, target <= ys
-            for x, j in self.fst.index_i_xj.get(i, ()):
+            for x, j in self.fst._arcs_all.get(i, ()):
                 yield (x, (j, self.target))
         else:                              # i.e, ys < target)
-            for x, j in self.fst.index_iy_xj.get((i, EPSILON), ()):
+            for x, j in self.fst._arcs_by_output.get((i, EPSILON), ()):
                 yield (x, (j, ys))
-            for x, j in self.fst.index_iy_xj.get((i, self.target[n]), ()):
+            for x, j in self.fst._arcs_by_output.get((i, self.target[n]), ()):
                 yield (x, (j, self.target[:n+1]))
 
     def arcs_x(self, state, x):
@@ -78,13 +78,14 @@ class PrecoverNFA(Lazy):
         if self.target[:m] != ys[:m]:
             return
         if m == self.N:
-            for j in self.fst.index_ix_j.get((i, x), ()):
+            for y, j in self.fst._arcs_by_input.get((i, x), ()):
                 yield (j, self.target)
         else:
-            for j in self.fst.index_ixy_j.get((i, x, EPSILON), ()):
-                yield (j, ys)
-            for j in self.fst.index_ixy_j.get((i, x, self.target[n]), ()):
-                yield (j, self.target[:n+1])
+            for y, j in self.fst._arcs_by_input.get((i, x), ()):
+                if y == EPSILON:
+                    yield (j, ys)
+                elif y == self.target[n]:
+                    yield (j, self.target[:n+1])
 
     def start(self):
         for i in self.fst.start:
@@ -113,7 +114,7 @@ class TruncationMarkerPrecoverNFA(Lazy):
         self.fst = fst
         self.target = tuple(target)
         self.N = len(self.target)
-        fst.ensure_arc_indexes()
+        fst.ensure_trie_index()
         self._has_eps = EPSILON in fst.A
 
     def epsremove(self):
@@ -129,7 +130,7 @@ class TruncationMarkerPrecoverNFA(Lazy):
             return
         if m == self.N:                    # i.e, target <= ys
             if truncated:
-                for x, j in self.fst.index_i_xj.get(i, ()):
+                for x, j in self.fst._arcs_all.get(i, ()):
                     yield (x, (j, self.target, True))
             else:
                 # Need y to distinguish EPSILON from non-EPSILON
@@ -140,9 +141,9 @@ class TruncationMarkerPrecoverNFA(Lazy):
                         yield (x, (j, self.target, True))
         else:                              # i.e, ys < target)
             assert not truncated
-            for x, j in self.fst.index_iy_xj.get((i, EPSILON), ()):
+            for x, j in self.fst._arcs_by_output.get((i, EPSILON), ()):
                 yield (x, (j, ys, False))
-            for x, j in self.fst.index_iy_xj.get((i, self.target[n]), ()):
+            for x, j in self.fst._arcs_by_output.get((i, self.target[n]), ()):
                 yield (x, (j, self.target[:n+1], False))
 
     def arcs_x(self, state, x):
@@ -153,7 +154,7 @@ class TruncationMarkerPrecoverNFA(Lazy):
             return
         if m == self.N:
             if truncated:
-                for j in self.fst.index_ix_j.get((i, x), ()):
+                for y, j in self.fst._arcs_by_input.get((i, x), ()):
                     yield (j, self.target, True)
             else:
                 # Need y to distinguish EPSILON from non-EPSILON
@@ -164,10 +165,11 @@ class TruncationMarkerPrecoverNFA(Lazy):
                         yield (j, self.target, True)
         else:
             assert not truncated
-            for j in self.fst.index_ixy_j.get((i, x, EPSILON), ()):
-                yield (j, ys, False)
-            for j in self.fst.index_ixy_j.get((i, x, self.target[n]), ()):
-                yield (j, self.target[:n+1], False)
+            for y, j in self.fst._arcs_by_input.get((i, x), ()):
+                if y == EPSILON:
+                    yield (j, ys, False)
+                elif y == self.target[n]:
+                    yield (j, self.target[:n+1], False)
 
     def start(self):
         for i in self.fst.start:
@@ -326,7 +328,7 @@ class PeekabooLookaheadNFA(Lazy):
         self.N = len(self.target)
         self.K = K
         assert K >= 1
-        fst.ensure_arc_indexes()
+        fst.ensure_trie_index()
         # Arc labels are FST input symbols; epsilon arcs exist only if the
         # FST has input-epsilon arcs.  When absent, skip EpsilonRemove in
         # det() — the wrapper is a no-op but costs ~12-15% of runtime on
@@ -346,7 +348,7 @@ class PeekabooLookaheadNFA(Lazy):
             return
         if m >= self.N:                    # i.e, target <= ys
             if truncated:
-                for x, j in self.fst.index_i_xj.get(i, ()):
+                for x, j in self.fst._arcs_all.get(i, ()):
                     yield (x, (j, ys, True))
             else:
                 for x, y, j in self.fst.arcs(i):
@@ -358,9 +360,9 @@ class PeekabooLookaheadNFA(Lazy):
                         yield (x, (j, now, (was != now)))
         else:                              # i.e, ys < target)
             assert not truncated
-            for x, j in self.fst.index_iy_xj.get((i, EPSILON), ()):
+            for x, j in self.fst._arcs_by_output.get((i, EPSILON), ()):
                 yield (x, (j, ys, False))
-            for x, j in self.fst.index_iy_xj.get((i, self.target[n]), ()):
+            for x, j in self.fst._arcs_by_output.get((i, self.target[n]), ()):
                 yield (x, (j, self.target[:n+1], False))
 
     def arcs_x(self, state, x):
@@ -371,7 +373,7 @@ class PeekabooLookaheadNFA(Lazy):
             return
         if m >= self.N:
             if truncated:
-                for j in self.fst.index_ix_j.get((i, x), ()):
+                for y, j in self.fst._arcs_by_input.get((i, x), ()):
                     yield (j, ys, True)
             else:
                 for y, j in self.fst.arcs(i, x):
@@ -382,10 +384,11 @@ class PeekabooLookaheadNFA(Lazy):
                         now = was[:self.N+self.K]
                         yield (j, now, (was != now))
         else:
-            for j in self.fst.index_ixy_j.get((i, x, EPSILON), ()):
-                yield (j, ys, False)
-            for j in self.fst.index_ixy_j.get((i, x, self.target[n]), ()):
-                yield (j, self.target[:n+1], False)
+            for y, j in self.fst._arcs_by_input.get((i, x), ()):
+                if y == EPSILON:
+                    yield (j, ys, False)
+                elif y == self.target[n]:
+                    yield (j, self.target[:n+1], False)
 
     def start(self):
         for i in self.fst.start:
@@ -413,7 +416,7 @@ class PeekabooFixedNFA(Lazy):
         self.fst = fst
         self.target = tuple(target)
         self.N = len(self.target)
-        fst.ensure_arc_indexes()
+        fst.ensure_trie_index()
         self._has_eps = EPSILON in fst.A
 
     def epsremove(self):
@@ -429,9 +432,9 @@ class PeekabooFixedNFA(Lazy):
 
         # case: grow the buffer until we have covered all of the target string
         if n < self.N:
-            for x, j in self.fst.index_iy_xj.get((i, EPSILON), ()):
+            for x, j in self.fst._arcs_by_output.get((i, EPSILON), ()):
                 yield (x, (j, ys))
-            for x, j in self.fst.index_iy_xj.get((i, self.target[n]), ()):
+            for x, j in self.fst._arcs_by_output.get((i, self.target[n]), ()):
                 yield (x, (j, self.target[:n+1]))
 
         # extend the buffer beyond the target string by one symbol
@@ -445,7 +448,7 @@ class PeekabooFixedNFA(Lazy):
 
         # truncate the buffer after the (N+1)th symbol
         elif n == self.N + 1:
-            for x, j in self.fst.index_i_xj.get(i, ()):
+            for x, j in self.fst._arcs_all.get(i, ()):
                 yield (x, (j, ys))
 
     def arcs_x(self, state, x):
@@ -454,10 +457,11 @@ class PeekabooFixedNFA(Lazy):
         m = min(n, self.N)
         if self.target[:m] != ys[:m]: return
         if n < self.N:
-            for j in self.fst.index_ixy_j.get((i, x, EPSILON), ()):
-                yield (j, ys)
-            for j in self.fst.index_ixy_j.get((i, x, self.target[n]), ()):
-                yield (j, self.target[:n+1])
+            for y, j in self.fst._arcs_by_input.get((i, x), ()):
+                if y == EPSILON:
+                    yield (j, ys)
+                elif y == self.target[n]:
+                    yield (j, self.target[:n+1])
         elif n == self.N:
             # Need y for ys + (y,), keep fst.arcs(i, x)
             for y, j in self.fst.arcs(i, x):
@@ -466,7 +470,7 @@ class PeekabooFixedNFA(Lazy):
                 else:
                     yield (j, ys + (y,))
         elif n == self.N + 1:
-            for j in self.fst.index_ix_j.get((i, x), ()):
+            for y, j in self.fst._arcs_by_input.get((i, x), ()):
                 yield (j, ys)
 
     def start(self):
