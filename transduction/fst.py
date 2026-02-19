@@ -19,7 +19,7 @@ from typing import Any, Generic, TypeVar, overload
 
 from transduction.fsa import FSA, EPSILON
 
-from transduction.util import Integerizer
+from transduction.util import Integerizer, State, Str
 
 A = TypeVar('A')
 B = TypeVar('B')
@@ -28,9 +28,9 @@ C = TypeVar('C')
 
 class _EpsilonVariant:
     """Unique sentinel for composition epsilon filters (cannot collide with user labels)."""
-    def __init__(self, name):
+    def __init__(self, name: str) -> None:
         self._name = name
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self._name
 
 ε_1 = _EpsilonVariant('ε₁')
@@ -57,7 +57,7 @@ class FST(Generic[A, B]):
         stop: Set of final (accepting) states.
     """
 
-    def __init__(self, start: Iterable[Any] = (), arcs: Iterable[tuple[Any, A, B, Any]] = (), stop: Iterable[Any] = ()) -> None:
+    def __init__(self, start: Iterable[State] = (), arcs: Iterable[tuple[State, A, B, State]] = (), stop: Iterable[State] = ()) -> None:
         """Create an FST, optionally populating it from iterables.
 
         Args:
@@ -67,30 +67,21 @@ class FST(Generic[A, B]):
         """
         self.A: set[A] = set()
         self.B: set[B] = set()
-        self.states = set()
-        self.delta = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
-        self.start = set()
-        self.stop = set()
-        self._arcs_i = None      # lazy arc indexes (built on first arcs() call)
-        self._arcs_ix = None
+        self.states: set[State] = set()
+        self.delta: defaultdict[State, defaultdict[Any, defaultdict[Any, set[State]]]] = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
+        self.start: set[State] = set()
+        self.stop: set[State] = set()
+        self._arcs_i: dict[State, tuple[tuple[A, B, State], ...]] | None = None
+        self._arcs_ix: dict[tuple[State, A], tuple[tuple[B, State], ...]] | None = None
         for i in start: self.add_start(i)
         for i in stop: self.add_stop(i)
         for i,a,b,j in arcs: self.add_arc(i,a,b,j)
 
-    # Deprecated aliases
-    @property
-    def I(self):
-        return self.start
-
-    @property
-    def F(self):
-        return self.stop
-
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f'{__class__.__name__}({len(self.states)} states)'
 
-    def __str__(self):
-        output = []
+    def __str__(self) -> str:
+        output: list[str] = []
         output.append('{')
         for p in self.states:
             output.append(f'  {p} \t\t({p in self.start}, {p in self.stop})')
@@ -99,11 +90,11 @@ class FST(Generic[A, B]):
         output.append('}')
         return '\n'.join(output)
 
-    def is_final(self, i: Any) -> bool:
+    def is_final(self, i: State) -> bool:
         """Return True if state ``i`` is a final (accepting) state."""
         return i in self.stop
 
-    def add_arc(self, i: Any, a: A, b: B, j: Any) -> None:  # pylint: disable=arguments-renamed
+    def add_arc(self, i: State, a: A, b: B, j: State) -> None:  # pylint: disable=arguments-renamed
         """Add arc from state ``i`` to state ``j`` with input label ``a`` and output label ``b``.
 
         Use ``EPSILON`` (the empty string ``''``) for either label to create
@@ -117,19 +108,15 @@ class FST(Generic[A, B]):
         self.B.add(b)
         self._arcs_i = None   # invalidate arc indexes
 
-    def add_start(self, q: Any) -> None:
+    def add_start(self, q: State) -> None:
         """Mark state ``q`` as an initial state (creates it if needed)."""
         self.states.add(q)
         self.start.add(q)
 
-    def add_stop(self, q: Any) -> None:
+    def add_stop(self, q: State) -> None:
         """Mark state ``q`` as a final (accepting) state (creates it if needed)."""
         self.states.add(q)
         self.stop.add(q)
-
-    # Deprecated aliases
-    add_I = add_start
-    add_F = add_stop
 
     def ensure_arc_indexes(self) -> None:
         """Build secondary arc indexes for O(1) lookup by various key combinations.
@@ -141,10 +128,10 @@ class FST(Generic[A, B]):
         """
         if hasattr(self, 'index_iy_xj'):
             return
-        index_iy_xj = {}
-        index_i_xj = {}
-        index_ix_j = {}
-        index_ixy_j = {}
+        index_iy_xj: dict[tuple[State, B], set[tuple[A, State]]] = {}
+        index_i_xj: dict[State, set[tuple[A, State]]] = {}
+        index_ix_j: dict[tuple[State, A], set[State]] = {}
+        index_ixy_j: dict[tuple[State, A, B], set[State]] = {}
         for i in self.states:
             for x, y, j in self.arcs(i):
                 index_iy_xj.setdefault((i, y), set()).add((x, j))
@@ -159,14 +146,14 @@ class FST(Generic[A, B]):
     def _build_arc_index(self) -> None:
         """Build flat arc indexes for O(1) lookup, called lazily on first arcs() call."""
         # state → tuple[(input, output, dest), ...]
-        arcs_i = {}
+        arcs_i: dict[State, tuple[tuple[A, B, State], ...]] = {}
         # (state, input) → tuple[(output, dest), ...]
-        arcs_ix = {}
+        arcs_ix: dict[tuple[State, A], tuple[tuple[B, State], ...]] = {}
         for i, d in self.delta.items():
-            all_arcs = []
-            for a, A in d.items():
-                by_input = []
-                for b, B in A.items():
+            all_arcs: list[tuple[A, B, State]] = []
+            for a, A in d.items():  # pyright: ignore[reportConstantRedefinition]
+                by_input: list[tuple[B, State]] = []
+                for b, B in A.items():  # pyright: ignore[reportConstantRedefinition]
                     for j in B:
                         all_arcs.append((a, b, j))
                         by_input.append((b, j))
@@ -176,11 +163,11 @@ class FST(Generic[A, B]):
         self._arcs_ix = arcs_ix
 
     @overload
-    def arcs(self, i: Any) -> tuple[tuple[A, B, Any], ...]: ...
+    def arcs(self, i: State) -> tuple[tuple[A, B, State], ...]: ...
     @overload
-    def arcs(self, i: Any, x: A) -> tuple[tuple[B, Any], ...]: ...
+    def arcs(self, i: State, x: A) -> tuple[tuple[B, State], ...]: ...
 
-    def arcs(self, i: Any, x: A | None = None) -> tuple[tuple[A, B, Any], ...] | tuple[tuple[B, Any], ...]:
+    def arcs(self, i: State, x: A | None = None) -> tuple[tuple[A, B, State], ...] | tuple[tuple[B, State], ...]:
         """Iterate over arcs from state ``i``.
 
         With ``x=None``, yields ``(a, b, j)`` triples for all arcs from ``i``.
@@ -188,12 +175,13 @@ class FST(Generic[A, B]):
         """
         if self._arcs_i is None:
             self._build_arc_index()
+        assert self._arcs_i is not None and self._arcs_ix is not None
         if x is None:
             return self._arcs_i.get(i, ())
         else:
             return self._arcs_ix.get((i, x), ())
 
-    def rename(self, f: Callable[[Any], Any]) -> FST[A, B]:
+    def rename(self, f: Callable[[State], State]) -> FST[A, B]:
         """Return a new FST with states relabeled by ``f(state)``.
 
         If ``f`` is not injective, distinct states may merge.
@@ -208,7 +196,7 @@ class FST(Generic[A, B]):
                 m.add_arc(f(i), a, b, f(j))
         return m
 
-    def map_labels(self, f: Callable[[A, B], tuple[Any, Any]]) -> FST:
+    def map_labels(self, f: Callable[[A, B], tuple[Any, Any]]) -> FST[Any, Any]:
         "Transform arc labels by applying f(a, b) -> (a', b') to each arc."
         m = self.spawn(keep_init=True, keep_stop=True)
         for i in self.states:
@@ -219,7 +207,7 @@ class FST(Generic[A, B]):
 
     def renumber(self) -> FST[A, B]:
         """Return a copy with states relabeled as consecutive integers."""
-        return self.rename(Integerizer())
+        return self.rename(Integerizer())  # pyright: ignore[reportUnknownArgumentType]
 
     def spawn(self, *, keep_init: bool = False, keep_arcs: bool = False, keep_stop: bool = False) -> FST[A, B]:
         """Create a new empty FST, optionally copying start states, arcs, and/or stop states."""
@@ -236,25 +224,25 @@ class FST(Generic[A, B]):
                 m.add_stop(q)
         return m
 
-    def _repr_mimebundle_(self, *args, **kwargs):
+    def _repr_mimebundle_(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         if not self.states:
             return {'text/html': '<center>∅</center>'}
-        return self.graphviz()._repr_mimebundle_(*args, **kwargs)
+        return self.graphviz()._repr_mimebundle_(*args, **kwargs)  # pyright: ignore[reportUnknownMemberType]
 
     def graphviz(
         self,
-        fmt_node=lambda x: x,
-        fmt_edge=lambda i, a, j: f'{str(a[0] or "ε")}:{str(a[1] or "ε")}' if a[0] != a[1] else str(a[0]),
-        sty_node=lambda i: {},
-    ):
-        from transduction.viz import _render_graphviz
-        return _render_graphviz(
+        fmt_node: Callable[[State], Any] = lambda x: x,
+        fmt_edge: Callable[[State, Any, State], str] = lambda i, a, j: f'{str(a[0] or "ε")}:{str(a[1] or "ε")}' if a[0] != a[1] else str(a[0]),
+        sty_node: Callable[[State], dict[str, str]] = lambda i: {},
+    ) -> Any:
+        from transduction.viz import _render_graphviz  # pyright: ignore[reportPrivateUsage,reportUnknownVariableType]
+        return _render_graphviz(  # type: ignore[no-untyped-call]  # pyright: ignore[reportPrivateUsage,reportUnknownMemberType]
             self.states, self.start, self.stop,
-            arc_iter=lambda i: (((a, b), j) for a, b, j in self.arcs(i)),
+            arc_iter=lambda i: (((a, b), j) for a, b, j in self.arcs(i)),  # pyright: ignore[reportUnknownLambdaType]
             fmt_node=fmt_node, fmt_edge=fmt_edge, sty_node=sty_node,
         )
 
-    def __call__(self, x, y):
+    def __call__(self, x: Any, y: Any) -> Any:
         """
         Compute the total weight of x:y under the FST's weighted relation.  If one
         of x or y is None, we return the weighted language that is the cross
@@ -263,19 +251,19 @@ class FST(Generic[A, B]):
 
         if x is not None and y is not None:
             if isinstance(x, str):
-                x = FST.from_string(x)
+                x = FST.from_string(x)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
             if isinstance(y, str):
-                y = FST.from_string(y)
+                y = FST.from_string(y)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
             return (x @ self @ y)
 
         elif x is not None and y is None:
             if isinstance(x, str):
-                x = FST.from_string(x)
+                x = FST.from_string(x)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
             return (x @ self).project(1)
 
         elif x is None and y is not None:
             if isinstance(y, str):
-                y = FST.from_string(y)
+                y = FST.from_string(y)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
             return (self @ y).project(0)
 
         else:
@@ -291,9 +279,9 @@ class FST(Generic[A, B]):
         m = cls()
         m.add_start(xs[:0])
         for i in range(len(xs)):
-            m.add_arc(xs[:i], xs[i], xs[i], xs[:i+1])
+            m.add_arc(xs[:i], xs[i], xs[i], xs[:i+1])  # pyright: ignore[reportArgumentType]
         m.add_stop(xs)
-        return m
+        return m  # pyright: ignore[reportReturnType]
 
     @staticmethod
     def from_pairs(pairs: Sequence[tuple[Sequence[A], Sequence[B]]]) -> FST[A, B]:
@@ -302,23 +290,23 @@ class FST(Generic[A, B]):
         Each ``(xs, ys)`` pair becomes a separate path.  Inputs and outputs
         of different lengths are padded with epsilon.
         """
-        p = FST()
+        p: FST[A, B] = FST()
         p.add_start(0)
         p.add_stop(1)
         for i, (xs, ys) in enumerate(pairs):
-            p.add_arc(0, EPSILON, EPSILON, (i, 0))
+            p.add_arc(0, EPSILON, EPSILON, (i, 0))  # pyright: ignore[reportArgumentType]
             for j, (x, y) in enumerate(zip_longest(xs, ys, fillvalue=EPSILON)):
-                p.add_arc((i, j), x, y, (i, j + 1))
-            p.add_arc((i, max(len(xs), len(ys))), EPSILON, EPSILON, 1)
+                p.add_arc((i, j), x, y, (i, j + 1))  # pyright: ignore[reportArgumentType]
+            p.add_arc((i, max(len(xs), len(ys))), EPSILON, EPSILON, 1)  # pyright: ignore[reportArgumentType]
         return p
 
-    def project(self, axis: int) -> FSA:
+    def project(self, axis: int) -> FSA[Any]:
         """
         Project the FST into a FSA when `component` is 0, we project onto the left,
         and with 1 we project onto the right.
         """
         assert axis in [0, 1]
-        A = FSA()
+        A: FSA[Any] = FSA()  # pyright: ignore[reportConstantRedefinition]
         for i in self.states:
             for a, b, j in self.arcs(i):
                 if axis == 0:
@@ -335,22 +323,22 @@ class FST(Generic[A, B]):
         "If `self` is a partial function, this method will make it total by extending the range with a failure `marker`."
         assert marker not in self.B
 
-        d = (self @ FSA.from_strings(self.B - {EPSILON}).star().min()).project(0)
-        other = d.invert(self.A - {EPSILON}).min()
+        d: FSA[Any] = (self @ FSA.from_strings(self.B - {EPSILON}).star().min()).project(0)  # pyright: ignore[reportUnknownMemberType,reportOperatorIssue,reportUnknownArgumentType,reportUnknownVariableType]
+        other: FSA[Any] = d.invert(self.A - {EPSILON}).min()  # pyright: ignore[reportOperatorIssue,reportUnknownMemberType,reportUnknownArgumentType,reportUnknownVariableType]
 
         _ns = object()  # unique namespace sentinel — cannot collide with any existing state
-        def gensym(i): return (_ns, i)
+        def gensym(i: Any) -> tuple[object, Any]: return (_ns, i)
         m = self.spawn(keep_arcs=True, keep_init=True, keep_stop=True)
 
         # copy arcs from `other` such that they read the same symbol, but now
         # emit the empty string.  However, at the end of we generate a `marker`
         # symbol and terminate.
-        for i in other.start:
+        for i in other.start:  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
             m.add_start(gensym(i))
-        for i,a,j in other.arcs():
-            m.add_arc(gensym(i), a, EPSILON, gensym(j))
-        for j in other.stop:
-            m.add_arc(gensym(j), EPSILON, marker, gensym(None))
+        for i,a,j in other.arcs():  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+            m.add_arc(gensym(i), a, EPSILON, gensym(j))  # pyright: ignore[reportArgumentType,reportUnknownArgumentType]
+        for j in other.stop:  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+            m.add_arc(gensym(j), EPSILON, marker, gensym(None))  # pyright: ignore[reportArgumentType]
         m.add_stop(gensym(None))
 
         return m
@@ -364,7 +352,7 @@ class FST(Generic[A, B]):
         "Relation composition; may coerce `other` to an appropriate type if need be."
 
         if isinstance(other, FSA):
-            other = FST.diag(other)
+            other = FST.diag(other)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
 
         # minor efficiency trick: it's slightly more efficient to associate the composition as follows
         if len(self.states) < len(other.states):
@@ -389,7 +377,7 @@ class FST(Generic[A, B]):
             )
 
     # TODO: use lazy machine pattern
-    def _compose(self, other: FST) -> FST:
+    def _compose(self, other: FST[Any, Any]) -> FST[Any, Any]:
         """
         Implements the on-the-fly composition of the FST `self` with the FST `other`.
 
@@ -398,28 +386,28 @@ class FST(Generic[A, B]):
         for the public composition API.
         """
 
-        C = FST()
+        C: FST[Any, Any] = FST()  # pyright: ignore[reportConstantRedefinition]
 
         # index arcs in `other` to so that they are fast against later
-        tmp = defaultdict(list)
+        tmp: defaultdict[tuple[Any, Any], list[tuple[Any, Any]]] = defaultdict(list)
         for i in other.states:
             for a, b, j in other.arcs(i):
                 tmp[i, a].append((b, j))
 
-        visited = set()
-        stack = []
+        visited: set[tuple[Any, Any]] = set()
+        stack: list[tuple[Any, Any]] = []
 
         # add initial states
-        for P in self.start:
-            for Q in other.start:
-                PQ = (P, Q)
+        for P in self.start:  # pyright: ignore[reportConstantRedefinition]
+            for Q in other.start:  # pyright: ignore[reportConstantRedefinition]
+                PQ = (P, Q)  # pyright: ignore[reportConstantRedefinition]
                 C.add_start(PQ)
                 visited.add(PQ)
                 stack.append(PQ)
 
         # traverse the machine using depth-first search
         while stack:
-            P, Q = PQ = stack.pop()
+            P, Q = PQ = stack.pop()  # pyright: ignore[reportConstantRedefinition]
 
             # (q,p) is simultaneously a final state in the respective machines
             if P in self.stop and Q in other.stop:
@@ -448,7 +436,7 @@ class FST(Generic[A, B]):
         return C
 
     # TODO: use lazy pattern here too.
-    def _augment_epsilon_transitions(self, idx: int) -> FST:
+    def _augment_epsilon_transitions(self, idx: int) -> FST[Any, Any]:
         """
         Augments the FST by changing the appropriate epsilon transitions to
         epsilon_1 or epsilon_2 transitions to be able to perform the composition
@@ -458,19 +446,19 @@ class FST(Generic[A, B]):
         """
         assert idx in [0, 1]
 
-        T = self.spawn(keep_init=True, keep_stop=True)
+        T: FST[Any, Any] = self.spawn(keep_init=True, keep_stop=True)  # pyright: ignore[reportConstantRedefinition]
 
         for i in self.states:
             if idx == 0:
-                T.add_arc(i, EPSILON, ε_1, i)
+                T.add_arc(i, EPSILON, ε_1, i)  # pyright: ignore[reportArgumentType]
             else:
-                T.add_arc(i, ε_2, EPSILON, i)
+                T.add_arc(i, ε_2, EPSILON, i)  # pyright: ignore[reportArgumentType]
             for a, b, j in self.arcs(i):
                 if idx == 0 and b == EPSILON:
-                    b = ε_2
+                    b = ε_2  # pyright: ignore[reportConstantRedefinition]
                 elif idx == 1 and a == EPSILON:
-                    a = ε_1
-                T.add_arc(i, a, b, j)
+                    a = ε_1  # pyright: ignore[reportConstantRedefinition]
+                T.add_arc(i, a, b, j)  # pyright: ignore[reportArgumentType]
 
         return T
 
@@ -482,16 +470,16 @@ class FST(Generic[A, B]):
         assert isinstance(fsa, FSA), type(fsa)
         fst = cls()
         for i, a, j in fsa.arcs():
-            fst.add_arc(i, a, a, j)
+            fst.add_arc(i, a, a, j)  # pyright: ignore[reportArgumentType]
         for i in fsa.start:
             fst.add_start(i)
         for i in fsa.stop:
             fst.add_stop(i)
-        return fst
+        return fst  # pyright: ignore[reportReturnType]
 
     def paths(self) -> Iterator[tuple[Any, ...]]:
         "Enumerate paths in the FST using breadth-first order."
-        worklist = deque()
+        worklist: deque[tuple[Any, ...]] = deque()
         for i in self.start:
             worklist.append((i,))
         while worklist:
@@ -502,9 +490,9 @@ class FST(Generic[A, B]):
             for a, b, j in self.arcs(i):
                 worklist.append((*path, (a,b), j))
 
-    def relation(self, max_length: int) -> Iterator[tuple[tuple[A, ...], tuple[B, ...]]]:
+    def relation(self, max_length: int) -> Iterator[tuple[Str[A], Str[B]]]:
         "Enumerate string pairs in the relation of this FST up to length `max_length`."
-        worklist = deque()
+        worklist: deque[tuple[State, Str[A], Str[B]]] = deque()
         worklist.extend([(i, (), ()) for i in self.start])
         while worklist:
             (i, xs, ys) = worklist.popleft()
@@ -517,13 +505,13 @@ class FST(Generic[A, B]):
                 new_ys = (*ys, y) if y != EPSILON else ys
                 worklist.append((j, new_xs, new_ys))
 
-    def transduce(self, input_seq: Sequence[A]) -> tuple[B, ...]:
+    def transduce(self, input_seq: Sequence[A]) -> Str[B]:
         """Transduce input_seq through this FST via BFS NFA simulation.
         Returns one accepting output tuple, or raises ValueError if no
         accepting path exists.
         """
-        queue = deque()
-        parent = {}
+        queue: deque[tuple[State, int]] = deque()
+        parent: dict[tuple[State, int], tuple[tuple[State, int], B] | None] = {}
         for s in self.start:
             key = (s, 0)
             parent[key] = None
@@ -531,10 +519,10 @@ class FST(Generic[A, B]):
         while queue:
             state, pos = queue.popleft()
             if pos == len(input_seq) and state in self.stop:
-                output = []
+                output: list[B] = []
                 k = (state, pos)
                 while parent[k] is not None:
-                    prev, out_sym = parent[k]
+                    prev, out_sym = parent[k]  # pyright: ignore[reportOptionalMemberAccess]
                     if out_sym != EPSILON:
                         output.append(out_sym)
                     k = prev
@@ -553,7 +541,7 @@ class FST(Generic[A, B]):
                     queue.append(key)
         raise ValueError("No accepting path found")
 
-    def is_functional(self) -> tuple[bool, tuple[tuple[A, ...], tuple[B, ...], tuple[B, ...]] | None]:
+    def is_functional(self) -> tuple[bool, tuple[Str[A], Str[B], Str[B]] | None]:
         """Check whether this FST defines a (partial) function.
 
         An FST is functional if every input string maps to at most one
@@ -579,11 +567,11 @@ class FST(Generic[A, B]):
 
         # --- Phase 1: Build product automaton (q1, q2) sharing input ---
         # Forward reachability from all start pairs.
-        product_arcs = {}    # (q1,q2) -> list of (a, b1, b2, j1, j2)
-        product_final = set()
+        product_arcs: dict[tuple[Any, Any], list[tuple[Any, Any, Any, Any, Any]]] = {}
+        product_final: set[tuple[Any, Any]] = set()
 
-        fwd = set()
-        queue = deque()
+        fwd: set[tuple[Any, Any]] = set()
+        queue: deque[tuple[Any, Any]] = deque()
         for s1 in t.start:
             for s2 in t.start:
                 pair = (s1, s2)
@@ -594,7 +582,7 @@ class FST(Generic[A, B]):
             q1, q2 = pair = queue.popleft()
             if q1 in t.stop and q2 in t.stop:
                 product_final.add(pair)
-            arcs = []
+            arcs: list[tuple[Any, Any, Any, Any, Any]] = []
             for a, b1, j1 in t.arcs(q1):
                 for a2, b2, j2 in t.arcs(q2):
                     if a != a2:
@@ -612,13 +600,13 @@ class FST(Generic[A, B]):
         assert product_final, "product_final empty: (s,s) always reaches (f,f) after trim"
 
         # --- Phase 2: Backward reachability → co-accessible states ---
-        rev = defaultdict(set)
+        rev: defaultdict[tuple[Any, Any], set[tuple[Any, Any]]] = defaultdict(set)
         for pair, arcs in product_arcs.items():
             for _, _, _, j1, j2 in arcs:
                 rev[(j1, j2)].add(pair)
 
-        co = set(product_final)
-        queue = deque(product_final)
+        co: set[tuple[Any, Any]] = set(product_final)
+        queue: deque[tuple[Any, Any]] = deque(product_final)
         while queue:
             pair = queue.popleft()
             for prev in rev[pair]:
@@ -638,8 +626,8 @@ class FST(Generic[A, B]):
         # to acceptance → non-functional.
         delay_bound = max(len(trimmed_product), 1)
 
-        visited = set()
-        worklist = deque()
+        visited: set[tuple[Any, Any, int, Str[Any]]] = set()
+        worklist: deque[tuple[Any, Any, int, Str[Any], Str[Any], Str[Any], Str[Any]]] = deque()
 
         for s1 in t.start:
             for s2 in t.start:
@@ -687,7 +675,7 @@ class FST(Generic[A, B]):
         trimmed_states = self.reachable() & self.coreachable()
 
         # ---- collect arcs within trimmed states ----
-        trimmed = FST(
+        trimmed: FST[A, B] = FST(
             start=self.start & trimmed_states,
             stop=self.stop & trimmed_states,
         )
@@ -714,7 +702,7 @@ class FST(Generic[A, B]):
         # from q to any final state.  We use None as "unconstrained" (top of
         # lattice) — meaning we haven't yet seen any path from q.
 
-        delay = {}
+        delay: dict[State, Str[B] | None] = {}
         for q in t.states:
             if q in t.stop:
                 delay[q] = ()        # final state: empty path contributes ε
@@ -722,7 +710,7 @@ class FST(Generic[A, B]):
                 delay[q] = None      # unconstrained until resolved
 
         # Build reverse adjacency so we can propagate backwards
-        reverse_adj = defaultdict(list)   # q' -> list of (q, y_tuple)
+        reverse_adj: defaultdict[State, list[tuple[State, Str[B]]]] = defaultdict(list)
         for q in t.states:
             for x, y, qp in t.arcs(q):
                 y_tuple = (y,) if y != EPSILON else ()
@@ -762,23 +750,26 @@ class FST(Generic[A, B]):
         for q in t.states:
             assert delay[q] is not None, f"fixpoint failed to resolve delay for state {q} after trim"
 
+        # After fixpoint, all delays are resolved (non-None).
+        delay_resolved: dict[State, Str[B]] = {q: d for q, d in delay.items() if d is not None}
+
         # --- 2. Transform arcs ---
-        result = FST()
+        result: FST[A, B] = FST()
         counter = [0]
         tag = object()   # unique per call so repeated pushes don't collide
 
-        def fresh():
+        def fresh() -> State:
             counter[0] += 1
             return ('__push__', tag, counter[0])
 
         for q in t.states:
             for x, y, qp in t.arcs(q):
-                y_tuple = (y,) if y != EPSILON else ()
-                full_output = y_tuple + delay[qp]
-                new_output = _strip_prefix(delay[q], full_output)
+                y_tuple: Str[B] = (y,) if y != EPSILON else ()
+                full_output = y_tuple + delay_resolved[qp]
+                new_output = _strip_prefix(delay_resolved[q], full_output)
 
                 if len(new_output) == 0:
-                    result.add_arc(q, x, EPSILON, qp)
+                    result.add_arc(q, x, EPSILON, qp)  # pyright: ignore[reportArgumentType]
                 elif len(new_output) == 1:
                     result.add_arc(q, x, new_output[0], qp)
                 else:
@@ -791,14 +782,14 @@ class FST(Generic[A, B]):
                             prev = nxt
                         elif k < len(new_output) - 1:
                             nxt = fresh()
-                            result.add_arc(prev, EPSILON, sym, nxt)
+                            result.add_arc(prev, EPSILON, sym, nxt)  # pyright: ignore[reportArgumentType]
                             prev = nxt
                         else:
-                            result.add_arc(prev, EPSILON, sym, qp)
+                            result.add_arc(prev, EPSILON, sym, qp)  # pyright: ignore[reportArgumentType]
 
         # --- 3. Handle start states ---
         for s in t.start:
-            d_s = delay[s]
+            d_s = delay_resolved[s]
             if len(d_s) == 0:
                 result.add_start(s)
             else:
@@ -808,10 +799,10 @@ class FST(Generic[A, B]):
                 for k, sym in enumerate(d_s):
                     if k < len(d_s) - 1:
                         nxt = fresh()
-                        result.add_arc(prev, EPSILON, sym, nxt)
+                        result.add_arc(prev, EPSILON, sym, nxt)  # pyright: ignore[reportArgumentType]
                         prev = nxt
                     else:
-                        result.add_arc(prev, EPSILON, sym, s)
+                        result.add_arc(prev, EPSILON, sym, s)  # pyright: ignore[reportArgumentType]
 
         # --- 4. Final states ---
         for q in t.stop:
@@ -819,10 +810,10 @@ class FST(Generic[A, B]):
 
         return result.trim()
 
-    def reachable(self) -> set[Any]:
+    def reachable(self) -> set[State]:
         """Return the set of states reachable from any start state."""
-        reachable = set()
-        dq = deque(self.start)
+        reachable: set[State] = set()
+        dq: deque[State] = deque(self.start)
         while dq:
             s = dq.popleft()
             if s in reachable:
@@ -833,14 +824,14 @@ class FST(Generic[A, B]):
                     dq.append(t)
         return reachable
 
-    def coreachable(self) -> set[Any]:
+    def coreachable(self) -> set[State]:
         """Return the set of states from which some stop state is reachable."""
-        radj = defaultdict(set)
+        radj: defaultdict[State, set[State]] = defaultdict(set)
         for q in self.states:
             for _, _, dst in self.arcs(q):
                 radj[dst].add(q)
-        coreachable = set()
-        dq = deque(self.stop)
+        coreachable: set[State] = set()
+        dq: deque[State] = deque(self.stop)
         while dq:
             s = dq.popleft()
             if s in coreachable:
@@ -854,25 +845,25 @@ class FST(Generic[A, B]):
     #___________________________________________________________________________
     #
 
-    def strongly_connected_components(self) -> list[list[Any]]:
+    def strongly_connected_components(self) -> list[list[State]]:
         """
         Return list of SCCs, each a list of states.
         """
 
         # Build adjacency
-        adj = defaultdict(list)
+        adj: defaultdict[State, list[State]] = defaultdict(list)
         for q in self.states:
             for _, _, dst in self.arcs(q):
                 adj[q].append(dst)
 
-        index = {}
-        lowlink = {}
-        stack = []
-        on_stack = set()
+        index: dict[State, int] = {}
+        lowlink: dict[State, int] = {}
+        stack: list[State] = []
+        on_stack: set[State] = set()
         current_index = [0]
-        sccs = []
+        sccs: list[list[State]] = []
 
-        def strongconnect(v):
+        def strongconnect(v: State) -> None:
             index[v] = current_index[0]
             lowlink[v] = current_index[0]
             current_index[0] += 1
@@ -888,7 +879,7 @@ class FST(Generic[A, B]):
                     lowlink[v] = min(lowlink[v], index[w])
 
             if lowlink[v] == index[v]:
-                comp = []
+                comp: list[State] = []
                 while True:
                     w = stack.pop()
                     on_stack.remove(w)
@@ -904,7 +895,7 @@ class FST(Generic[A, B]):
         return sccs
 
 
-def _advance_buf(side, buf, b1, b2):
+def _advance_buf(side: int, buf: Str[Any], b1: Any, b2: Any) -> tuple[int, Str[Any]]:
     """Update the output-buffer difference after copy-1 emits b1 and copy-2 emits b2.
 
     The buffer tracks what one copy has emitted beyond the other as a tuple
@@ -945,7 +936,7 @@ def _advance_buf(side, buf, b1, b2):
         return (0, ())
 
 
-def _lcp_pair(a, b):
+def _lcp_pair(a: Str[Any], b: Str[Any]) -> Str[Any]:
     """Longest common prefix of two tuples."""
     n = min(len(a), len(b))
     for i in range(n):
@@ -954,20 +945,20 @@ def _lcp_pair(a, b):
     return a[:n]
 
 
-def _strip_prefix(prefix, seq):
+def _strip_prefix(prefix: Str[Any], seq: Str[Any]) -> Str[Any]:
     """Remove prefix from seq, returning the remainder as a tuple."""
     assert seq[:len(prefix)] == prefix, f'{prefix} is not a prefix of {seq}'
     return seq[len(prefix):]
 
 
 
-def epsilon_filter_fst(Sigma):
+def epsilon_filter_fst(Sigma: set[Any]) -> FST[Any, Any]:
     """
     Returns the 3-state epsilon-filtered FST, that is used in to avoid
     epsilon-related ambiguity when composing WFST with epsilons.
     """
 
-    F = FST()
+    F: FST[Any, Any] = FST()  # pyright: ignore[reportConstantRedefinition]
 
     F.add_start(0)
 

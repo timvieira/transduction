@@ -496,18 +496,6 @@ def test_compose_smaller_right():
     assert (('a', 'a', 'a'), ('x', 'x', 'x')) in rel
 
 
-# ── Deprecated properties (lines 41, 45) ─────────────────────────────────────
-
-def test_deprecated_I_F_properties():
-    """Deprecated .I and .F aliases for .start and .stop."""
-    fst = FST()
-    fst.add_start(0)
-    fst.add_stop(1)
-    fst.add_arc(0, 'a', 'x', 1)
-    assert fst.I is fst.start
-    assert fst.F is fst.stop
-
-
 # ── spawn keep_arcs (lines 170-172) ──────────────────────────────────────────
 
 def test_spawn_keep_arcs():

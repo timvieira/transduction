@@ -22,10 +22,22 @@ from collections.abc import Hashable, Iterator
 from contextlib import contextmanager
 from functools import partial
 from types import FrameType
-from typing import Any, Generic, TypeVar, overload
+from typing import Any, Generic, TypeAlias, TypeVar, overload
 
 import numpy as np
 import numpy.typing as npt
+
+_T = TypeVar('_T')
+Str = tuple[_T, ...]
+"""Type alias for strings (sequences of symbols) in automata theory."""
+
+State: TypeAlias = Any
+"""Type alias for automaton states.
+
+States can be any hashable type (int, tuple, frozenset, etc.) and are used
+heterogeneously across FSA/FST operations (product states are tuples,
+powerset states are frozensets, renumbered states are ints).
+"""
 
 
 #_______________________________________________________________________________
@@ -42,7 +54,7 @@ class Integerizer(Generic[K]):
         self._map: dict[K, int] = {}
         self._list: list[K] = []
         self._frozen = False
-        if data: self.add(data)
+        if data: self(data)
 
     def _add(self, k: K) -> int:
         """Return the integer for *k*, assigning a new one if unseen."""
@@ -95,11 +107,6 @@ class Integerizer(Generic[K]):
             return [self._add(kk) for kk in k]
         return self._add(k)
 
-    encode = __call__
-    decode = __getitem__
-    lookup = __getitem__
-    add = __call__
-
     def freeze(self) -> Integerizer[K]:
         """Freeze the mapping; future unseen keys raise ValueError."""
         self._frozen = True
@@ -115,7 +122,7 @@ class Integerizer(Generic[K]):
 
     def _repr_html_(self) -> str:
         """Rich HTML table for Jupyter notebooks."""
-        from transduction.viz import format_table
+        from transduction.viz import format_table  # pyright: ignore[reportUnknownVariableType]
         n = len(self)
         frozen = ' frozen' if self._frozen else ''
         header = (f'<b>Integerizer</b> '
@@ -317,7 +324,7 @@ class _SparseLogMap(dict[V, float]):
 
     def _repr_html_(self) -> str:
         """Rich HTML table for Jupyter notebooks."""
-        from transduction.viz import format_table
+        from transduction.viz import format_table  # pyright: ignore[reportUnknownVariableType]
         name = type(self).__name__
         n = len(self)
         header = (f'<b>{name}</b> '

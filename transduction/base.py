@@ -63,7 +63,7 @@ from typing import Any, Generic, TypeVar, cast
 
 from transduction.fsa import FSA
 from transduction.fst import FST, EPSILON  # type: ignore[attr-defined]
-from transduction.util import colors
+from transduction.util import Str, colors
 
 A = TypeVar('A')  # source alphabet symbol type
 B = TypeVar('B')  # target alphabet symbol type
@@ -134,7 +134,7 @@ class DecompositionFunction(ABC, Generic[A, B]):
     Implementations: AbstractAlgorithm
     """
     @abstractmethod
-    def __call__(self, target: tuple[B, ...]) -> DecompositionResult[A, B]: ...
+    def __call__(self, target: Str[B]) -> DecompositionResult[A, B]: ...
 
 
 class IncrementalDecomposition(DecompositionResult[A, B]):
@@ -173,7 +173,7 @@ class AbstractAlgorithm(DecompositionFunction[A, B]):
     ``continuity`` (quotient test), and ``discontinuity`` (remainder test).
     The ``__call__`` method drives the BFS loop, collecting Q and R.
 
-    Source strings are represented as ``tuple[A, ...]``.
+    Source strings are represented as ``Str[A]``.
     """
 
     def __init__(
@@ -191,11 +191,11 @@ class AbstractAlgorithm(DecompositionFunction[A, B]):
         self.target_alphabet: set[B] = fst.B - cast(set[B], {EPSILON})
         self.max_steps = max_steps
 
-    def __call__(self, target: tuple[B, ...]) -> DecompositionResult[A, B]:
+    def __call__(self, target: Str[B]) -> DecompositionResult[A, B]:
         """Compute the Q/R decomposition for ``target`` via BFS over source strings."""
-        quotient: set[tuple[A, ...]] = set()
-        remainder: set[tuple[A, ...]] = set()
-        worklist: deque[tuple[A, ...]] = deque()
+        quotient: set[Str[A]] = set()
+        remainder: set[Str[A]] = set()
+        worklist: deque[Str[A]] = deque()
         for xs in self.initialize(target):
             worklist.append(xs)
         t = 0
@@ -215,21 +215,21 @@ class AbstractAlgorithm(DecompositionFunction[A, B]):
         return DecompositionResult(quotient, remainder)
 
     @abstractmethod
-    def initialize(self, target: tuple[B, ...]) -> Iterable[tuple[A, ...]]:
+    def initialize(self, target: Str[B]) -> Iterable[Str[A]]:
         """Return the initial seed strings for the BFS worklist."""
         ...
 
     @abstractmethod
-    def candidates(self, xs: tuple[A, ...], target: tuple[B, ...]) -> Iterable[tuple[A, ...]]:
+    def candidates(self, xs: Str[A], target: Str[B]) -> Iterable[Str[A]]:
         """Return source-string extensions of ``xs`` to add to the worklist."""
         ...
 
     @abstractmethod
-    def discontinuity(self, xs: tuple[A, ...], target: tuple[B, ...]) -> bool:
+    def discontinuity(self, xs: Str[A], target: Str[B]) -> bool:
         """Return True if ``xs`` belongs in the remainder R(target)."""
         ...
 
     @abstractmethod
-    def continuity(self, xs: tuple[A, ...], target: tuple[B, ...]) -> bool:
+    def continuity(self, xs: Str[A], target: Str[B]) -> bool:
         """Return True if ``xs`` belongs in the quotient Q(target)."""
         ...

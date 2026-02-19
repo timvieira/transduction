@@ -13,9 +13,12 @@ import builtins
 from collections import defaultdict, deque
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from functools import lru_cache
-from typing import Any, ClassVar, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, overload
 
-from transduction.util import Integerizer
+from transduction.util import Integerizer, State, Str
+
+if TYPE_CHECKING:
+    from transduction.lazy import Lazy
 
 A = TypeVar('A')
 B = TypeVar('B')
@@ -23,7 +26,7 @@ B = TypeVar('B')
 EPSILON = eps = ''
 
 
-def dfs(Ps: Iterable[Any], arcs: Callable[[Any], Iterable[tuple[A, Any]]]) -> FSA[A]:
+def dfs(Ps: Iterable[State], arcs: Callable[[State], Iterable[tuple[A, State]]]) -> FSA[A]:
     """Build an FSA by depth-first exploration from seed states.
 
     Args:
@@ -35,9 +38,9 @@ def dfs(Ps: Iterable[Any], arcs: Callable[[Any], Iterable[tuple[A, Any]]]) -> FS
     """
     stack = list(Ps)
     m: FSA[A] = FSA()
-    for P in Ps: m.add_start(P)
+    for P in Ps: m.add_start(P)  # pyright: ignore[reportConstantRedefinition]
     while stack:
-        P = stack.pop()
+        P = stack.pop()  # pyright: ignore[reportConstantRedefinition]
         for a, Q in arcs(P):
             if Q not in m.states:
                 stack.append(Q)
@@ -49,7 +52,7 @@ def dfs(Ps: Iterable[Any], arcs: Callable[[Any], Iterable[tuple[A, Any]]]) -> FS
 class frozenset(builtins.frozenset):  # type: ignore[type-arg]
     "Same as frozenset, but with a nicer printing method."
     def __repr__(self) -> str:
-        return '{%s}' % (','.join(str(x) for x in self))
+        return '{%s}' % (','.join(str(x) for x in self))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
 
 
 class FSA(Generic[A]):
@@ -77,9 +80,9 @@ class FSA(Generic[A]):
 
     def __init__(
         self,
-        start: Iterable[Any] = (),
-        arcs: Iterable[tuple[Any, A, Any]] = (),
-        stop: Iterable[Any] = (),
+        start: Iterable[State] = (),
+        arcs: Iterable[tuple[State, A, State]] = (),
+        stop: Iterable[State] = (),
     ) -> None:
         """Create an FSA, optionally populating it from iterables.
 
@@ -88,11 +91,11 @@ class FSA(Generic[A]):
             arcs: Iterable of ``(src, label, dst)`` tuples.
             stop: Iterable of final (accepting) states.
         """
-        self.states: set[Any] = set()
-        self.start: set[Any] = set()
-        self.stop: set[Any] = set()
+        self.states: set[State] = set()
+        self.start: set[State] = set()
+        self.stop: set[State] = set()
         self.syms: set[A] = set()
-        self.edges: defaultdict[Any, defaultdict[Any, set[Any]]] = defaultdict(lambda: defaultdict(set))
+        self.edges: defaultdict[State, defaultdict[Any, set[State]]] = defaultdict(lambda: defaultdict(set))
         # use the official methods for the constructor's initialization
         for i in start: self.add_start(i)
         for i in stop: self.add_stop(i)
@@ -102,23 +105,21 @@ class FSA(Generic[A]):
         # the FSA is already materialized
         return self
 
-    def lazy(self) -> Any:
+    def lazy(self) -> Lazy[A]:
         from transduction.lazy import LazyWrapper
-        return LazyWrapper(self)  # type: ignore[no-untyped-call]
-
-    def as_tuple(self) -> tuple[Any, ...]:
-        return (frozenset(self.states),
-                frozenset(self.start),
-                frozenset(self.stop),
-                frozenset(self.arcs()))
+        return LazyWrapper(self)
 
     def __hash__(self) -> int:
-        return hash(self.as_tuple())
+        return hash((frozenset(self.states), frozenset(self.start),
+                     frozenset(self.stop), frozenset(self.arcs())))
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, FSA):
             return NotImplemented
-        return self.as_tuple() == other.as_tuple()
+        return (self.states == other.states
+                and self.start == other.start
+                and self.stop == other.stop
+                and set(self.arcs()) == set(other.arcs()))  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
 
     def __repr__(self) -> str:
         x = ['{']
@@ -139,15 +140,20 @@ class FSA(Generic[A]):
             return {'text/html': '<center>∅</center>'}
         return self.graphviz()._repr_mimebundle_(*args, **kwargs)
 
-    def graphviz(self, fmt_node: Callable[[Any], Any] = lambda x: x, sty_node: Callable[[Any], dict[str, str]] = lambda x: {}, fmt_edge: Callable[[Any, Any, Any], Any] = lambda i,a,j: 'ε' if a == EPSILON else a) -> Any:
+    def graphviz(
+        self,
+        fmt_node: Callable[[State], str] = repr,
+        sty_node: Callable[[State], dict[str, str]] = lambda x: {},
+        fmt_edge: Callable[[State, A, State], str] = lambda i,a,j: 'ε' if a == EPSILON else str(a)
+    ) -> Any:
         """Return a Graphviz digraph for visualization.
 
         Optional callbacks customize rendering: ``fmt_node(state)`` formats
         node labels, ``sty_node(state)`` returns a dict of Graphviz
         attributes, and ``fmt_edge(i, a, j)`` formats edge labels.
         """
-        from transduction.viz import _render_graphviz
-        return _render_graphviz(  # type: ignore[no-untyped-call]
+        from transduction.viz import _render_graphviz  # pyright: ignore[reportPrivateUsage,reportUnknownVariableType]
+        return _render_graphviz(  # type: ignore[no-untyped-call]  # pyright: ignore[reportUnknownMemberType,reportPrivateUsage]
             self.states, self.start, self.stop,
             arc_iter=self.arcs,
             fmt_node=fmt_node, fmt_edge=fmt_edge, sty_node=sty_node,
@@ -164,13 +170,13 @@ class FSA(Generic[A]):
                 m.add(i,a,j)
         return m
 
-    def _add_eps(self, i: Any, j: Any) -> None:
+    def _add_eps(self, i: State, j: State) -> None:
         """Add an epsilon arc from ``i`` to ``j`` (internal helper)."""
         self.edges[i][EPSILON].add(j)
         self.states.add(i)
         self.states.add(j)
 
-    def add(self, i: Any, a: A, j: Any) -> FSA[A]:
+    def add(self, i: State, a: A, j: State) -> FSA[A]:
         """Add arc from state ``i`` to state ``j`` with label ``a``. Creates states implicitly."""
         self.edges[i][a].add(j)
         self.states.add(i)
@@ -181,30 +187,30 @@ class FSA(Generic[A]):
 
     add_arc = add
 
-    def add_start(self, i: Any) -> FSA[A]:
+    def add_start(self, i: State) -> FSA[A]:
         """Mark state ``i`` as an initial state (creates it if needed)."""
         self.start.add(i)
         self.states.add(i)
         return self
 
-    def add_stop(self, i: Any) -> FSA[A]:
+    def add_stop(self, i: State) -> FSA[A]:
         """Mark state ``i`` as a final (accepting) state (creates it if needed)."""
         self.stop.add(i)
         self.states.add(i)
         return self
 
-    def is_final(self, i: Any) -> bool:
+    def is_final(self, i: State) -> bool:
         """Return True if state ``i`` is a final (accepting) state."""
         return i in self.stop
 
     @overload
-    def arcs(self) -> Iterator[tuple[Any, A, Any]]: ...
+    def arcs(self) -> Iterator[tuple[State, A, State]]: ...
     @overload
-    def arcs(self, i: Any) -> Iterator[tuple[A, Any]]: ...
+    def arcs(self, i: State) -> Iterator[tuple[A, State]]: ...
     @overload
-    def arcs(self, i: Any, a: A) -> Iterator[Any]: ...
+    def arcs(self, i: State, a: A) -> Iterator[State]: ...
 
-    def arcs(self, i: Any = None, a: Any = None) -> Iterator[Any]:
+    def arcs(self, i: State | None = None, a: A | None = None) -> Iterator[Any]:
         """Iterate over arcs.
 
         - ``arcs()`` → yields all ``(i, a, j)`` triples.
@@ -232,7 +238,7 @@ class FSA(Generic[A]):
         else:
             raise NotImplementedError()
 
-    def arcs_x(self, i: Any, x: A) -> set[Any]:
+    def arcs_x(self, i: State, x: A) -> set[State]:
         """Return the set of destination states for arcs ``i --x--> *``."""
         return self.edges[i][x]
 
@@ -247,10 +253,10 @@ class FSA(Generic[A]):
             m.add(j, a, i)     # pylint: disable=W1114
         return m
 
-    def _accessible(self, start: set[Any]) -> set[Any]:
+    def _accessible(self, start: set[State]) -> set[State]:
         return dfs(start, self.arcs).states
 
-    def accessible(self) -> set[Any]:
+    def accessible(self) -> set[State]:
         """Return the set of states reachable from any start state."""
         return self._accessible(self.start)
 
@@ -269,9 +275,9 @@ class FSA(Generic[A]):
 
     def renumber(self) -> FSA[A]:
         """Return a copy with states relabeled as consecutive integers."""
-        return self.rename(Integerizer())
+        return self.rename(Integerizer())  # pyright: ignore[reportUnknownArgumentType]
 
-    def rename(self, f: Callable[[Any], Any]) -> FSA[A]:
+    def rename(self, f: Callable[[State], State]) -> FSA[A]:
         """Return a new FSA with states relabeled by ``f(state)``.
 
         If ``f`` is not injective, distinct states may merge.
@@ -440,7 +446,7 @@ class FSA(Generic[A]):
         final = self.stop
         nonfinal = self.states - final
 
-        P: list[set[Any]] = [final, nonfinal]
+        P: list[set[Any]] = [final, nonfinal]  # pyright: ignore[reportConstantRedefinition]
         W: list[set[Any]] = [final, nonfinal]
 
         while W:
@@ -457,7 +463,7 @@ class FSA(Generic[A]):
                         R.append(YX)
                         R.append(Y_X)
                         W.append(YX if len(YX) < len(Y_X) else Y_X)
-                P = R
+                P = R  # pyright: ignore[reportConstantRedefinition]
 
         # create new equivalence classes of states
         minstates: dict[Any, int] = {}
@@ -483,7 +489,7 @@ class FSA(Generic[A]):
         final = self.stop
         nonfinal = self.states - final
 
-        P: list[set[Any]] = [final, nonfinal]
+        P: list[set[Any]] = [final, nonfinal]  # pyright: ignore[reportConstantRedefinition]
         W: list[set[Any]] = [final, nonfinal]
 
         find: dict[Any, int] = {i: block for block, elements in enumerate(P) for i in elements}
@@ -526,7 +532,7 @@ class FSA(Generic[A]):
     def equal(self, other: FSA[A] | frozenset | list[Any] | set[Any] | tuple[Any, ...]) -> bool:
         """Test language equivalence via minimal-DFA isomorphism."""
         if isinstance(other, (frozenset, list, set, tuple)):
-            other = FSA.from_strings(other)
+            other = FSA.from_strings(other)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
         return self.min()._dfa_isomorphism(other.min())
 
     def _dfa_isomorphism(self, other: FSA[A]) -> bool:
@@ -725,7 +731,7 @@ class FSA(Generic[A]):
             m.add_stop(xs)
         return m
 
-    def run(self, xs: Iterable[A]) -> set[Any]:
+    def run(self, xs: Iterable[A]) -> set[State]:
         """Run string ``xs`` from start states, returning the set of reached states."""
         states = set(self.start)
         for x in xs:
@@ -738,7 +744,7 @@ class FSA(Generic[A]):
         """Test if string ``xs`` is in the language: ``xs in fsa``."""
         return bool(self.run(xs) & self.stop)
 
-    def merge(self, S: set[Any], name: Any = None) -> FSA[A]:
+    def merge(self, S: set[State], name: State | None = None) -> FSA[A]:
         """Merge all states in ``S`` into a single state (default name: ``min(S)``)."""
         if name is None: name = min(S)
         def f(s: Any) -> Any:
@@ -762,9 +768,9 @@ class FSA(Generic[A]):
         u.add_stop(0)
         return u
 
-    def language(self, max_length: int | None = None) -> Iterator[tuple[A, ...]]:
+    def language(self, max_length: int | None = None) -> Iterator[Str[A]]:
         "Enumerate strings in the language of this FSA."
-        worklist: deque[tuple[Any, tuple[A, ...]]] = deque()
+        worklist: deque[tuple[Any, Str[A]]] = deque()
         worklist.extend([(i, ()) for i in self.start])
         while worklist:
             (i, x) = worklist.popleft()
