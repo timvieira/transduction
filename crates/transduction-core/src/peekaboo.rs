@@ -15,9 +15,54 @@
 //!   bits [31:17] = buf_len   (u15, max 32767)
 //!   bits [16:1]  = extra_sym_idx (u16, 0xFFFF = NO_EXTRA for on-target)
 //!   bit  [0]     = truncated
+//!
+//! ## FST-level closure optimization in `compute_all_arcs`
+//!
+//! The standard epsilon-closure (`eps_closure_single`) operates on packed u64
+//! NFA states and is cached by packed state.  For off-target states (those with
+//! `extra_sym != NO_EXTRA` and `buf_len > step_n`), the epsilon closure only
+//! changes the FST state component — the buffer parameters `(buf_len, extra_sym)`
+//! are invariant through epsilon transitions.  This means two packed states that
+//! differ only in `extra_sym` produce structurally identical closures (same FST
+//! states reachable), but the packed-state cache treats them as distinct entries.
+//!
+//! With V target-side symbols (e.g. V=50K for BPE), a single DFA state can
+//! contain NFA elements for ~V distinct `extra_sym` values, all sharing the same
+//! FST state.  Each `eps_closure_single` call does a BFS through O(|NFA|) states,
+//! so the total cost is O(V × |NFA|) — the dominant bottleneck at large V.
+//!
+//! The optimization adds a local FST-level closure cache keyed by FST state
+//! (u32) instead of packed NFA state (u64).  For each unique FST state, a
+//! two-phase BFS computes:
+//!
+//!   1. **Non-truncated reachable**: follow epsilon-input arcs with epsilon
+//!      output (buffer unchanged, stays non-truncated).
+//!   2. **Truncated reachable**: from non-truncated states, follow epsilon-input
+//!      arcs with non-epsilon output (causes truncation), then transitively
+//!      follow all epsilon-input arcs (truncated states accept all outputs).
+//!
+//! The FST-level BFS uses pre-extracted `eps_input_arcs` slices (u32 states,
+//! no packing/unpacking), which is cheaper per step than the packed-state BFS.
+//! The cache collapses V redundant computations into one per unique FST state,
+//! reducing the cost from O(V × |NFA|) BFS steps to O(V × |closure|) for
+//! repacking + O(|FST states| × avg_eps_closure) for the BFS itself.
+//!
+//! The FST-level closure results are pre-sorted by FST state.  Since
+//! `fst_state` occupies the high bits of the packed u64, the repacked entries
+//! are nearly sorted, allowing Rust's pdqsort (`sort_unstable`) to verify
+//! sortedness in O(n) instead of a full O(n log n) sort.  For BPE FSTs at
+//! V=5000 this reduces the sort+dedup phase from ~550ms to ~100ms.
+//!
+//! **Remaining bottleneck**: the output of `compute_all_arcs` is O(V × |closure|)
+//! packed entries (e.g. 43M at V=5000).  This materialization cost dominates
+//! at large V and cannot be reduced without changing the DFA representation
+//! (e.g. parameterized states that share a single FST closure across
+//! `extra_sym` values).  Measured ~2x speedup at V≥5000 compared to the
+//! baseline without this optimization.
 
 use crate::fst::{compute_ip_universal_states, Fst, EPSILON};
 use crate::powerset::PowersetArena;
+use crate::rho::RHO;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -300,6 +345,12 @@ impl<'a> PeekabooNFAMapped<'a> {
     }
 
     /// Batch-compute all non-epsilon arcs from an epsilon-closed powerset state.
+    ///
+    /// For off-target NFA destinations (extra_sym != NO_EXTRA, buf_len > step_n),
+    /// the epsilon closure depends only on the FST state — the buffer parameters
+    /// (buf_len, extra_sym) affect only the packed representation, not which FST
+    /// states are reachable.  A local FST-level closure cache collapses ~|V|
+    /// redundant packed-state BFS computations into one per unique FST state.
     fn compute_all_arcs(
         &self,
         states: &[u64],
@@ -307,12 +358,48 @@ impl<'a> PeekabooNFAMapped<'a> {
     ) -> Vec<(u32, Vec<u64>)> {
         let mut by_symbol: FxHashMap<u32, Vec<u64>> = FxHashMap::default();
 
+        // FST-level closure caches for off-target states (keyed by FST state).
+        // fst_full_cache: non-truncated off-target dest -> (productive_non_trunc, trunc)
+        // fst_trunc_cache: truncated dest -> all reachable FST states
+        let mut fst_full_cache: FxHashMap<u32, (Vec<u32>, Vec<u32>)> = FxHashMap::default();
+        let mut fst_trunc_cache: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
+        let step_n = self.step_n;
+
         for &packed in states {
             for (x, dest) in self.arcs(packed) {
                 if x != EPSILON {
-                    let closure = self.eps_closure_single(dest, cache);
-                    let bucket = by_symbol.entry(x).or_default();
-                    bucket.extend_from_slice(&closure);
+                    let (dest_fst, dest_bl, dest_es, dest_trunc) = unpack_peekaboo(dest);
+
+                    if dest_es != NO_EXTRA && dest_bl > step_n {
+                        if !dest_trunc {
+                            // Fast path: non-truncated off-target dest.
+                            // FST-level closure is (non_trunc_productive, trunc) by FST state.
+                            let entry = fst_full_cache
+                                .entry(dest_fst)
+                                .or_insert_with(|| self.fst_full_closure(dest_fst));
+                            let bucket = by_symbol.entry(x).or_default();
+                            for &r in entry.0.iter() {
+                                bucket.push(pack_peekaboo(r, dest_bl, dest_es, false));
+                            }
+                            for &t in entry.1.iter() {
+                                bucket.push(pack_peekaboo(t, dest_bl, dest_es, true));
+                            }
+                        } else {
+                            // Fast path: truncated off-target dest.
+                            let entry = fst_trunc_cache
+                                .entry(dest_fst)
+                                .or_insert_with(|| self.fst_trunc_closure(dest_fst));
+                            let bucket = by_symbol.entry(x).or_default();
+                            for &t in entry.iter() {
+                                bucket.push(pack_peekaboo(t, dest_bl, dest_es, true));
+                            }
+                        }
+                    } else {
+                        // Standard path (on-target or small buf_len)
+                        let closure = self.eps_closure_single(dest, cache);
+                        let bucket = by_symbol.entry(x).or_default();
+                        bucket.extend_from_slice(&closure);
+                    }
                 }
             }
         }
@@ -323,6 +410,87 @@ impl<'a> PeekabooNFAMapped<'a> {
             v.dedup();
             result.push((sym, v));
         }
+        result
+    }
+
+    /// FST-level epsilon closure for a non-truncated off-target starting state.
+    ///
+    /// Phase 1: follow eps-input arcs with eps-output (stays non-truncated).
+    /// Phase 2: from non-eps-output destinations, follow ALL eps-input arcs (truncated).
+    ///
+    /// Returns (non_trunc_productive_fst_states, trunc_fst_states).
+    /// Non-truncated states are filtered by productivity (has_non_eps_input || is_final).
+    /// All truncated states are productive (truncated flag => productive).
+    fn fst_full_closure(&self, fst_state: u32) -> (Vec<u32>, Vec<u32>) {
+        // Phase 1: non-truncated reachable via eps-input/eps-output arcs
+        let mut non_trunc: FxHashSet<u32> = FxHashSet::default();
+        let mut worklist: VecDeque<u32> = VecDeque::new();
+        non_trunc.insert(fst_state);
+        worklist.push_back(fst_state);
+
+        let mut trunc_seeds: Vec<u32> = Vec::new();
+
+        while let Some(s) = worklist.pop_front() {
+            for ea in self.fst.eps_input_arcs(s) {
+                if ea.output == EPSILON {
+                    if non_trunc.insert(ea.dest) {
+                        worklist.push_back(ea.dest);
+                    }
+                } else {
+                    trunc_seeds.push(ea.dest);
+                }
+            }
+        }
+
+        // Phase 2: truncated reachable from trunc_seeds via ALL eps-input arcs
+        let mut trunc: FxHashSet<u32> = FxHashSet::default();
+        for &f in &trunc_seeds {
+            if trunc.insert(f) {
+                worklist.push_back(f);
+            }
+        }
+        while let Some(s) = worklist.pop_front() {
+            for ea in self.fst.eps_input_arcs(s) {
+                if trunc.insert(ea.dest) {
+                    worklist.push_back(ea.dest);
+                }
+            }
+        }
+
+        // Filter non-truncated by productivity: has_non_eps_input || is_final
+        // (for off-target with buf_len == step_n + 1, extra_sym != NO_EXTRA)
+        let mut non_trunc_productive: Vec<u32> = non_trunc
+            .into_iter()
+            .filter(|&r| {
+                self.fst.has_non_eps_input[r as usize]
+                    || self.fst.is_final[r as usize]
+            })
+            .collect();
+        non_trunc_productive.sort_unstable();
+
+        // All truncated states are productive
+        let mut trunc_result: Vec<u32> = trunc.into_iter().collect();
+        trunc_result.sort_unstable();
+
+        (non_trunc_productive, trunc_result)
+    }
+
+    /// FST-level epsilon closure for a truncated starting state.
+    /// Follows ALL eps-input arcs (any output). All reachable states are productive.
+    fn fst_trunc_closure(&self, fst_state: u32) -> Vec<u32> {
+        let mut visited: FxHashSet<u32> = FxHashSet::default();
+        let mut worklist: VecDeque<u32> = VecDeque::new();
+        visited.insert(fst_state);
+        worklist.push_back(fst_state);
+        while let Some(s) = worklist.pop_front() {
+            for ea in self.fst.eps_input_arcs(s) {
+                if visited.insert(ea.dest) {
+                    worklist.push_back(ea.dest);
+                }
+            }
+        }
+        let mut result: Vec<u32> = visited.into_iter().collect();
+        result.sort_unstable();
         result
     }
 }
@@ -640,6 +808,7 @@ fn evict_peekaboo_eps_cache(cache: &mut FxHashMap<u64, (Vec<u64>, u16)>, frontie
 pub struct DirtyPeekaboo {
     // FST metadata (computed once in new())
     output_alphabet: Vec<u32>,
+    source_alphabet: Vec<u32>,
     sym_to_idx: FxHashMap<u32, u16>,
     idx_to_sym: Vec<u32>,
     ip_universal_states: Vec<bool>,
@@ -648,7 +817,8 @@ pub struct DirtyPeekaboo {
     // Persistent DFA structure
     arena: PowersetArena,
     global_start_id: u32,
-    arcs_from: Vec<Vec<(u32, u32)>>,       // [sid] → [(label, dest_sid)]
+    arcs_from: Vec<Vec<(u32, u32)>>,       // [sid] → [(label, dest_sid)]; may contain (RHO, dest)
+    has_rho: Vec<bool>,                    // [sid] → true if arcs contain a RHO entry
     state_status: Vec<u8>,                  // [sid] → STATUS_*
     max_bufpos: Vec<u16>,                   // [sid] → max buf_len in NFA set
     reverse_arcs: Vec<Vec<u32>>,            // [sid] → [predecessor sids]
@@ -698,9 +868,11 @@ impl DirtyPeekaboo {
 
         let ip_universal_states = compute_ip_universal_states(fst);
         let num_source_symbols = fst.source_alphabet.len();
+        let source_alphabet = fst.source_alphabet.clone();
 
         DirtyPeekaboo {
             output_alphabet,
+            source_alphabet,
             sym_to_idx,
             idx_to_sym,
             ip_universal_states,
@@ -708,6 +880,7 @@ impl DirtyPeekaboo {
             arena: PowersetArena::new(),
             global_start_id: 0,
             arcs_from: Vec::new(),
+            has_rho: Vec::new(),
             state_status: Vec::new(),
             max_bufpos: Vec::new(),
             reverse_arcs: Vec::new(),
@@ -733,6 +906,7 @@ impl DirtyPeekaboo {
         self.arena = PowersetArena::new();
         self.global_start_id = 0;
         self.arcs_from.clear();
+        self.has_rho.clear();
         self.state_status.clear();
         self.max_bufpos.clear();
         self.reverse_arcs.clear();
@@ -751,6 +925,7 @@ impl DirtyPeekaboo {
         let old_len = self.arcs_from.len();
         if needed > old_len {
             self.arcs_from.resize_with(needed, Vec::new);
+            self.has_rho.resize(needed, false);
             self.state_status.resize(needed, STATUS_NEW);
             self.reverse_arcs.resize_with(needed, Vec::new);
             self.max_bufpos.resize(needed, 0);
@@ -834,11 +1009,45 @@ impl DirtyPeekaboo {
         for &sid in &self.reachable {
             let sid_usize = sid as usize;
             if backward[sid_usize] && self.state_status[sid_usize] != STATUS_QSTOP {
-                for &(l, d) in &self.arcs_from[sid_usize] {
-                    if (d as usize) < n && backward[d as usize] {
-                        arc_src.push(sid);
-                        arc_lbl.push(l);
-                        arc_dst.push(d);
+                if sid_usize < self.has_rho.len() && self.has_rho[sid_usize] {
+                    // Expand RHO arc: emit explicit arcs for all rho-class symbols
+                    let explicit_syms: FxHashSet<u32> = self.arcs_from[sid_usize]
+                        .iter()
+                        .filter(|&&(l, _)| l != RHO)
+                        .map(|&(l, _)| l)
+                        .collect();
+                    let rho_dest = self.arcs_from[sid_usize]
+                        .iter()
+                        .find(|&&(l, _)| l == RHO)
+                        .map(|&(_, d)| d);
+
+                    // Emit non-RHO arcs
+                    for &(l, d) in &self.arcs_from[sid_usize] {
+                        if l != RHO && (d as usize) < n && backward[d as usize] {
+                            arc_src.push(sid);
+                            arc_lbl.push(l);
+                            arc_dst.push(d);
+                        }
+                    }
+                    // Expand RHO arc for all symbols not in explicit set
+                    if let Some(rd) = rho_dest {
+                        if (rd as usize) < n && backward[rd as usize] {
+                            for &sym in &self.source_alphabet {
+                                if !explicit_syms.contains(&sym) {
+                                    arc_src.push(sid);
+                                    arc_lbl.push(sym);
+                                    arc_dst.push(rd);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    for &(l, d) in &self.arcs_from[sid_usize] {
+                        if (d as usize) < n && backward[d as usize] {
+                            arc_src.push(sid);
+                            arc_lbl.push(l);
+                            arc_dst.push(d);
+                        }
                     }
                 }
             }
@@ -900,10 +1109,23 @@ impl DirtyPeekaboo {
     }
 
     /// Follow a single arc labeled `x` from `sid`. Returns `Some(dest)` or `None`.
+    /// Handles rho-compressed states: if `x` is not found in explicit arcs,
+    /// falls back to the rho destination.
     pub fn step(&self, sid: u32, x: u32) -> Option<u32> {
-        self.arcs_from(sid).iter()
-            .find(|&&(lbl, _)| lbl == x)
-            .map(|&(_, dst)| dst)
+        let sid_usize = sid as usize;
+        // Look for explicit arc
+        for &(lbl, dst) in self.arcs_from(sid) {
+            if lbl == x {
+                return Some(dst);
+            }
+        }
+        // Fall back to rho destination
+        if sid_usize < self.has_rho.len() && self.has_rho[sid_usize] {
+            return self.arcs_from(sid).iter()
+                .find(|&&(lbl, _)| lbl == RHO)
+                .map(|&(_, dst)| dst);
+        }
+        None
     }
 
     /// Run a source path from the global start state, returning the reached
@@ -934,6 +1156,36 @@ impl DirtyPeekaboo {
 
     pub fn arena_sets(&self, sid: u32) -> &[u64] {
         &self.arena.sets[sid as usize]
+    }
+
+    /// Whether the arcs for `sid` include a RHO entry (complete state).
+    pub fn state_has_rho(&self, sid: u32) -> bool {
+        let sid_usize = sid as usize;
+        sid_usize < self.has_rho.len() && self.has_rho[sid_usize]
+    }
+
+    /// Return (has_rho, rho_dest, explicit_arcs) for a DFA state.
+    pub fn rho_arcs(&self, sid: u32) -> (bool, Option<u32>, Vec<(u32, u32)>) {
+        let sid_usize = sid as usize;
+        if sid_usize >= self.has_rho.len() || !self.has_rho[sid_usize] {
+            // Not a rho state — return all arcs as explicit
+            return (false, None, self.arcs_from(sid).to_vec());
+        }
+        let mut explicit = Vec::new();
+        let mut rho_dest = None;
+        for &(lbl, dst) in self.arcs_from(sid) {
+            if lbl == RHO {
+                rho_dest = Some(dst);
+            } else {
+                explicit.push((lbl, dst));
+            }
+        }
+        (true, rho_dest, explicit)
+    }
+
+    /// Return the source alphabet.
+    pub fn source_alphabet(&self) -> &[u32] {
+        &self.source_alphabet
     }
 
     /// Compute preimage stop states: DFA states where any NFA element
@@ -1342,21 +1594,63 @@ impl DirtyPeekaboo {
             // Expand arcs
             let all_arcs = nfa.compute_all_arcs(&nfa_set, &mut self.eps_cache);
 
+            // Intern all destinations first
+            let mut interned_arcs: Vec<(u32, u32)> = Vec::with_capacity(all_arcs.len());
+            let mut unique_dests: FxHashSet<u32> = FxHashSet::default();
             for (x, successor) in all_arcs {
                 let succ_final = successor.iter().any(|&s| nfa.is_final(s));
                 let dest_id = self.arena.intern(successor, succ_final);
 
-                // Ensure capacity
+                // Ensure capacity for new states
                 let needed = dest_id as usize + 1;
                 self.ensure_capacity(needed);
                 if needed > self.reachable_flags.len() {
                     self.reachable_flags.resize(needed, false);
                 }
 
-                self.arcs_from[sid as usize].push((x, dest_id));
-                self.reverse_arcs[dest_id as usize].push(sid);
+                interned_arcs.push((x, dest_id));
+                unique_dests.insert(dest_id);
+            }
 
-                // Add STATUS_NEW successors to worklist
+            // Check completeness and apply rho compression
+            let is_complete = self.num_source_symbols > 0
+                && interned_arcs.len() == self.num_source_symbols;
+
+            if is_complete {
+                // Group by destination to find the most common one
+                let mut dest_counts: FxHashMap<u32, usize> = FxHashMap::default();
+                for &(_, dest) in &interned_arcs {
+                    *dest_counts.entry(dest).or_insert(0) += 1;
+                }
+                let rho_dest = *dest_counts.iter()
+                    .max_by_key(|(_, &count)| count)
+                    .unwrap()
+                    .0;
+
+                if dest_counts.len() == 1 {
+                    self.arcs_from[sid as usize] = vec![(RHO, rho_dest)];
+                } else {
+                    let mut result_arcs: Vec<(u32, u32)> = Vec::new();
+                    for &(x, dest) in &interned_arcs {
+                        if dest != rho_dest {
+                            result_arcs.push((x, dest));
+                        }
+                    }
+                    result_arcs.push((RHO, rho_dest));
+                    self.arcs_from[sid as usize] = result_arcs;
+                }
+                self.has_rho[sid as usize] = true;
+            } else {
+                for &(x, dest_id) in &interned_arcs {
+                    self.arcs_from[sid as usize].push((x, dest_id));
+                }
+                self.has_rho[sid as usize] = false;
+            }
+
+            // Add reverse arcs and enqueue successors for ALL unique destinations
+            // (reverse arcs use sid, not the compressed label)
+            for &dest_id in &unique_dests {
+                self.reverse_arcs[dest_id as usize].push(sid);
                 if self.state_status[dest_id as usize] == STATUS_NEW {
                     worklist.push_back(dest_id);
                     if !self.reachable_flags[dest_id as usize] {
@@ -1483,7 +1777,8 @@ pub struct LazyPeekabooDFA {
     // Per-step caches (cleared on new_step)
     eps_cache: FxHashMap<u64, (Vec<u64>, u16)>,
     arcs_computed: Vec<bool>,
-    arcs_from: Vec<Vec<(u32, u32)>>,
+    arcs_from: Vec<Vec<(u32, u32)>>,       // may contain (RHO, dest) entries
+    has_rho: Vec<bool>,                    // [sid] -> true if arcs contain a RHO entry
     meta_computed: Vec<bool>,
     meta: Vec<StateMeta>,
     classify_computed: Vec<bool>,
@@ -1514,6 +1809,7 @@ impl LazyPeekabooDFA {
             eps_cache: FxHashMap::default(),
             arcs_computed: Vec::new(),
             arcs_from: Vec::new(),
+            has_rho: Vec::new(),
             meta_computed: Vec::new(),
             meta: Vec::new(),
             classify_computed: Vec::new(),
@@ -1541,6 +1837,8 @@ impl LazyPeekabooDFA {
         self.arcs_computed.resize(n, false);
         self.arcs_from.iter_mut().for_each(|v| v.clear());
         self.arcs_from.resize_with(n, Vec::new);
+        self.has_rho.clear();
+        self.has_rho.resize(n, false);
         self.meta_computed.clear();
         self.meta_computed.resize(n, false);
         self.meta.clear();
@@ -1576,6 +1874,7 @@ impl LazyPeekabooDFA {
         if needed > old_len {
             self.arcs_computed.resize(needed, false);
             self.arcs_from.resize_with(needed, Vec::new);
+            self.has_rho.resize(needed, false);
             self.meta_computed.resize(needed, false);
             self.meta.resize_with(needed, StateMeta::default);
             self.classify_computed.resize(needed, false);
@@ -1779,7 +2078,12 @@ impl LazyPeekabooDFA {
         self.classify_computed[sid_usize] = true;
     }
 
-    /// Lazily compute DFA arcs from a state.
+    /// Lazily compute DFA arcs from a state, with rho-arc compression.
+    ///
+    /// After computing all NFA-side arcs, checks if the state is complete
+    /// (has arcs for every source symbol).  If so, finds the most common
+    /// destination and replaces all arcs to that destination with a single
+    /// RHO arc, keeping only the exception arcs explicitly.
     pub fn ensure_arcs(&mut self, fst: &Fst, sid: u32) {
         let sid_usize = sid as usize;
         if sid_usize < self.arcs_computed.len() && self.arcs_computed[sid_usize] {
@@ -1791,33 +2095,114 @@ impl LazyPeekabooDFA {
         let sym_to_idx = self.sym_to_idx.clone();
         let target = self.target.clone();
         let step_n = self.step_n;
+        let num_source_symbols = self.num_source_symbols;
 
         let nfa = PeekabooNFAMapped::new(fst, &target, step_n, &sym_to_idx);
         let all_arcs = nfa.compute_all_arcs(&nfa_set, &mut self.eps_cache);
 
-        let mut result_arcs = Vec::new();
+        // Intern all destinations first
+        let mut interned_arcs: Vec<(u32, u32)> = Vec::with_capacity(all_arcs.len());
         for (x, successor) in all_arcs {
             let succ_final = successor.iter().any(|&s| nfa.is_final(s));
             let dest_id = self.arena.intern(successor, succ_final);
             self.ensure_capacity(self.arena.len());
-            result_arcs.push((x, dest_id));
+            interned_arcs.push((x, dest_id));
         }
 
-        self.arcs_from[sid_usize] = result_arcs;
+        // Check completeness and apply rho compression
+        let is_complete = num_source_symbols > 0
+            && interned_arcs.len() == num_source_symbols;
+
+        if is_complete {
+            // Group by destination to find the most common one
+            let mut dest_counts: FxHashMap<u32, usize> = FxHashMap::default();
+            for &(_, dest) in &interned_arcs {
+                *dest_counts.entry(dest).or_insert(0) += 1;
+            }
+
+            // Find the destination with the most arcs (rho destination)
+            let rho_dest = *dest_counts.iter()
+                .max_by_key(|(_, &count)| count)
+                .unwrap()
+                .0;
+
+            if dest_counts.len() == 1 {
+                // All arcs go to the same destination — single RHO arc
+                self.arcs_from[sid_usize] = vec![(RHO, rho_dest)];
+            } else {
+                // Store exception arcs + RHO arc
+                let mut result_arcs: Vec<(u32, u32)> = Vec::new();
+                for &(x, dest) in &interned_arcs {
+                    if dest != rho_dest {
+                        result_arcs.push((x, dest));
+                    }
+                }
+                result_arcs.push((RHO, rho_dest));
+                self.arcs_from[sid_usize] = result_arcs;
+            }
+            self.has_rho[sid_usize] = true;
+        } else {
+            // Incomplete state: store all arcs explicitly
+            self.arcs_from[sid_usize] = interned_arcs;
+            self.has_rho[sid_usize] = false;
+        }
+
         self.arcs_computed[sid_usize] = true;
     }
 
+    /// Return the raw arcs (may include RHO entries) for a state.
     pub fn get_arcs(&mut self, fst: &Fst, sid: u32) -> Vec<(u32, u32)> {
         self.ensure_arcs(fst, sid);
         self.arcs_from[sid as usize].clone()
     }
 
+    /// Return arcs with RHO expanded to explicit arcs for all rho-class symbols.
+    /// Used for backward compatibility by callers that don't handle RHO.
+    pub fn get_arcs_expanded(&mut self, fst: &Fst, sid: u32) -> Vec<(u32, u32)> {
+        self.ensure_arcs(fst, sid);
+        let sid_usize = sid as usize;
+        if !self.has_rho[sid_usize] {
+            return self.arcs_from[sid_usize].clone();
+        }
+        // Expand RHO
+        let mut result = Vec::new();
+        let mut explicit_syms = FxHashSet::default();
+        let mut rho_dest = None;
+        for &(lbl, dst) in &self.arcs_from[sid_usize] {
+            if lbl == RHO {
+                rho_dest = Some(dst);
+            } else {
+                explicit_syms.insert(lbl);
+                result.push((lbl, dst));
+            }
+        }
+        if let Some(rd) = rho_dest {
+            for &sym in &fst.source_alphabet {
+                if !explicit_syms.contains(&sym) {
+                    result.push((sym, rd));
+                }
+            }
+        }
+        result
+    }
+
     /// Follow a single arc labeled `x` from `sid`. Lazily computes arcs.
+    /// Handles rho-compressed states: if `x` is not found in explicit arcs,
+    /// falls back to the rho destination.
     pub fn step(&mut self, fst: &Fst, sid: u32, x: u32) -> Option<u32> {
         self.ensure_arcs(fst, sid);
-        self.arcs_from[sid as usize].iter()
-            .find(|&&(lbl, _)| lbl == x)
-            .map(|&(_, dst)| dst)
+        let sid_usize = sid as usize;
+        // Look for an explicit arc
+        for &(lbl, dst) in &self.arcs_from[sid_usize] {
+            if lbl == x {
+                return Some(dst);
+            }
+        }
+        // If not found and state has rho, return the rho destination
+        if self.has_rho[sid_usize] {
+            return self.rho_dest(sid);
+        }
+        None
     }
 
     /// Run a source path from the start state, returning the reached
@@ -1845,6 +2230,43 @@ impl LazyPeekabooDFA {
 
     pub fn arena_sets(&self, sid: u32) -> &[u64] {
         &self.arena.sets[sid as usize]
+    }
+
+    /// Whether the arcs for `sid` include a RHO entry (complete state).
+    pub fn has_rho(&self, sid: u32) -> bool {
+        let sid_usize = sid as usize;
+        sid_usize < self.has_rho.len() && self.has_rho[sid_usize]
+    }
+
+    /// Return the rho destination for `sid`, or None if not a rho state.
+    /// Scans arcs for the RHO label.
+    pub fn rho_dest(&self, sid: u32) -> Option<u32> {
+        let sid_usize = sid as usize;
+        if sid_usize >= self.has_rho.len() || !self.has_rho[sid_usize] {
+            return None;
+        }
+        self.arcs_from[sid_usize]
+            .iter()
+            .find(|&&(lbl, _)| lbl == RHO)
+            .map(|&(_, dest)| dest)
+    }
+
+    /// Return explicit arcs (non-RHO) for `sid`.
+    pub fn explicit_arcs(&self, sid: u32) -> Vec<(u32, u32)> {
+        let sid_usize = sid as usize;
+        if sid_usize >= self.arcs_from.len() {
+            return Vec::new();
+        }
+        self.arcs_from[sid_usize]
+            .iter()
+            .filter(|&&(lbl, _)| lbl != RHO)
+            .copied()
+            .collect()
+    }
+
+    /// Return the number of source symbols in the FST's input alphabet.
+    pub fn num_source_symbols(&self) -> usize {
+        self.num_source_symbols
     }
 }
 

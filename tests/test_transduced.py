@@ -391,22 +391,22 @@ class TestLMState:
         assert issubclass(TransducedState, LMState)
 
     def test_ngram_greedy_decode(self, ngram_lm):
-        """NgramState.greedy_decode returns a list of byte tokens."""
+        """NgramState.greedy_decode returns a list of int byte tokens."""
         state = ngram_lm.initial()
         tokens = state.greedy_decode(max_len=10)
         assert isinstance(tokens, list)
         assert len(tokens) <= 10
         for t in tokens:
-            assert isinstance(t, bytes)
+            assert isinstance(t, int)
 
     def test_ngram_sample_decode(self, ngram_lm):
-        """NgramState.sample_decode returns a list of byte tokens."""
+        """NgramState.sample_decode returns a list of int byte tokens."""
         state = ngram_lm.initial()
         tokens = state.sample_decode(max_len=10)
         assert isinstance(tokens, list)
         assert len(tokens) <= 10
         for t in tokens:
-            assert isinstance(t, bytes)
+            assert isinstance(t, int)
 
     def test_ngram_greedy_deterministic(self, ngram_lm):
         """Greedy decode is deterministic."""
@@ -457,8 +457,8 @@ class TestLMState:
     def test_ngram_advance(self, ngram_lm):
         """__call__ on NgramState matches sequential >>."""
         state = ngram_lm.initial()
-        s1 = state >> b'a' >> b'b'
-        s2 = state([b'a', b'b'])
+        s1 = state >> ord('a') >> ord('b')
+        s2 = state(b'ab')
         assert s1.logp == pytest.approx(s2.logp)
 
     def test_transduced_advance(self, char_ngram_lm):

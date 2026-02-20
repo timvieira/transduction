@@ -234,3 +234,150 @@ only successor states for a specific input symbol x, avoiding the overhead of
 generating all arcs and then filtering. This is the Python-side analogue of
 `index_ix_j` in the Rust FST.
 
+---
+
+## Optimization 6: FST-Level Closure Cache in `compute_all_arcs`
+
+**Files**: `peekaboo.rs`
+
+### Problem
+
+`compute_all_arcs` — the function that materializes all DFA arcs from a
+powerset state — calls `eps_closure_single` for each non-epsilon arc destination.
+The standard `eps_closure_single` operates on packed u64 NFA states and is
+cached by packed state.
+
+For off-target NFA states (those with `extra_sym != NO_EXTRA` and
+`buf_len > step_n`), the epsilon closure only changes the FST state component —
+the buffer parameters `(buf_len, extra_sym)` are invariant through epsilon
+transitions.  Two packed states that differ only in `extra_sym` produce
+structurally identical closures (same FST states reachable), but the packed-state
+cache treats them as distinct entries, recomputing the BFS for each.
+
+With V source-side symbols (e.g. V=5000 BPE token IDs), a single DFA state
+can contain NFA elements for ~V distinct `extra_sym` values, all sharing the same
+FST state.  Each `eps_closure_single` cache miss does a BFS through O(|NFA|)
+states (~8675 states for a typical BPE FST with V=5000), so the total cost is
+O(V × |NFA|) — the dominant bottleneck at large V.
+
+### Why buffer parameters are invariant
+
+For an off-target, non-truncated NFA state `(fst_q, buf_len, extra_sym, false)`
+with `buf_len > step_n`, the `arcs()` method produces:
+
+- **Epsilon-output arcs** (input=ε, output=ε): destination
+  `(j, buf_len, extra_sym, false)` — buffer unchanged.
+- **Non-epsilon-output arcs** (input=ε, output≠ε): destination
+  `(j, buf_len, extra_sym, true)` — buffer unchanged but truncated.
+
+In both cases, `(buf_len, extra_sym)` is preserved.  Only `fst_state` and
+`truncated` change.  So the set of reachable FST states depends only on the
+starting FST state, not on `(buf_len, extra_sym)`.
+
+From truncated states `(j, buf_len, extra_sym, true)`, **all** arcs (regardless
+of output label) produce truncated destinations with the same buffer parameters.
+So the reachable FST states from a truncated starting state also depend only on
+the starting FST state.
+
+### Solution
+
+Add a local FST-level closure cache keyed by FST state (u32) instead of packed
+NFA state (u64).  For each unique FST state, a two-phase BFS computes the
+reachable FST states:
+
+```
+fst_full_closure(fst_state) → (non_trunc_productive: Vec<u32>, trunc: Vec<u32>)
+
+  Phase 1 (non-truncated): BFS from {fst_state} following eps_input_arcs
+  where output = EPSILON.  These are arcs that don't change the buffer.
+
+  Phase 2 (truncated): From phase-1 states, follow eps_input_arcs where
+  output ≠ EPSILON (these cause truncation).  Then transitively follow ALL
+  eps_input_arcs from those destinations (truncated states accept all outputs).
+
+  Filter non-truncated results by productivity: has_non_eps_input || is_final.
+  All truncated results are productive (truncated flag ⇒ productive).
+```
+
+A separate `fst_trunc_closure(fst_state)` handles destinations that are
+already truncated — just follow all eps_input_arcs transitively.
+
+In `compute_all_arcs`, for each non-epsilon arc destination:
+
+```
+if extra_sym ≠ NO_EXTRA and buf_len > step_n:
+    look up fst_full_cache or fst_trunc_cache by dest_fst_state
+    repack each FST-level result with (buf_len, extra_sym, truncated)
+else:
+    standard eps_closure_single (for on-target or pre-step_n states)
+```
+
+The FST-level BFS uses pre-extracted `eps_input_arcs` slices from the FST
+(u32 states, no packing/unpacking), which is cheaper per step than the
+packed-state BFS that calls `self.arcs()` on u64 packed states.
+
+### Correctness Argument
+
+For off-target NFA states with `buf_len > step_n`:
+
+1. **Arc equivalence**: The `arcs()` method for these states maps every FST arc
+   to an NFA arc with the same `(buf_len, extra_sym)` in the destination
+   (either preserving or truncating).  No arcs are filtered by buffer content.
+
+2. **Closure equivalence**: The epsilon closure (BFS following input=ε arcs)
+   visits exactly the states reachable via the FST-level eps_input_arcs.
+   Non-epsilon-output arcs create truncated destinations; epsilon-output arcs
+   preserve non-truncated status.  The two-phase BFS captures both paths.
+
+3. **Productivity equivalence**: For non-truncated states with
+   `buf_len = step_n + 1` and `extra_sym ≠ NO_EXTRA`:
+   `is_productive = has_non_eps_input[fst_state] || is_final[fst_state]`.
+   This depends only on the FST state, not on `extra_sym`.
+   All truncated states are unconditionally productive.
+
+4. **Sort stability**: Closure results are pre-sorted by FST state.  Since
+   `fst_state` occupies bits [63:32] of the packed u64 (the most significant
+   field), packed entries are nearly sorted, enabling pdqsort to verify
+   sortedness in O(n) instead of a full O(n log n) sort.
+
+### Pre-sorted closure optimization
+
+The FST-level closure results are sorted by FST state before caching.  When
+repacked with `(buf_len, extra_sym)` and pushed into per-symbol buckets, the
+packed u64 entries preserve the sort order (since `fst_state` is the dominant
+sort key in the packing).
+
+For BPE FSTs, each input symbol typically has exactly one arc destination,
+so each per-symbol bucket receives entries from a single sorted closure.
+Rust's pdqsort (`sort_unstable`) detects the pre-sorted run in O(n) comparisons
+instead of O(n log n).  This reduces the sort+dedup phase from ~550ms to ~100ms
+at V=5000.
+
+### Impact
+
+Measured on FusedTransducedLM with BPE FSTs, CharNgramLM(n=3), max_steps=200,
+max_beam=10, decoding "The quic" (8 bytes), averaged per step:
+
+| V (tokens) | Before (ms) | After (ms) | Speedup |
+|------------|-------------|------------|---------|
+| 500        | 13          | 13         | 1.0x    |
+| 2,000      | 169         | 143        | 1.2x    |
+| 5,000      | 849         | 445        | 1.9x    |
+| 10,000     | 3,417       | 1,610      | 2.1x    |
+
+At V=5000, internal profiling shows:
+- BFS work: reduced from O(V × |NFA|) ≈ 40M BFS steps to
+  O(|unique_FST_states| × |eps_closure|) ≈ 2K BFS steps.
+- Sort+dedup: reduced from 550ms (full O(n log n) on 43M entries) to
+  100ms (O(n) verification of pre-sorted data).
+- Loop (arc generation + repacking): 240ms for 43M pack+push operations.
+- Intern: 60ms for 5002 powerset state interns.
+
+### Remaining bottleneck
+
+The output of `compute_all_arcs` is O(V × |closure|) packed entries (43M at
+V=5000).  This materialization cost dominates at large V and cannot be reduced
+without changing the DFA representation — e.g. parameterized powerset states
+that share a single FST-level closure across `extra_sym` values, avoiding the
+V-fold blowup in materialized NFA sets.
+

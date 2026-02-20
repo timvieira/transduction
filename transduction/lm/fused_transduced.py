@@ -40,7 +40,7 @@ from collections import defaultdict
 
 from transduction.lm.base import LM, LMState
 from transduction.util import logsumexp, LogVector
-from transduction.lm.transduced import Particle, _select_top_k
+from transduction.lm.transduced import Particle, _select_top_k, _RhoExpander
 from transduction.rust_bridge import to_rust_fst
 
 
@@ -158,7 +158,14 @@ class _FusedSearch:
     # --- Expansion ---
 
     def _expand(self, item):
-        """Advance by each source symbol and push successors into the queue."""
+        """Advance by each source symbol and push successors into the queue.
+
+        Uses rho-arc compression: at complete DFA states (where all source
+        symbols lead to defined destinations), the Rust DFA stores a single
+        RHO arc for the majority destination plus exception arcs.  This
+        avoids O(|Sigma|) arc iterations when the rho destination can be
+        handled in bulk.
+        """
         helper = self._tlm._rust_helper
         result = helper.classify(item.dfa_state)  # cached
         inv = self._tlm._inv_sym_map
@@ -166,7 +173,12 @@ class _FusedSearch:
 
         trunc_resume_syms = set()
 
-        for x_u32, dest_sid in helper.arcs(item.dfa_state):
+        has_rho, rho_dest, explicit_arcs = helper.rho_arcs(item.dfa_state)
+
+        # Process explicit (exception) arcs
+        explicit_syms = set()
+        for x_u32, dest_sid in explicit_arcs:
+            explicit_syms.add(x_u32)
             x = inv[x_u32]
             w = float(item.log_weight + lm_logp_next[x])
             if w > -np.inf:
@@ -174,14 +186,34 @@ class _FusedSearch:
                                  item.source_path + (x,))
                 heapq.heappush(self._queue, child)
 
-            # Truncation-boundary carry-forward: if the item is non-truncated
-            # but its successor crosses into truncation, carry forward the item
-            # at the truncation-boundary symbols (mirrors resume_frontiers).
+            # Truncation-boundary carry-forward
             if not result.has_truncated:
                 dest_result = helper.classify(dest_sid)
                 if dest_result.has_truncated:
                     for y_u32 in dest_result.trunc_output_syms:
                         trunc_resume_syms.add(inv[y_u32])
+
+        # Process rho class (all source symbols not in explicit_arcs)
+        if has_rho and rho_dest is not None:
+            # Truncation check for rho_dest (single classify call for ALL rho symbols)
+            if not result.has_truncated:
+                rho_dest_result = helper.classify(rho_dest)
+                if rho_dest_result.has_truncated:
+                    for y_u32 in rho_dest_result.trunc_output_syms:
+                        trunc_resume_syms.add(inv[y_u32])
+
+            # Lazy rho expansion: sort by weight, push one expander
+            rho_children = []
+            for x_u32 in self._tlm._source_alphabet_u32:
+                if x_u32 not in explicit_syms:
+                    x = inv[x_u32]
+                    w = float(item.log_weight + lm_logp_next[x])
+                    if w > -np.inf:
+                        rho_children.append((w, x))
+            if rho_children:
+                rho_children.sort(reverse=True)
+                heapq.heappush(self._queue, _RhoExpander(
+                    rho_dest, item.lm_state, item.source_path, rho_children))
 
         for y in trunc_resume_syms:
             self._add_carry_checked(y, item)
@@ -194,12 +226,23 @@ class _FusedSearch:
         while self._queue and steps < self._max_steps:
             steps += 1
             item = heapq.heappop(self._queue)
-            if not self._score_item(item):
-                self._expand(item)
+            if isinstance(item, _RhoExpander):
+                particle = item.pop_next()
+                if not item.exhausted:
+                    heapq.heappush(self._queue, item)
+                if not self._score_item(particle):
+                    self._expand(particle)
+            else:
+                if not self._score_item(item):
+                    self._expand(item)
 
-        # Budget exhausted — score remaining items without expanding
+        # Budget exhausted — score remaining Particles without expanding.
+        # _RhoExpanders are skipped (remaining children are below the budget
+        # cutoff and have lower weight than all processed items).
         while self._queue:
-            self._score_item(heapq.heappop(self._queue))
+            item = heapq.heappop(self._queue)
+            if not isinstance(item, _RhoExpander):
+                self._score_item(item)
 
         return self.scores, self.eos_score, self.carry_forward
 
@@ -311,6 +354,10 @@ class FusedTransducedLM(LM):
         self._sym_map = {k: v for k, v in sym_map.items()}
         self._inv_sym_map = {v: k for k, v in sym_map.items()}
         self._state_map = state_map
+
+        # Cache source alphabet for rho expansion
+        self._source_alphabet_u32 = self._rust_helper.source_alphabet()
+        self._rho_label = self._rust_helper.rho_label()
 
     def decode_dfa_state(self, state_id, target):
         """Decode a lazy-DFA state ID to NFA constituents.

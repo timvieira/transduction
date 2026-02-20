@@ -6,10 +6,10 @@ Provides two variants:
 - CharNgramLM: character/symbol-level (arbitrary alphabet), uses dicts
 
 Usage:
-    # Byte-level
+    # Byte-level (alphabet = int 0-255)
     lm = ByteNgramLM.train(b"Hello world.", n=3)
-    state = lm >> b'H'
-    print(state.logp_next[b'e'])   # log P(e | H)
+    state = lm(b'H')              # advance by one byte
+    print(state.logp_next[ord('e')])  # log P(e | H)
 
     # Character-level
     lm = CharNgramLM.train("abcabc", n=2)
@@ -29,39 +29,31 @@ from transduction.util import LogDistr
 # Byte-level n-gram LM
 # ===========================================================================
 
-def _to_byte(token):
-    """Coerce token to a byte value (int 0-255)."""
-    if isinstance(token, (bytes, bytearray)):
-        return token[0] if len(token) == 1 else None
-    if isinstance(token, int):
-        return token
-    return None
-
-
 class NgramState(LMState):
     """Immutable n-gram LM state, compatible with StateLM interface.
 
     Supports:
-        state >> token     -> new state
+        state >> token     -> new state  (token is int 0-255)
         state.logp_next[x] -> log P(x | context)
         state.logp         -> cumulative log probability
-        state.eos          -> EOS token
+        state.eos          -> EOS token (int 0)
     """
 
     def __init__(self, lm, context, logp, history=()):
         self.lm = lm
         self.eos = lm.eos
-        self._context = context      # last (n-1) bytes as tuple
+        self._context = context      # last (n-1) bytes as tuple of ints
         self.logp = logp
         self.history = history        # full path as nested tuple (like StateLM.context)
 
     def __rshift__(self, token):
-        byte_val = _to_byte(token)
-        if byte_val is None or bytes([byte_val]) == self.eos:
-            raise ValueError(f"Out of vocabulary: {token!r}")
+        if not isinstance(token, int):
+            raise TypeError(f"Expected int (byte value 0-255), got {type(token).__name__}: {token!r}")
+        if token == self.eos:
+            raise ValueError(f"Cannot advance past EOS (byte {self.eos})")
         lp = self.logp_next[token]
         n = self.lm.n
-        new_ctx = (self._context + (byte_val,))[-(n - 1):] if n > 1 else ()
+        new_ctx = (self._context + (token,))[-(n - 1):] if n > 1 else ()
         return NgramState(self.lm, new_ctx, self.logp + lp,
                           history=(self.history, token))
 
@@ -85,7 +77,7 @@ class NgramState(LMState):
 
     def path_bytes(self):
         """Recover the full input as a bytes object."""
-        return bytes(_to_byte(t) for t in self.path())
+        return bytes(self.path())
 
     def __lt__(self, other):
         # Higher logp → smaller → explored first in min-heap
@@ -112,7 +104,7 @@ class ByteNgramLM(LM):
         """
         self.n = n
         self.alpha = alpha
-        self.eos = b'\x00'  # use null byte as EOS
+        self.eos = 0  # use null byte as EOS
 
         # Precompute log-probability tables for each context
         self._tables = {}
@@ -133,8 +125,8 @@ class ByteNgramLM(LM):
             ctx = context[start:]
             if ctx in self._tables:
                 lp = self._tables[ctx]
-                return LogDistr({bytes([i]): float(lp[i]) for i in range(256)})
-        return LogDistr({bytes([i]): float(self._uniform[i]) for i in range(256)})
+                return LogDistr({i: float(lp[i]) for i in range(256)})
+        return LogDistr({i: float(self._uniform[i]) for i in range(256)})
 
     def initial(self):
         return NgramState(self, (), 0.0)

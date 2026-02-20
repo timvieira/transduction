@@ -24,7 +24,7 @@ def bpe_wfst(tokenizer, readable=False):
 
     Returns:
         FST: Input alphabet = token IDs (or ``Token``), output alphabet =
-        single bytes.
+        byte values (int 0-255).
     """
     m = FST()
     m.add_start(())
@@ -36,7 +36,7 @@ def bpe_wfst(tokenizer, readable=False):
         _x = x
         x = tuple(x)
         for j in range(len(x)):
-            m.add_arc(x[:j], EPSILON, bytes([x[j]]), x[:j+1])
+            m.add_arc(x[:j], EPSILON, x[j], x[:j+1])
         if readable:
             m.add_arc(x, Token(i, _x), EPSILON, ())
         else:

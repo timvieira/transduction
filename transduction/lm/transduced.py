@@ -72,6 +72,44 @@ class Particle:
         return f'Particle(w={self.log_weight:.3f}, {self.source_path})'
 
 
+class _RhoExpander:
+    """Lazy enumerator for rho-class children at a complete DFA state.
+
+    Instead of eagerly pushing O(|V|) children into the heap, this holds a
+    sorted list of (weight, symbol) pairs and yields one child at a time when
+    popped.  Only the top item's weight is visible to the heap, so the
+    expander is ordered correctly among regular Particles.
+    """
+    __slots__ = ('rho_dest', 'lm_state', 'source_path',
+                 '_sorted', '_index')
+
+    def __init__(self, rho_dest, lm_state, source_path, sorted_children):
+        self.rho_dest = rho_dest
+        self.lm_state = lm_state
+        self.source_path = source_path
+        self._sorted = sorted_children   # [(weight, symbol), ...] desc
+        self._index = 0
+
+    @property
+    def log_weight(self):
+        return self._sorted[self._index][0]
+
+    def __lt__(self, other):
+        # max-heap: higher weight = higher priority (matches Particle)
+        return self.log_weight > other.log_weight
+
+    @property
+    def exhausted(self):
+        return self._index >= len(self._sorted)
+
+    def pop_next(self):
+        """Materialize the next highest-weight child Particle."""
+        w, x = self._sorted[self._index]
+        self._index += 1
+        return Particle(self.rho_dest, self.lm_state >> x, w,
+                        self.source_path + (x,))
+
+
 # ---------------------------------------------------------------------------
 # Selection
 # ---------------------------------------------------------------------------
@@ -265,7 +303,14 @@ class TransducedState(LMState):
         while queue and expansions < self.tlm.max_expansions:
             expansions += 1
 
-            particle = heapq.heappop(queue)
+            item = heapq.heappop(queue)
+            if isinstance(item, _RhoExpander):
+                particle = item.pop_next()
+                if not item.exhausted:
+                    heapq.heappush(queue, item)
+            else:
+                particle = item
+
             q_syms, r_syms = _score(particle)
             _carry_forward(particle, q_syms, r_syms)
 
@@ -274,20 +319,54 @@ class TransducedState(LMState):
                 continue
 
             # Non-Q: expand by source symbols.
+            # Use rho-aware expansion when available to reduce per-particle
+            # cost at complete DFA states (O(D) explicit + O(|V|) rho class
+            # with a single shared classify() call for the rho destination).
             lm_logp = particle.lm_state.logp_next
-            for x, next_dfa_state in dfa.arcs(particle.dfa_state):
-                child_w = particle.log_weight + lm_logp[x]
-                if child_w > -np.inf:
-                    heapq.heappush(queue, Particle(
-                        next_dfa_state,
-                        particle.lm_state >> x,
-                        child_w,
-                        particle.source_path + (x,),
-                    ))
+            if hasattr(dfa, 'rho_arcs'):
+                has_rho, rho_dest, explicit_arcs, rho_symbols = dfa.rho_arcs(particle.dfa_state)
+                for x, next_dfa_state in explicit_arcs:
+                    child_w = particle.log_weight + lm_logp[x]
+                    if child_w > -np.inf:
+                        heapq.heappush(queue, Particle(
+                            next_dfa_state,
+                            particle.lm_state >> x,
+                            child_w,
+                            particle.source_path + (x,),
+                        ))
+                if has_rho and rho_dest is not None:
+                    rho_children = []
+                    for x in rho_symbols:
+                        child_w = particle.log_weight + lm_logp[x]
+                        if child_w > -np.inf:
+                            rho_children.append((child_w, x))
+                    if rho_children:
+                        rho_children.sort(reverse=True)
+                        heapq.heappush(queue, _RhoExpander(
+                            rho_dest, particle.lm_state,
+                            particle.source_path, rho_children))
+            else:
+                for x, next_dfa_state in dfa.arcs(particle.dfa_state):
+                    child_w = particle.log_weight + lm_logp[x]
+                    if child_w > -np.inf:
+                        heapq.heappush(queue, Particle(
+                            next_dfa_state,
+                            particle.lm_state >> x,
+                            child_w,
+                            particle.source_path + (x,),
+                        ))
 
-        # Budget exhausted — score and carry forward remaining items.
+        # Budget exhausted — score and carry forward remaining items
+        # without expanding.  Drain _RhoExpanders fully so all rho
+        # children contribute to the logp_next distribution.
         while queue:
-            particle = heapq.heappop(queue)
+            item = heapq.heappop(queue)
+            if isinstance(item, _RhoExpander):
+                particle = item.pop_next()
+                if not item.exhausted:
+                    heapq.heappush(queue, item)
+            else:
+                particle = item
             q_syms, r_syms = _score(particle)
             _carry_forward(particle, q_syms, r_syms)
 

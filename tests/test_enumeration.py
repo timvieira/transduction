@@ -223,7 +223,7 @@ def _subsampled_bpe_fst(decode, token_ids, special=frozenset()):
             continue
         bx = tuple(x)
         for j in range(len(bx)):
-            m.add_arc(bx[:j], EPSILON, bytes([bx[j]]), bx[:j + 1])
+            m.add_arc(bx[:j], EPSILON, bx[j], bx[:j + 1])
         m.add_arc(bx, x, EPSILON, ())   # bytes token as input label
     m.add_stop(())
     return m
@@ -275,7 +275,7 @@ class TestBPEScale:
     @pytest.mark.timeout(60)
     def test_decomposition(self, small_bpe_fst):
         """NonrecursiveDFADecomp completes on a subsampled BPE FST."""
-        target = (b't', b'h', b'e')
+        target = tuple(b'the')
         decomp = NonrecursiveDFADecomp(small_bpe_fst, target)
         q = decomp.quotient.trim()
         r = decomp.remainder.trim()
@@ -287,7 +287,7 @@ class TestBPEScale:
     @pytest.mark.timeout(60)
     def test_prioritized_enumeration(self, gpt2_lm, small_bpe_fst):
         """prioritized_enumeration with GPT-2 on a subsampled BPE FST."""
-        target = (b't', b'h', b'e')
+        target = tuple(b'the')
         pe = prioritized_enumeration(
             gpt2_lm, small_bpe_fst, target, max_steps=5,
             decompose=NonrecursiveDFADecomp,
@@ -299,7 +299,7 @@ class TestBPEScale:
     @pytest.mark.timeout(60)
     def test_importance_sampling(self, gpt2_lm, small_bpe_fst):
         """importance_sampling with GPT-2 on a subsampled BPE FST."""
-        target = (b't', b'h', b'e')
+        target = tuple(b'the')
         sampler = importance_sampling(
             gpt2_lm, small_bpe_fst, target,
             decompose=NonrecursiveDFADecomp,

@@ -523,6 +523,8 @@ def _fmt_symbol(s):
         return s.replace(' ', '␣')
     if isinstance(s, bytes) and len(s) == 1:
         return _fmt_byte(s[0])
+    if isinstance(s, int) and 0 <= s <= 255:
+        return _fmt_byte(s)
     return repr(s)
 
 

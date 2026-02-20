@@ -556,9 +556,44 @@ impl RustDirtyPeekabooDecomp {
 
     /// Return the arcs from a DFA state: Vec<(input_label_u32, dest_sid)>.
     /// Called per-particle during beam search.
+    /// RHO arcs are expanded to explicit arcs for backward compatibility.
     fn arcs_for(&self, py: Python<'_>, state_id: u32) -> Vec<(u32, u32)> {
         let _ = py;
-        self.persistent.arcs_from(state_id).to_vec()
+        if self.persistent.state_has_rho(state_id) {
+            let (_, rho_dest, explicit) = self.persistent.rho_arcs(state_id);
+            let mut result = explicit;
+            if let Some(rd) = rho_dest {
+                let explicit_syms: rustc_hash::FxHashSet<u32> = result.iter()
+                    .map(|&(lbl, _)| lbl)
+                    .collect();
+                for &sym in self.persistent.source_alphabet() {
+                    if !explicit_syms.contains(&sym) {
+                        result.push((sym, rd));
+                    }
+                }
+            }
+            result
+        } else {
+            self.persistent.arcs_from(state_id).to_vec()
+        }
+    }
+
+    /// Return rho-arc information for a DFA state.
+    /// Returns (has_rho, rho_dest, explicit_exception_arcs).
+    fn rho_arcs_for(&self, py: Python<'_>, state_id: u32) -> (bool, Option<u32>, Vec<(u32, u32)>) {
+        let _ = py;
+        self.persistent.rho_arcs(state_id)
+    }
+
+    /// Return the source alphabet (input symbols of the FST).
+    fn source_alphabet(&self, py: Python<'_>) -> Vec<u32> {
+        let _ = py;
+        self.persistent.source_alphabet().to_vec()
+    }
+
+    /// Return the RHO sentinel label value.
+    fn rho_label(&self) -> u32 {
+        rho::RHO
     }
 
     /// Run a source path (sequence of u32 labels) from the global start state.
@@ -776,9 +811,10 @@ impl RustLazyPeekabooDFA {
 
     /// Lazily compute and return arcs from a DFA state.
     /// Returns Vec<(input_label_u32, dest_sid)>.
+    /// RHO arcs are expanded to explicit arcs for backward compatibility.
     fn arcs(&mut self, py: Python<'_>, sid: u32) -> Vec<(u32, u32)> {
         let inner = &self.fst.borrow(py).inner;
-        self.lazy_dfa.as_mut().expect("call new_step first").get_arcs(inner, sid)
+        self.lazy_dfa.as_mut().expect("call new_step first").get_arcs_expanded(inner, sid)
     }
 
     /// Run a source path from start, returning the reached DFA state or None.
@@ -833,6 +869,35 @@ impl RustLazyPeekabooDFA {
     /// Return the idx→symbol mapping for decoding extra_sym_idx values.
     fn idx_to_sym_map(&self) -> Vec<u32> {
         self.idx_to_sym.clone()
+    }
+
+    /// Return rho-arc information for a DFA state.
+    /// Returns (has_rho, rho_dest, explicit_exception_arcs).
+    /// - has_rho: whether this is a complete state with rho compression
+    /// - rho_dest: the destination for all non-exception symbols (None if !has_rho)
+    /// - explicit_exception_arcs: Vec<(input_label_u32, dest_sid)> for exception symbols
+    fn rho_arcs(&mut self, py: Python<'_>, sid: u32) -> (bool, Option<u32>, Vec<(u32, u32)>) {
+        let inner = &self.fst.borrow(py).inner;
+        let dfa = self.lazy_dfa.as_mut().expect("call new_step first");
+        dfa.ensure_arcs(inner, sid);
+        let has_rho = dfa.has_rho(sid);
+        if !has_rho {
+            // Not a rho state — return all arcs as explicit
+            return (false, None, dfa.get_arcs(inner, sid));
+        }
+        let rho_dest = dfa.rho_dest(sid);
+        let explicit = dfa.explicit_arcs(sid);
+        (true, rho_dest, explicit)
+    }
+
+    /// Return the source alphabet (input symbols of the FST).
+    fn source_alphabet(&self, py: Python<'_>) -> Vec<u32> {
+        self.fst.borrow(py).inner.source_alphabet.clone()
+    }
+
+    /// Return the RHO sentinel label value.
+    fn rho_label(&self) -> u32 {
+        rho::RHO
     }
 }
 

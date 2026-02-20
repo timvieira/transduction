@@ -34,38 +34,38 @@ class TestByteNgramInterface:
     def test_advance_state(self, lm):
         state = lm.initial()
         for ch in b'the ':
-            state = state >> bytes([ch])
-        assert state._context == (ord('h'), ord('e'), ord(' '))
+            state = state >> ch
+        assert state._context == tuple(b'he ')
         assert state.logp == pytest.approx(-2.718, abs=0.01)
 
     def test_call_shorthand(self, lm):
         """lm(prompt) advances through each byte."""
         state = lm.initial()
         for ch in b'the ':
-            state = state >> bytes([ch])
-        state2 = lm([bytes([ch]) for ch in b'the '])
+            state = state >> ch
+        state2 = lm(b'the ')
         assert state.logp == pytest.approx(state2.logp, abs=1e-10)
 
     def test_top_predictions_after_the_space(self, lm):
         state = lm.initial()
         for ch in b'the ':
-            state = state >> bytes([ch])
+            state = state >> ch
         top = state.logp_next.materialize(top=5)
         top_bytes = list(top.keys())
         # After "the ", the top predictions from the corpus are c, d, l, m, q
-        assert top_bytes == [b'c', b'd', b'l', b'm', b'q']
+        assert top_bytes == list(b'cdlmq')
 
     def test_logp_next_sums_to_one(self, lm):
         state = lm.initial()
         for ch in b'the ':
-            state = state >> bytes([ch])
+            state = state >> ch
         total = sum(np.exp(lp) for lp in state.logp_next.materialize().values())
         assert total == pytest.approx(1.0, abs=1e-6)
 
     def test_path_recovery(self, lm):
         state = lm.initial()
         for ch in b'hello':
-            state = state >> bytes([ch])
+            state = state >> ch
         assert state.path_bytes() == b'hello'
 
 
@@ -74,18 +74,18 @@ class TestByteNgramGreedyDecode:
     def test_greedy_the_space(self, lm):
         state = lm.initial()
         for ch in b'the ':
-            state = state >> bytes([ch])
-        decoded = b''.join(state.greedy_decode())
+            state = state >> ch
+        decoded = bytes(state.greedy_decode())
         # Greedy from "the " loops on "cat on the ..."
         assert decoded.startswith(b'cat')
         assert b'the' in decoded
 
     def test_greedy_a_space(self, lm):
-        decoded = b''.join(lm([bytes([ch]) for ch in b'a ']).greedy_decode())
+        decoded = bytes(lm(b'a ').greedy_decode())
         assert decoded.startswith(b'bird')
 
     def test_greedy_the_d(self, lm):
-        decoded = b''.join(lm([bytes([ch]) for ch in b'the d']).greedy_decode())
+        decoded = bytes(lm(b'the d').greedy_decode())
         assert decoded.startswith(b'og')
 
 
@@ -96,7 +96,7 @@ class TestByteNgramScoring:
         def score(text):
             state = lm.initial()
             for ch in text:
-                state = state >> bytes([ch])
+                state = state >> ch
             return state.logp
 
         lp_good = score(b'the cat sat on the mat.')
@@ -107,7 +107,7 @@ class TestByteNgramScoring:
         def score(text):
             state = lm.initial()
             for ch in text:
-                state = state >> bytes([ch])
+                state = state >> ch
             return state.logp
 
         lp1 = score(b'the cat sat on the mat.')
@@ -118,7 +118,7 @@ class TestByteNgramScoring:
         text = b'the cat sat on the mat.'
         state = lm.initial()
         for ch in text:
-            state = state >> bytes([ch])
+            state = state >> ch
         ppl = np.exp(-state.logp / len(text))
         assert ppl < 10  # low perplexity for in-distribution text
 
@@ -126,7 +126,7 @@ class TestByteNgramScoring:
         text = b'xyzzy plugh grault.'
         state = lm.initial()
         for ch in text:
-            state = state >> bytes([ch])
+            state = state >> ch
         ppl = np.exp(-state.logp / len(text))
         assert ppl > 100  # high perplexity for nonsense
 
@@ -172,7 +172,7 @@ def byte_lowercase_fst():
     """Byte-level lowercase FST: maps uppercase ASCII to lowercase,
     passes lowercase and space through unchanged.
 
-    Uses bytes labels (e.g., b't') to match ByteNgramLM's vocabulary.
+    Uses int labels (e.g., 116) to match ByteNgramLM's vocabulary.
     """
     fst = FST()
     fst.add_start(0)
@@ -181,9 +181,9 @@ def byte_lowercase_fst():
         c = chr(i) if i < 128 else None
         if c and c.isalpha():
             lo = ord(c.lower())
-            fst.add_arc(0, bytes([i]), bytes([lo]), 0)
+            fst.add_arc(0, i, lo, 0)
         elif c == ' ':
-            fst.add_arc(0, bytes([i]), bytes([i]), 0)
+            fst.add_arc(0, i, i, 0)
     return fst
 
 
@@ -218,7 +218,7 @@ class TestWikitextEnumeration:
     def test_decomposition(self, wikitext_lm):
         """RustDecomp on 'in january' through lowercase FST."""
         fst = byte_lowercase_fst()
-        target = tuple(bytes([b]) for b in b'in january')
+        target = tuple(b'in january')
 
         result = RustDecomp(fst, target)
         Q, R = result.quotient, result.remainder
@@ -233,7 +233,7 @@ class TestWikitextEnumeration:
         The n-gram LM should rank 'in January' as the most likely source.
         """
         fst = byte_lowercase_fst()
-        target = tuple(bytes([b]) for b in b'in january')
+        target = tuple(b'in january')
 
         pe = prioritized_enumeration(
             wikitext_lm.initial(), fst, target,
@@ -249,6 +249,6 @@ class TestWikitextEnumeration:
         for prompt in [b'The ', b'In 200', b'He was ']:
             state = wikitext_lm.initial()
             for ch in prompt:
-                state = state >> bytes([ch])
-            decoded = b''.join(state.greedy_decode())
+                state = state >> ch
+            decoded = bytes(state.greedy_decode())
             assert len(decoded) > 0
