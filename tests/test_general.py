@@ -26,6 +26,8 @@ try:
 except ImportError:
     HAS_RUST = False
 
+from transduction.pynini_ops import PyniniNonrecursiveDecomp
+
 
 def run_test(cls, fst, target, depth, verbosity=0):
     """Unified test runner: recursively checks decompose_next() against reference."""
@@ -74,6 +76,10 @@ if HAS_RUST:
     IMPLEMENTATIONS.append(
         pytest.param(RustDirtyPeekaboo, id="rust_dirty_peekaboo"),
     )
+
+IMPLEMENTATIONS.append(
+    pytest.param(PyniniNonrecursiveDecomp, id="pynini_nonrecursive"),
+)
 
 
 @pytest.fixture(params=IMPLEMENTATIONS)
