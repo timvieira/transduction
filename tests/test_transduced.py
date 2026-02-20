@@ -15,6 +15,7 @@ from transduction.util import logsumexp
 from transduction.lm.transduced import _select_top_k
 from transduction.lm.fused_transduced import FusedTransducedLM, FusedTransducedState
 from transduction.lm.reference_transduced import ReferenceTransducedLM, ReferenceTransducedState
+from transduction.lm.pynini_transduced import PyniniTransducedLM, PyniniTransducedState
 
 
 # ---------------------------------------------------------------------------
@@ -1747,3 +1748,266 @@ class TestPeekabooSamuelDoubleCounting:
                     f"diff={diff:.6f}, prev={prev_diff:.6f}"
                 )
                 prev_diff = diff
+
+
+# ---------------------------------------------------------------------------
+# PyniniTransducedLM tests
+# ---------------------------------------------------------------------------
+
+class TestPyniniTransducedLM:
+    """Tests that PyniniTransducedLM matches TransducedLM."""
+
+    def test_identity_transducer(self, char_ngram_lm):
+        """Pynini and original should agree on copy FST."""
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst = copy_fst(fst_alpha)
+
+        orig = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
+        pyn = PyniniTransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
+
+        orig_state = orig.initial()
+        pyn_state = pyn.initial()
+
+        for y in fst_alpha:
+            o = orig_state.logp_next[y]
+            p = pyn_state.logp_next[y]
+            if o > -10:
+                assert abs(o - p) < 0.5, \
+                    f"Symbol {y!r}: orig={o:.4f}, pynini={p:.4f}"
+
+    def test_identity_after_advance(self, char_ngram_lm):
+        """Pynini matches original after advancing by a symbol."""
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst = copy_fst(fst_alpha)
+
+        orig = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
+        pyn = PyniniTransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
+
+        orig_state = orig >> 'a'
+        pyn_state = pyn >> 'a'
+
+        for y in fst_alpha:
+            o = orig_state.logp_next[y]
+            p = pyn_state.logp_next[y]
+            if o > -10:
+                assert abs(o - p) < 0.5, \
+                    f"Symbol {y!r}: orig={o:.4f}, pynini={p:.4f}"
+
+    def test_small_fst(self, char_ngram_lm):
+        """Pynini matches original on examples.small()."""
+        fst = examples.small()
+
+        orig = TransducedLM(char_ngram_lm, fst, K=200, max_expansions=1000)
+        pyn = PyniniTransducedLM(char_ngram_lm, fst, K=200, max_expansions=1000)
+
+        orig_scores = dict(orig.initial().logp_next.items())
+        pyn_scores = dict(pyn.initial().logp_next.items())
+
+        for y in orig_scores:
+            o = orig_scores[y]
+            p = pyn_scores.get(y, -np.inf)
+            if o > -10:
+                assert abs(o - p) < 0.5, \
+                    f"Symbol {y!r}: orig={o:.4f}, pynini={p:.4f}"
+
+    def test_lowercase_fst(self, char_ngram_lm):
+        """Pynini matches original on examples.lowercase()."""
+        fst = examples.lowercase()
+
+        orig = TransducedLM(char_ngram_lm, fst, K=200, max_expansions=1000)
+        pyn = PyniniTransducedLM(char_ngram_lm, fst, K=200, max_expansions=1000)
+
+        orig_scores = dict(orig.initial().logp_next.items())
+        pyn_scores = dict(pyn.initial().logp_next.items())
+
+        for y in orig_scores:
+            o = orig_scores[y]
+            p = pyn_scores.get(y, -np.inf)
+            if o > -10:
+                assert abs(o - p) < 0.5, \
+                    f"Symbol {y!r}: orig={o:.4f}, pynini={p:.4f}"
+
+    def test_brute_force_comparison(self):
+        """Pynini matches brute-force enumeration for a tiny FST."""
+        inner_lm = TinyLM()
+        fst = copy_fst(['a', 'b'])
+
+        pyn = PyniniTransducedLM(inner_lm, fst, K=500, max_expansions=5000)
+        state = pyn.initial()
+
+        bf = brute_force_pushforward(inner_lm, fst, '', max_source_len=6)
+        Z = logsumexp(list(bf.values()))
+
+        a_strings = {k: v for k, v in bf.items() if k and k[0] == 'a'}
+        b_strings = {k: v for k, v in bf.items() if k and k[0] == 'b'}
+
+        bf_a = logsumexp(list(a_strings.values())) - Z if a_strings else -np.inf
+        bf_b = logsumexp(list(b_strings.values())) - Z if b_strings else -np.inf
+
+        pyn_a = state.logp_next['a']
+        pyn_b = state.logp_next['b']
+
+        assert abs(pyn_a - bf_a) < 0.5, f"a: bf={bf_a:.4f}, pynini={pyn_a:.4f}"
+        assert abs(pyn_b - bf_b) < 0.5, f"b: bf={bf_b:.4f}, pynini={pyn_b:.4f}"
+
+    def test_incremental_consistency(self, char_ngram_lm):
+        """logp after >> y1 >> y2 equals sum of conditional logps."""
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst = copy_fst(fst_alpha)
+        pyn = PyniniTransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
+
+        state0 = pyn.initial()
+        lp1 = state0.logp_next['a']
+        state1 = state0 >> 'a'
+        lp2 = state1.logp_next['b']
+        state2 = state1 >> 'b'
+
+        expected = lp1 + lp2
+        assert state2.logp == pytest.approx(expected, abs=1e-10)
+
+    def test_eos_normalization(self):
+        """logp_next (including EOS) should sum to approximately 1."""
+        inner_lm = TinyLM()
+        fst = copy_fst(['a', 'b'])
+
+        pyn = PyniniTransducedLM(inner_lm, fst, K=500, max_expansions=5000)
+        state = pyn.initial()
+
+        lp = state.logp_next
+        all_logps = [lp[y] for y in ['a', 'b']] + [lp[state.eos]]
+        total = logsumexp(all_logps)
+
+        assert abs(total) < 0.1, \
+            f"Probabilities should sum to ~1 (log ~0), got log-sum={total:.6f}"
+
+    def test_logp_starts_at_zero(self, char_ngram_lm):
+        """Initial state has logp = 0."""
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst = copy_fst(fst_alpha)
+        pyn = PyniniTransducedLM(char_ngram_lm, fst, K=100)
+        assert pyn.initial().logp == 0.0
+
+    def test_path_recovery(self, char_ngram_lm):
+        """Path recovery returns the correct sequence of target symbols."""
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst = copy_fst(fst_alpha)
+        pyn = PyniniTransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
+        state = pyn >> 'a' >> 'b' >> 'a'
+        assert list(state.path) == ['a', 'b', 'a']
+
+    def test_repr(self, char_ngram_lm):
+        """Repr doesn't crash."""
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst = copy_fst(fst_alpha)
+        pyn = PyniniTransducedLM(char_ngram_lm, fst, K=100)
+        state = pyn.initial()
+        assert 'PyniniTransducedState' in repr(state)
+        assert 'PyniniTransducedLM' in repr(pyn)
+
+    def test_inheritance(self):
+        """PyniniTransducedState inherits from LMState."""
+        assert issubclass(PyniniTransducedState, LMState)
+
+    def test_delete_b_exact(self):
+        """PyniniTransducedLM on delete_b matches exact analytical answer."""
+        inner_lm = TinyLM()
+        fst = examples.delete_b()
+
+        exact_A = np.log(6 / 7)
+        exact_EOS = np.log(1 / 7)
+
+        pyn = PyniniTransducedLM(inner_lm, fst, K=10, max_expansions=10000)
+        state = pyn.initial()
+
+        for step in range(5):
+            lp = state.logp_next
+            assert abs(lp['A'] - exact_A) < 1e-10, \
+                f"Step {step}: P(A) exact={exact_A:.12f}, got={lp['A']:.12f}"
+            assert abs(lp[state.eos] - exact_EOS) < 1e-10, \
+                f"Step {step}: P(EOS) exact={exact_EOS:.12f}, got={lp[state.eos]:.12f}"
+            state = state >> 'A'
+
+    def test_duplicate_vs_reference(self):
+        """PyniniTransducedLM on duplicate FST matches ReferenceTransducedLM."""
+        inner_lm = TinyLM()
+        V = ['a', 'b']
+        fst = examples.duplicate(V, K=2)
+
+        ref = ReferenceTransducedLM(inner_lm, fst)
+        pyn = PyniniTransducedLM(inner_lm, fst, K=500, max_expansions=5000)
+
+        ref_state = ref.initial()
+        pyn_state = pyn.initial()
+
+        for step, y in enumerate(['a', 'a', 'b', 'b']):
+            ref_lp = ref_state.logp_next
+            pyn_lp = pyn_state.logp_next
+            for sym in ref_lp:
+                if ref_lp[sym] > -10:
+                    assert abs(pyn_lp[sym] - ref_lp[sym]) < 0.01, \
+                        f"Step {step}, sym={sym!r}: ref={ref_lp[sym]:.6f}, pyn={pyn_lp[sym]:.6f}"
+            ref_state = ref_state >> y
+            pyn_state = pyn_state >> y
+
+    def test_finite_lm_vs_brute_force(self):
+        """PyniniTransducedLM with FiniteLM matches brute-force on delete_b."""
+        max_len = 6
+        inner_lm = _finite_lm_for_delete_b(max_len)
+        fst = examples.delete_b()
+        pyn = PyniniTransducedLM(inner_lm, fst, K=500, max_expansions=5000)
+
+        state = pyn.initial()
+        for step, prefix in enumerate([(), ('A',), ('A', 'A')]):
+            bf_cond = _brute_force_conditional(inner_lm, fst, prefix, max_len)
+            pyn_lp = state.logp_next
+            for y, bf_val in bf_cond.items():
+                pyn_val = pyn_lp.get(y, -np.inf)
+                assert abs(pyn_val - bf_val) < 1e-10, \
+                    f"Step {step}, y={y!r}: bf={bf_val:.12f}, pyn={pyn_val:.12f}"
+            if step < 2:
+                state = state >> 'A'
+
+    def test_overlap_trigger_vs_reference(self):
+        """PyniniTransducedLM matches ReferenceTransducedLM on the overlap-trigger FST."""
+        fst = _overlap_trigger_fst()
+        inner_lm = FiniteLM({
+            (): 0.1,
+            ('a',): 0.3,
+            ('b',): 0.1,
+            ('a', 'b'): 0.2,
+            ('a', 'a'): 0.15,
+            ('a', 'b', 'a'): 0.15,
+        })
+        ref = ReferenceTransducedLM(inner_lm, fst)
+        pyn = PyniniTransducedLM(inner_lm, fst, K=500, max_expansions=5000)
+
+        ref_state = ref.initial()
+        pyn_state = pyn.initial()
+
+        for step, y in enumerate(['c', 'x']):
+            ref_lp = ref_state.logp_next
+            pyn_lp = pyn_state.logp_next
+            for sym in ref_lp:
+                if ref_lp[sym] > -20:
+                    assert abs(pyn_lp[sym] - ref_lp[sym]) < 1e-6, (
+                        f"Step {step}, sym={sym!r}: ref={ref_lp[sym]:.8f}, "
+                        f"pyn={pyn_lp[sym]:.8f}"
+                    )
+            ref_state = ref_state >> y
+            pyn_state = pyn_state >> y
+
+    def test_bpe_style_decodes_all_symbols(self):
+        """PyniniTransducedLM can decode all output symbols on BPE-style FST."""
+        fst = _bpe_style_fst()
+        inner_lm = CharNgramLM.train(list('xxyxy') * 5, n=2, alpha=0.5)
+        pyn = PyniniTransducedLM(inner_lm, fst, K=50, max_expansions=100)
+
+        target = ('a', 'a', 'b', 'b')
+        state = pyn.initial()
+        for i, y in enumerate(target):
+            lp = state.logp_next
+            assert y in lp and lp[y] > -np.inf, (
+                f"Step {i}: PyniniTransducedLM missing {y!r} in logp_next "
+                f"(keys={sorted(lp.keys())})"
+            )
+            state = state >> y
