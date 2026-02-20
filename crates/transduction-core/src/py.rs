@@ -1,6 +1,6 @@
 use pyo3::prelude::*;
 use crate::fst::{Fst, compute_ip_universal_states};
-use crate::{decompose, peekaboo, incremental, minimize, rho};
+use crate::{decompose, peekaboo, incremental, minimize, rho, token_decompose};
 use std::time::Instant;
 
 /// Python-visible FST wrapper. Constructed once from Python arrays, then
@@ -215,6 +215,15 @@ fn wrap_decomp_result(py: Python<'_>, result: decompose::DecompResult, do_minimi
 #[pyo3(signature = (fst, target, minimize=false))]
 pub fn rust_decompose(py: Python<'_>, fst: &RustFst, target: Vec<u32>, minimize: bool) -> PyResult<DecompResult> {
     let result = decompose::decompose(&fst.inner, &target);
+    wrap_decomp_result(py, result, minimize)
+}
+
+/// Token-level decomposition for BPE-like FSTs where all_input_universal holds.
+/// Uses position-set bitsets instead of the full NFA state space.
+#[pyfunction]
+#[pyo3(signature = (fst, target, minimize=false))]
+pub fn rust_token_decompose(py: Python<'_>, fst: &RustFst, target: Vec<u32>, minimize: bool) -> PyResult<DecompResult> {
+    let result = token_decompose::decompose_token_level(&fst.inner, &target);
     wrap_decomp_result(py, result, minimize)
 }
 
