@@ -1,11 +1,13 @@
 """
-Benchmark: FactoredDecomp vs NonrecursiveDFADecomp on BPE and PTB FSTs.
+Benchmark: decomposition algorithms on BPE and PTB FSTs.
 
 Tests on real tokenizer FSTs with byte-sequence targets at various lengths.
 Compares:
   - NonrecursiveDFADecomp (fresh build per target)
   - FactoredDecomp (fresh build per target)
   - FactoredDecomp incremental (>> operator, sequential extension)
+  - PyniniNonrecursiveDecomp (pynini composition backend)
+  - RustDecomp (Rust-accelerated decomposition)
 """
 
 import sys
@@ -22,7 +24,14 @@ from transduction.fst import FST
 from transduction.fsa import EPSILON
 from transduction.dfa_decomp_nonrecursive import NonrecursiveDFADecomp
 from transduction.factored_decompose import FactoredDecomp
+from transduction.pynini_ops import PyniniNonrecursiveDecomp, PyniniPrecover
 from transduction.precover_nfa import PrecoverNFA
+
+try:
+    from transduction.rust_bridge import RustDecomp
+    HAS_RUST = True
+except ImportError:
+    HAS_RUST = False
 
 
 # --- Per-call timeout ---
@@ -131,6 +140,44 @@ def time_factored_incremental(fst, targets):
     return total, count, timeouts
 
 
+def time_pynini_fresh(fst, targets, backend=None):
+    """Time PyniniNonrecursiveDecomp on a list of targets."""
+    total = 0.0
+    count = 0
+    timeouts = 0
+    for target in targets:
+        def run():
+            d = PyniniNonrecursiveDecomp(fst, target, backend=backend)
+            _ = d.quotient
+            _ = d.remainder
+        elapsed, ok = timed_call(run)
+        total += elapsed
+        if ok:
+            count += 1
+        else:
+            timeouts += 1
+    return total, count, timeouts
+
+
+def time_rust_fresh(fst, targets):
+    """Time RustDecomp on a list of targets."""
+    total = 0.0
+    count = 0
+    timeouts = 0
+    for target in targets:
+        def run():
+            d = RustDecomp(fst, target)
+            _ = d.quotient
+            _ = d.remainder
+        elapsed, ok = timed_call(run)
+        total += elapsed
+        if ok:
+            count += 1
+        else:
+            timeouts += 1
+    return total, count, timeouts
+
+
 def build_subsampled_bpe(vocab_size, _cache={}):
     """Build a subsampled BPE FST with the given vocab size (cached)."""
     if vocab_size in _cache:
@@ -224,17 +271,31 @@ def fmt_time(t, n, total, timeouts):
 
 
 def benchmark_fst(name, fst, targets_by_length):
-    """Run all three methods on an FST with grouped targets."""
-    print(f"\n{'='*80}")
+    """Run all methods on an FST with grouped targets."""
+    print(f"\n{'='*100}")
     print(f"  {name}")
-    print(f"{'='*80}")
+    print(f"{'='*100}")
     print(f"  FST: {len(fst.states)} states, |A|={len(fst.A)}, |B|={len(fst.B)}")
     print(f"  Per-call timeout: {CALL_TIMEOUT}s")
+
+    # Pre-init pynini backend (shared across targets for this FST)
+    t0 = time.perf_counter()
+    pynini_backend = PyniniPrecover(fst)
+    t_pynini_init = time.perf_counter() - t0
+    print(f"  Pynini init: {t_pynini_init*1000:.1f}ms")
     print()
-    print(f"  {'Len':<5s} {'#Tgt':>5s}  "
-          f"{'Standard':>14s}  {'Fac(fresh)':>14s}  {'Fac(>>)':>14s}  "
-          f"{'Fac/Std':>8s} {'>>/Std':>8s}")
-    print(f"  {'-'*80}")
+
+    hdr = (f"  {'Len':<5s} {'#Tgt':>5s}  "
+           f"{'Standard':>14s}  {'Pynini':>14s}  ")
+    if HAS_RUST:
+        hdr += f"{'Rust':>14s}  "
+    hdr += (f"{'Fac(fresh)':>14s}  {'Fac(>>)':>14s}  "
+            f"{'Pyn/Std':>8s} ")
+    if HAS_RUST:
+        hdr += f"{'Pyn/Rust':>9s} "
+    hdr += f"{'Fac/Std':>8s} {'>>/Std':>8s}"
+    print(hdr)
+    print(f"  {'-'*len(hdr)}")
 
     results = []
     for length, targets in sorted(targets_by_length.items()):
@@ -245,27 +306,51 @@ def benchmark_fst(name, fst, targets_by_length):
         sys.stdout.write(f"{fmt_time(t_std, n_std, len(targets), to_std):>14s}  ")
         sys.stdout.flush()
 
+        t_pyn, n_pyn, to_pyn = time_pynini_fresh(fst, targets, backend=pynini_backend)
+        sys.stdout.write(f"{fmt_time(t_pyn, n_pyn, len(targets), to_pyn):>14s}  ")
+        sys.stdout.flush()
+
+        if HAS_RUST:
+            t_rust, n_rust, to_rust = time_rust_fresh(fst, targets)
+            sys.stdout.write(f"{fmt_time(t_rust, n_rust, len(targets), to_rust):>14s}  ")
+            sys.stdout.flush()
+
         t_fac, n_fac, to_fac = time_factored_fresh(fst, targets)
         sys.stdout.write(f"{fmt_time(t_fac, n_fac, len(targets), to_fac):>14s}  ")
         sys.stdout.flush()
 
         t_inc, n_inc, to_inc = time_factored_incremental(fst, targets)
 
+        pyn_vs_std = t_std / t_pyn if t_pyn > 0 else float('inf')
         fac_vs_std = t_std / t_fac if t_fac > 0 else float('inf')
         inc_vs_std = t_std / t_inc if t_inc > 0 else float('inf')
 
-        print(f"{fmt_time(t_inc, n_inc, len(targets), to_inc):>14s}  "
-              f"{fac_vs_std:>7.2f}x {inc_vs_std:>7.2f}x")
+        line = f"{fmt_time(t_inc, n_inc, len(targets), to_inc):>14s}  "
+        line += f"{pyn_vs_std:>7.2f}x "
+        if HAS_RUST:
+            pyn_vs_rust = t_rust / t_pyn if t_pyn > 0 else float('inf')
+            line += f"{pyn_vs_rust:>8.2f}x "
+        line += f"{fac_vs_std:>7.2f}x {inc_vs_std:>7.2f}x"
+        print(line)
 
-        results.append((length, len(targets), t_std, t_fac, t_inc, fac_vs_std, inc_vs_std))
+        row = {
+            'length': length, 'n_targets': len(targets),
+            't_std': t_std, 't_pyn': t_pyn, 't_fac': t_fac, 't_inc': t_inc,
+            'pyn_vs_std': pyn_vs_std, 'fac_vs_std': fac_vs_std, 'inc_vs_std': inc_vs_std,
+        }
+        if HAS_RUST:
+            row['t_rust'] = t_rust
+            row['pyn_vs_rust'] = pyn_vs_rust
+        results.append(row)
 
     return results
 
 
 def main():
-    print("BPE and PTB Benchmark: FactoredDecomp vs NonrecursiveDFADecomp")
-    print("=" * 80)
+    print("BPE and PTB Decomposition Benchmark")
+    print("=" * 100)
     print(f"Memory limit: 8 GB, per-call timeout: {CALL_TIMEOUT}s")
+    print(f"Rust backend: {'available' if HAS_RUST else 'NOT available'}")
 
     all_results = {}
 
@@ -326,22 +411,24 @@ def main():
         traceback.print_exc()
 
     # --- Summary ---
-    print(f"\n\n{'='*80}")
-    print(f"  SUMMARY")
-    print(f"{'='*80}")
+    print(f"\n\n{'='*100}")
+    print(f"  SUMMARY (geomean speedup vs Standard)")
+    print(f"{'='*100}")
+    from math import exp, log
     for name, results in all_results.items():
         if not results:
             continue
         print(f"\n  {name}:")
-        from math import exp, log
-        fac_speedups = [r[5] for r in results if 0 < r[5] < float('inf')]
-        inc_speedups = [r[6] for r in results if 0 < r[6] < float('inf')]
-        if fac_speedups:
-            geo_fac = exp(sum(log(s) for s in fac_speedups) / len(fac_speedups))
-            print(f"    Factored (fresh) geomean speedup: {geo_fac:.2f}x")
-        if inc_speedups:
-            geo_inc = exp(sum(log(s) for s in inc_speedups) / len(inc_speedups))
-            print(f"    Factored (incremental >>) geomean speedup: {geo_inc:.2f}x")
+        for key, label in [
+            ('pyn_vs_std', 'Pynini'),
+            ('pyn_vs_rust', 'Pynini vs Rust'),
+            ('fac_vs_std', 'Factored (fresh)'),
+            ('inc_vs_std', 'Factored (incremental >>)'),
+        ]:
+            vals = [r[key] for r in results if key in r and 0 < r[key] < float('inf')]
+            if vals:
+                geo = exp(sum(log(s) for s in vals) / len(vals))
+                print(f"    {label:<28s} geomean: {geo:.2f}x")
 
     print("\nDone.")
 
