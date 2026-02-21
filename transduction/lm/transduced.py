@@ -342,7 +342,7 @@ class TransducedState(LMState[Token]):
             # cost at complete DFA states (O(D) explicit + O(|V|) rho class
             # with a single shared classify() call for the rho destination).
             lm_logp = particle.lm_state.logp_next
-            if hasattr(dfa, 'rho_arcs'):
+            if self.tlm.use_rho and hasattr(dfa, 'rho_arcs'):
                 has_rho, rho_dest, explicit_arcs, rho_symbols = dfa.rho_arcs(particle.dfa_state)
                 for x, next_dfa_state in explicit_arcs:
                     child_w = particle.log_weight + lm_logp[x]
@@ -474,12 +474,14 @@ class TransducedLM(LM[Token]):
     def __init__(self, inner_lm: LM, fst: FST[Any, Any], K: int,
                  max_expansions: int = 1000, eos: Token = '<EOS>',  # type: ignore[assignment]
                  decomp_state_cls: type | None = None,
-                 univ_cls: type = _DefaultUniv) -> None:
+                 univ_cls: type = _DefaultUniv,
+                 use_rho: bool = True) -> None:
         self.inner_lm = inner_lm
         self.fst = fst
         self.max_expansions = max_expansions
         self.K = K
         self.eos = eos
+        self.use_rho = use_rho
         self._decomp_state_cls = decomp_state_cls or _DefaultDecompState
         self._univ = univ_cls(fst)
 

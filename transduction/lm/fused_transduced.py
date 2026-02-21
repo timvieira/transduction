@@ -165,11 +165,13 @@ class _FusedSearch:
     def _expand(self, item: Particle) -> None:
         """Advance by each source symbol and push successors into the queue.
 
-        Uses rho-arc compression: at complete DFA states (where all source
-        symbols lead to defined destinations), the Rust DFA stores a single
-        RHO arc for the majority destination plus exception arcs.  This
-        avoids O(|Sigma|) arc iterations when the rho destination can be
-        handled in bulk.
+        When use_rho is True (default), uses rho-arc compression: at complete
+        DFA states the Rust DFA stores a single RHO arc for the majority
+        destination plus exception arcs, avoiding O(|Sigma|) arc iterations
+        when the rho destination can be handled in bulk.
+
+        When use_rho is False, enumerates all arcs explicitly (no rho
+        compression), which is useful for measuring the rho trick's impact.
         """
         helper = self._tlm._rust_helper
         result = helper.classify(item.dfa_state)  # cached
@@ -179,6 +181,17 @@ class _FusedSearch:
         trunc_resume_syms = set()
 
         has_rho, rho_dest, explicit_arcs = helper.rho_arcs(item.dfa_state)
+
+        if not self._tlm.use_rho:
+            # Flatten: treat all arcs as explicit (no rho grouping)
+            if has_rho and rho_dest is not None:
+                explicit_syms = {x_u32 for x_u32, _ in explicit_arcs}
+                rho_as_explicit = [(x_u32, rho_dest)
+                                   for x_u32 in self._tlm._source_alphabet_u32
+                                   if x_u32 not in explicit_syms]
+                explicit_arcs = list(explicit_arcs) + rho_as_explicit
+            has_rho = False
+            rho_dest = None
 
         # Process explicit (exception) arcs
         explicit_syms = set()
@@ -353,7 +366,8 @@ class FusedTransducedLM(LM[Token]):
 
     def __init__(self, inner_lm: LM, fst: FST[Any, Any],
                  max_steps: int = 1000, max_beam: int = 100,
-                 eos: Token = '<EOS>') -> None:  # type: ignore[assignment]
+                 eos: Token = '<EOS>',  # type: ignore[assignment]
+                 use_rho: bool = True) -> None:
         import transduction_core
 
         self.inner_lm = inner_lm
@@ -361,6 +375,7 @@ class FusedTransducedLM(LM[Token]):
         self.max_steps = max_steps
         self.max_beam = max_beam
         self.eos = eos
+        self.use_rho = use_rho
 
         # Build Rust FST and helper
         rust_fst, sym_map, state_map = to_rust_fst(fst)
