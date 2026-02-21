@@ -531,11 +531,22 @@ class PeekabooState(IncrementalDecomposition):
         d = parent.decomp.get(y, _empty)
         merged_incoming = parent._merged_incoming()
         get_incoming = lambda s: merged_incoming.get(s, ())
-        # Walk to root for start states
+        # Collect start states from all depths in the parent chain.
+        # Each depth's DFA start state represents the same source-
+        # language start (initial FST state, empty input) but with
+        # different truncation thresholds, producing different frozensets.
+        # When resume_frontiers connects adjacent depths, the backward
+        # BFS reaches the root's start state.  When resume_frontiers is
+        # empty (e.g. BPE-style FSTs where early depths have only
+        # truncated states), the merged incoming graph is disconnected
+        # and only the fallback depth's start state is backward-reachable.
+        # Including all depths' start states lets _trimmed_fsa pick the
+        # right one via backward-reachability filtering.
+        start_states = set()
         node = parent
-        while node.parent is not None:
+        while node is not None:
+            start_states.update(node.dfa.start())
             node = node.parent
-        start_states = set(node.dfa.start())
         return (
             _trimmed_fsa(start_states, d.quotient, get_incoming),
             _trimmed_fsa(start_states, d.remainder, get_incoming),
