@@ -310,6 +310,19 @@ def test_lowercase(impl):
     fst = examples.lowercase()
     run_test(impl, fst, '', depth=2)
 
+def test_bpe_like(impl):
+    if impl in (PyniniNonrecursiveDecomp,):
+        pytest.xfail("Known mismatch on epsilon-input output chains; investigate pynini handling.")
+    fst = examples.bpe_like(vocab_size=30, alphabet=tuple("ab"), max_len=3)
+    run_test(impl, fst, '', depth=2)
+
+
+def test_bpe_embedded(impl):
+    if impl in (PyniniNonrecursiveDecomp,):
+        pytest.xfail("Known mismatch on epsilon-input output chains; investigate pynini handling.")
+    fst = examples.bpe_embedded(vocab_size=30, alphabet=tuple("ab"), max_len=3, wrapper_alpha=tuple("xy"))
+    run_test(impl, fst, '', depth=2)
+
 
 def test_mystery1(impl):
     fst = examples.mystery1()

@@ -462,6 +462,60 @@ def mystery1():
     return fst
 
 
+def bpe_like(vocab_size=50, alphabet=tuple("abc"), max_len=4):
+    """BPE-inspired trie FST: token IDs -> output symbols via EPS-input arcs.
+
+    Builds a hub-and-spoke trie where each token spells its output symbols
+    via EPS-input arcs, then consumes a token ID to return to the hub.
+    """
+    fst = FST()
+    root = ()
+    fst.add_start(root)
+    fst.add_stop(root)
+
+    # Generate token strings in lexicographic order up to max_len.
+    tokens = []
+    for length in range(1, max_len + 1):
+        def gen(prefix):
+            if len(prefix) == length:
+                tokens.append(tuple(prefix))
+                return
+            for ch in alphabet:
+                gen(prefix + [ch])
+        gen([])
+        if len(tokens) >= vocab_size:
+            break
+    tokens = tokens[:vocab_size]
+
+    for tid, tok in enumerate(tokens):
+        prefix = ()
+        for sym in tok:
+            nxt = prefix + (sym,)
+            fst.add_arc(prefix, EPSILON, sym, nxt)
+            prefix = nxt
+        fst.add_arc(prefix, tid, EPSILON, root)
+
+    return fst
+
+
+def bpe_embedded(vocab_size=50, alphabet=tuple("abc"), max_len=4, wrapper_alpha=tuple("xy")):
+    """Embed a BPE-like trie inside a larger FST with an outer copy loop."""
+    fst = bpe_like(vocab_size=vocab_size, alphabet=alphabet, max_len=max_len)
+    root = ()
+
+    # Add an outer "wrapper" copy loop at a separate state.
+    wrapper = ("wrapper",)
+    fst.add_start(wrapper)
+    fst.add_stop(wrapper)
+    for x in wrapper_alpha:
+        fst.add_arc(wrapper, x, x, wrapper)
+
+    # Bridge into the BPE hub by emitting a delimiter and entering root.
+    fst.add_arc(wrapper, EPSILON, "|", root)
+
+    return fst
+
+
 def mystery2():
 
     fst = FST()
