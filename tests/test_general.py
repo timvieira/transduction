@@ -21,7 +21,10 @@ from transduction.peekaboo_incremental import PeekabooState
 from transduction.peekaboo_dirty import DirtyPeekaboo
 
 try:
-    from transduction.rust_bridge import RustDecomp, RustDirtyState, RustDirtyPeekaboo
+    from transduction.rust_bridge import (
+        RustDecomp, RustDirtyState, RustDirtyPeekaboo,
+        RustPositionSetPeekabooState,
+    )
     HAS_RUST = True
 except ImportError:
     HAS_RUST = False
@@ -50,16 +53,20 @@ def run_test(cls, fst, target, depth, verbosity=0):
             if q.states or r.states:
                 recurse(target + (y,), depth - 1, have[y])
 
+    _td_classes = {PositionSetPeekabooState}
+    if HAS_RUST:
+        _td_classes.add(RustPositionSetPeekabooState)
+
     try:
         recurse(target, depth, cls(fst, target))
     except ValueError:
-        # PositionSetPeekabooState raises ValueError on non-TD FSTs
-        if cls is PositionSetPeekabooState:
+        # Position-set classes raise ValueError on non-TD FSTs
+        if cls in _td_classes:
             pytest.skip("FST is not token-decomposable")
         raise
     except AssertionError:
         # Partial TD check may miss some non-TD FSTs; Q/R mismatch is expected
-        if cls is PositionSetPeekabooState:
+        if cls in _td_classes:
             pytest.skip("FST is not token-decomposable (undetected)")
         raise
 
@@ -87,6 +94,9 @@ if HAS_RUST:
     )
     IMPLEMENTATIONS.append(
         pytest.param(RustDirtyPeekaboo, id="rust_dirty_peekaboo"),
+    )
+    IMPLEMENTATIONS.append(
+        pytest.param(RustPositionSetPeekabooState, id="rust_position_set_peekaboo"),
     )
 
 IMPLEMENTATIONS.append(

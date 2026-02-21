@@ -19,22 +19,26 @@ Usage:
     print(state.logp_next['e'])
 """
 
+from __future__ import annotations
+
 import heapq
 import numpy as np
 from collections import defaultdict
+from typing import Any
 
 import pynini
 
-from transduction.fst import EPSILON
-from transduction.lm.base import LM, LMState
-from transduction.util import LogVector
+from transduction.fst import FST, EPSILON
+from transduction.lm.base import LM, LMState, Token
+from transduction.util import LogDistr, LogVector, Str
 from transduction.lm.transduced import Particle, _select_top_k
 from transduction.pynini_ops import (
     PyniniPrecover, _universal_states,
 )
 
 
-def _build_exact_filter(target, out_label_map, out_sym_table):
+def _build_exact_filter(target: Str[Token], out_label_map: dict[Token, int],
+                        out_sym_table: Any) -> pynini.Fst:
     """Build a pynini acceptor for exactly the target sequence (no Sigma* tail).
 
     Used for preimage: compose(fst, exact_filter).project('input') gives the
@@ -54,7 +58,7 @@ def _build_exact_filter(target, out_label_map, out_sym_table):
     return filt
 
 
-def _build_transition_table(dfa):
+def _build_transition_table(dfa: pynini.Fst) -> tuple[dict[int, dict[int, int]], frozenset[int]]:
     """Pre-build transition table and final-state set from a pynini DFA.
 
     Returns (trans, finals) where:
@@ -78,7 +82,7 @@ def _build_transition_table(dfa):
 _DEAD = None
 
 
-class PyniniTransducedState(LMState):
+class PyniniTransducedState(LMState[Token]):
     """Immutable state for PyniniTransducedLM.
 
     Each state holds a beam of particles (source-prefix hypotheses).
@@ -87,26 +91,28 @@ class PyniniTransducedState(LMState):
     pynini precover DFAs.
     """
 
-    def __init__(self, tlm, particles, target, logp, path=()):
+    def __init__(self, tlm: PyniniTransducedLM, particles: list[Particle],
+                 target: Str[Token], logp: float,
+                 path: Str[Token] = ()) -> None:
         self.tlm = tlm
         self.eos = tlm.eos
         self._particles = particles
         self._target = target
         self.logp = logp
         self.path = path
-        self._logp_next_cache = None
-        self._carry_forward = None
+        self._logp_next_cache: LogDistr[Token] | None = None
+        self._carry_forward: dict[Token, list[Particle]] | None = None
 
-    def _ensure_computed(self):
+    def _ensure_computed(self) -> None:
         if self._logp_next_cache is None:
             self._compute_logp_next()
 
     @property
-    def logp_next(self):
+    def logp_next(self) -> LogDistr[Token]:
         self._ensure_computed()
-        return self._logp_next_cache
+        return self._logp_next_cache  # type: ignore[return-value]
 
-    def __rshift__(self, y):
+    def __rshift__(self, y: Token) -> PyniniTransducedState:
         self._ensure_computed()
         if y not in self._logp_next_cache:
             raise ValueError(f"Out of vocabulary: {y!r}")
@@ -136,7 +142,7 @@ class PyniniTransducedState(LMState):
             path=self.path + (y,),
         )
 
-    def _compute_logp_next(self):
+    def _compute_logp_next(self) -> None:
         """Best-first search with incremental pynini-based Q/R classification.
 
         For each candidate next-symbol z, builds precover(target+(z,)) via
@@ -191,7 +197,7 @@ class PyniniTransducedState(LMState):
         #   pi_state: state in preimage DFA or _DEAD
         z_state_cache = {}
 
-        def _init_z_states(source_path):
+        def _init_z_states(source_path: Str[Token]) -> None:
             """Compute z-states for a source_path from scratch."""
             if source_path in z_state_cache:
                 return
@@ -223,7 +229,7 @@ class PyniniTransducedState(LMState):
 
             z_state_cache[source_path] = (z_states, pi_state)
 
-        def _advance_z_states(parent_path, x):
+        def _advance_z_states(parent_path: Str[Token], x: Token) -> None:
             """Advance parent's z-states by one symbol x. O(|live_z|)."""
             child_path = parent_path + (x,)
             if child_path in z_state_cache:
@@ -248,7 +254,7 @@ class PyniniTransducedState(LMState):
         # Classification from cached z-states (pure Python set lookups)
         _classify_cache = {}   # source_path -> (q_syms, r_syms, is_preimage)
 
-        def _classify(source_path):
+        def _classify(source_path: Str[Token]) -> tuple[set[Token], set[Token], bool]:
             """Classify a source_path using pre-computed z-states."""
             if source_path in _classify_cache:
                 return _classify_cache[source_path]
@@ -272,11 +278,11 @@ class PyniniTransducedState(LMState):
             _init_z_states(p.source_path)
 
         # --- Accumulators ---
-        scores = LogVector()
-        carry_forward = defaultdict(list)
-        cf_paths = defaultdict(set)
+        scores: LogVector[Token] = LogVector()
+        carry_forward: defaultdict[Token, list[Particle]] = defaultdict(list)
+        cf_paths: defaultdict[Token, set[Str[Token]]] = defaultdict(set)
 
-        def _score(particle):
+        def _score(particle: Particle) -> tuple[set[Token], set[Token]]:
             """Classify particle and accumulate scores. Returns (q_syms, r_syms)."""
             w = particle.log_weight
 
@@ -297,7 +303,7 @@ class PyniniTransducedState(LMState):
 
             return q_syms, r_syms
 
-        def _add_carry_checked(y, particle):
+        def _add_carry_checked(y: Token, particle: Particle) -> None:
             """Add to carry_forward[y] with prefix-domination check."""
             path = particle.source_path
             if path in cf_paths[y] or any(path[:k] in cf_paths[y] for k in range(len(path))):
@@ -305,7 +311,8 @@ class PyniniTransducedState(LMState):
             carry_forward[y].append(particle)
             cf_paths[y].add(path)
 
-        def _carry(particle, q_syms, r_syms):
+        def _carry(particle: Particle, q_syms: set[Token],
+                   r_syms: set[Token]) -> None:
             """Add particle to carry-forward sets."""
             for y in q_syms:
                 carry_forward[y].append(particle)
@@ -352,11 +359,11 @@ class PyniniTransducedState(LMState):
         self._logp_next_cache = scores.normalize()
         self._carry_forward = carry_forward
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f'PyniniTransducedState(target={self._target!r})'
 
 
-class PyniniTransducedLM(LM):
+class PyniniTransducedLM(LM[Token]):
     """Pynini-backed transduced language model.
 
     Uses pynini composition for DFA construction and universality-based
@@ -371,7 +378,8 @@ class PyniniTransducedLM(LM):
         eos: Outer EOS token.
     """
 
-    def __init__(self, inner_lm, fst, K, max_expansions=1000, eos='<EOS>'):
+    def __init__(self, inner_lm: LM, fst: FST[Any, Any], K: int,
+                 max_expansions: int = 1000, eos: Token = '<EOS>') -> None:  # type: ignore[assignment]
         self.inner_lm = inner_lm
         self.fst = fst
         self.K = K
@@ -381,9 +389,9 @@ class PyniniTransducedLM(LM):
         self._backend = PyniniPrecover(fst)
         self._pd = self._backend._pd
 
-    def initial(self):
+    def initial(self) -> PyniniTransducedState:
         """Return the initial PyniniTransducedState (empty target prefix)."""
-        target = ()
+        target: Str[Token] = ()
         base_dfa = self._backend.build_dfa(target)
         inner_initial = self.inner_lm.initial()
 
@@ -394,5 +402,5 @@ class PyniniTransducedLM(LM):
 
         return PyniniTransducedState(self, particles, target, 0.0)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f'PyniniTransducedLM(inner={self.inner_lm!r})'

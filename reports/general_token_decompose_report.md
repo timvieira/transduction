@@ -18,8 +18,9 @@ $(q, \text{buf})$, where $q$ is an FST state and $\text{buf}$ is the prefix of
 the target consumed so far. For large FSTs, this powerset DFA can have many
 states — PTB produces 634 DFA states for typical targets.
 
-**This report describes an optimization that reduces PTB's 634 states to 18,
-achieving a 331x speedup, by exploiting a structural property called
+**This report describes an optimization that achieves dramatic DFA state
+compression (174x for PTB's full 45-symbol target: 37,803→217 states) and
+a 331x speedup, by exploiting a structural property called
 token-decomposability.**
 
 
@@ -134,7 +135,7 @@ source symbol, the resulting position sets are identical.
 | FST | TD? | Compression | Violations |
 |-----|-----|-------------|------------|
 | BPE | 100% TD | 1.0x | 0 |
-| **PTB** | **100% TD** | **35.2x** | **0** |
+| **PTB** | **100% TD** | **174x** | **0** |
 | replace | 100% TD | 1.0x | 0 |
 | delete_b | 100% TD | 1.0x | 0 |
 | newspeak2 | 91% TD | 1.8x | 21,195 |
@@ -387,25 +388,30 @@ sets):
 
 $$\text{speedup} \approx \frac{|D|}{|D/{\sim}|}$$
 
-For PTB: $634 / 18 = 35.2\times$ fewer BFS iterations. The measured speedup
-($331\times$) exceeds this because:
+For PTB (full 45-symbol target): $37{,}803 / 217 = 174\times$ fewer BFS
+iterations. (Note: the original 634→18 numbers were from shorter targets
+and used a buggy descriptor that stripped FST state from truncated elements.
+With the fix — including FST state for truncated elements — the compression
+ratio is 174x for the full target.) The measured speedup ($331\times$)
+exceeds the raw state ratio because:
 
-1. **Universality is cheaper**: greatest fixpoint on 18 states vs BFS over 634
+1. **Universality is cheaper**: greatest fixpoint on 217 states vs BFS over 37,803
 2. **No wasted work**: the standard BFS computes transitions for equivalent
    states — all redundant
-3. **Smaller $\mathcal{Q}/\mathcal{R}$**: 18 states vs 634 accelerates
+3. **Smaller $\mathcal{Q}/\mathcal{R}$**: 217 states vs 37,803 accelerates
    downstream operations
 
 ### Cost Breakdown
 
 |  | Standard | Position-Set |
 |--|----------|-------------|
-| **Phase 1** (BFS) | 634 expansions $\times$ $O(\bar{s} \cdot \lvert\Sigma\rvert)$ | 18 expansions $\times$ $O(\bar{s} \cdot \lvert\Sigma\rvert)$ |
-| **Phase 2** (universality) | BFS over 634-state DFA | Fixpoint over 18-state graph |
-| **Phase 3** ($\mathcal{Q}/\mathcal{R}$ build) | 634 states | 18 states |
-| **Total** | $O(634 \cdot \bar{s} \cdot \lvert\Sigma\rvert)$ | $O(18 \cdot \bar{s} \cdot \lvert\Sigma\rvert)$ |
+| **Phase 1** (BFS) | $|D|$ expansions $\times$ $O(\bar{s} \cdot \lvert\Sigma\rvert)$ | $|D/{\sim}|$ expansions $\times$ $O(\bar{s} \cdot \lvert\Sigma\rvert)$ |
+| **Phase 2** (universality) | BFS over $|D|$-state DFA | Fixpoint over $|D/{\sim}|$-state graph |
+| **Phase 3** ($\mathcal{Q}/\mathcal{R}$ build) | $|D|$ states | $|D/{\sim}|$ states |
+| **Total** | $O(|D| \cdot \bar{s} \cdot \lvert\Sigma\rvert)$ | $O(|D/{\sim}| \cdot \bar{s} \cdot \lvert\Sigma\rvert)$ |
 
-where $\bar{s}$ is the average number of NFA states per DFA state.
+where $\bar{s}$ is the average number of NFA states per DFA state, $|D|$ is
+the generic DFA state count, and $|D/{\sim}|$ is the position-set count.
 
 ### When It Helps vs Doesn't
 
@@ -422,7 +428,7 @@ quadrantChart
 
 | FST | Compression | Speedup | Reason |
 |-----|-------------|---------|--------|
-| **PTB** | **35.2x** | **331x** | Many DFA states per position set |
+| **PTB** | **174x** | **331x** | Many DFA states per position set |
 | BPE | 1.0x | ~1x | Every position set already unique |
 | Small FSTs | 1.0–2.0x | ~1x | Already fast, overhead dominates |
 | Non-TD FSTs | N/A | N/A | Raises error |
@@ -550,7 +556,7 @@ checking set equality:
 
 | FST | Standard | GeneralTD | Speedup | $\lvert D\rvert / \lvert D/{\sim}\rvert$ |
 |-----|----------|-----------|---------|-------------|
-| **PTB** | **1.651s** | **0.005s** | **331x** | **35.2x** |
+| **PTB** | **1.651s** | **0.005s** | **331x** | **174x** |
 | BPE(100) | 0.021s | 0.015s | 1.4x | 1.0x |
 | BPE(500) | 1.205s | 1.434s | 0.84x | 1.0x |
 | replace(xyz) | 0.005s | 0.005s | 1.0x | 1.0x |

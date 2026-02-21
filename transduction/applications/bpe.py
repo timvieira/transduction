@@ -1,7 +1,7 @@
 from transduction.lazy import EPSILON
 from transduction.fst import FST
 
-from transduction.lm.statelm import decode_hf_tokenizer
+from transduction.lm.statelm import HfTokenizerVocab
 
 
 
@@ -16,7 +16,7 @@ def bpe_wfst(tokenizer, readable=False):
 
     Args:
         tokenizer: A HuggingFace tokenizer instance.  Its vocabulary is
-            decoded via ``decode_hf_tokenizer``; special tokens are skipped.
+            decoded via ``HfTokenizerVocab``; special tokens are skipped.
         readable: If ``True``, input-side labels are ``Token`` objects that
             display both the integer ID and byte string (useful for
             visualization).  If ``False`` (default), labels are raw ``int``
@@ -29,7 +29,7 @@ def bpe_wfst(tokenizer, readable=False):
     m = FST()
     m.add_start(())
     drop = {x.encode() for x in tokenizer.all_special_tokens}
-    _, _, _decode, _ = decode_hf_tokenizer(tokenizer)
+    _decode = HfTokenizerVocab(tokenizer).decode
     for i, x in enumerate(_decode):
         if x in drop:
             continue

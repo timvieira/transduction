@@ -9,8 +9,8 @@ this works on arbitrary TD FSTs by building the PrecoverNFA DFA but
 quotienting by position sets during BFS — only one representative DFA state
 per position set is expanded.
 
-For PTB (35.2x compression): expands ~18 position sets instead of ~634
-full DFA states.
+For PTB (174x compression): expands ~217 position sets instead of ~37,803
+full DFA states for the full 45-symbol target.
 """
 
 from collections import deque

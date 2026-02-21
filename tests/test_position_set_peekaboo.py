@@ -213,11 +213,13 @@ class TestNonTDRejection:
             _ = ps.decomp
 
     def test_triplets_of_doom(self):
-        """triplets_of_doom is non-TD for target 'a'."""
+        """triplets_of_doom is non-TD but handled correctly: truncated elements
+        include the FST state in their descriptor, preventing wrong collapsing."""
         fst = examples.triplets_of_doom()
-        with pytest.raises(ValueError, match="not token-decomposable"):
-            ps = PositionSetPeekabooState(fst, ('a',))
-            _ = ps.decomp
+        # No longer raises: truncated descriptors now include FST state,
+        # so states with different FST states get distinct position sets.
+        ps = PositionSetPeekabooState(fst, ('a',))
+        _ = ps.decomp  # should complete without error
 
 
 # ---------------------------------------------------------------------------

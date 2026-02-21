@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import numpy as np
 import torch
 import transformers
 from transformers.cache_utils import DynamicCache
 
 from functools import cached_property
+from typing import Any
 
 from transduction.lm.base import LM, LMState
 
@@ -35,9 +38,8 @@ _encode_bytes_str = [
 _default_byte_decoder = {s: i for i, s in enumerate(_encode_bytes_str)}
 
 
-def decode_hf_tokenizer(tokenizer):
-    """Extract BPE merge rules and byte-level encode/decode tables from a
-    HuggingFace tokenizer.
+class HfTokenizerVocab:
+    """Byte-level encode/decode tables extracted from a HuggingFace tokenizer.
 
     Assumptions:
       - The tokenizer is a byte-level BPE tokenizer (GPT-2 style).  Each
@@ -54,48 +56,49 @@ def decode_hf_tokenizer(tokenizer):
       - Every byte 0–255 must appear as a single-byte token in the vocabulary.
         Tokenizers that lack byte-level coverage will raise an error.
 
-    Returns:
-      (merges, encode, decode, encode_byte) where:
-        - merges: list of (left_id, right_id, merged_id) triples
-        - encode: dict mapping bytes → token_id
-        - decode: list mapping token_id → bytes
-        - encode_byte: list mapping byte_value (0–255) → single-byte token_id
+    Attributes:
+      merges: list of (left_id, right_id, merged_id) triples
+      encode: dict mapping bytes → token_id
+      decode: list mapping token_id → bytes
+      encode_byte: list mapping byte_value (0–255) → single-byte token_id
     """
-    _merges = []
-    V = tokenizer.get_vocab()
-    if hasattr(tokenizer, 'bpe_ranks'):
-        for (u, v) in tokenizer.bpe_ranks:
-            _merges.append((V[u], V[v], V[u + v]))
-    else:
-        import json
-        subtokenizer_dict = json.loads(tokenizer._tokenizer.to_str())
-        for (u, v) in subtokenizer_dict["model"]["merges"]:
-            _merges.append((V[u], V[v], V[u + v]))
 
-    if hasattr(tokenizer, 'byte_decoder'):
-        byte_decoder = tokenizer.byte_decoder
-    else:
-        byte_decoder = _default_byte_decoder
+    def __init__(self, tokenizer: Any) -> None:
+        self.tokenizer = tokenizer
 
-    _encode = {}
-    _decode = [None] * len(V)
-    for bs, token_id in V.items():
-        b = bytes([byte_decoder[b] for b in bs])
-        _encode[b] = token_id
-        _decode[token_id] = b
+        self.merges: list[tuple[int, int, int]] = []
+        V = tokenizer.get_vocab()
+        if hasattr(tokenizer, 'bpe_ranks'):
+            for (u, v) in tokenizer.bpe_ranks:
+                self.merges.append((V[u], V[v], V[u + v]))
+        else:
+            import json
+            subtokenizer_dict = json.loads(tokenizer._tokenizer.to_str())
+            for (u, v) in subtokenizer_dict["model"]["merges"]:
+                self.merges.append((V[u], V[v], V[u + v]))
 
-    _encode_byte = [None] * 256
-    for i in range(256):
-        _encode_byte[i] = _encode[bytes([i])]
+        if hasattr(tokenizer, 'byte_decoder'):
+            byte_decoder = tokenizer.byte_decoder
+        else:
+            byte_decoder = _default_byte_decoder
 
-    return (_merges, _encode, _decode, _encode_byte)
+        self.encode: dict[bytes, int] = {}
+        self.decode: list[bytes | None] = [None] * len(V)
+        for bs, token_id in V.items():
+            b = bytes([byte_decoder[b] for b in bs])
+            self.encode[b] = token_id
+            self.decode[token_id] = b
+
+        self.encode_byte: list[int | None] = [None] * 256
+        for i in range(256):
+            self.encode_byte[i] = self.encode[bytes([i])]
 
 
 # ---------------------------------------------------------------------------
 # Utility classes (ported from tokenization.util)
 # ---------------------------------------------------------------------------
 
-def flatten(xs):
+def flatten(xs: tuple[Any, ...]) -> tuple[Any, ...]:
     if len(xs) == 0:
         return ()
     else:
@@ -103,8 +106,8 @@ def flatten(xs):
         return flatten(ys) + (y,)
 
 
-def unflatten(ys):
-    xs = ()
+def unflatten(ys: tuple[Any, ...]) -> tuple[Any, ...]:
+    xs: tuple[Any, ...] = ()
     for y in ys:
         xs = (xs, y)
     return xs
@@ -114,52 +117,53 @@ class LazyProb:
     """Efficiently maps token bytes/ids to their probabilities in an LLM's
     next-token distribution without materializing a full dictionary."""
 
-    def __init__(self, _p, encode, decode):
+    def __init__(self, _p: np.ndarray, encode: dict[bytes, int],
+                 decode: list[bytes | None]) -> None:
         self._p = _p
         self._encode = encode
         self._decode = decode
 
-    def keys(self):
+    def keys(self) -> list[bytes | None]:
         return self._decode
 
-    def values(self):
+    def values(self) -> np.ndarray:
         return self._p
 
-    def items(self):
+    def items(self) -> zip[tuple[bytes | None, Any]]:
         return zip(self._decode, self._p)
 
-    def __contains__(self, token):
+    def __contains__(self, token: bytes | int) -> bool:
         if isinstance(token, int):
             return 0 <= token < len(self._decode)
         return token in self._encode
 
-    def __getitem__(self, token):
+    def __getitem__(self, token: bytes | int) -> float:
         if isinstance(token, int):
             i = token
         else:
             i = self._encode.get(token)
         return self._p[i] if i is not None else 0
 
-    def materialize(self, top=None):
+    def materialize(self, top: int | None = None) -> dict[bytes | None, Any]:
         _p = self._p
         _decode = self._decode
         top_p = _p.argsort() if top is None else _p.argsort()[-int(top):]
-        pp = {}
+        pp: dict[bytes | None, Any] = {}
         for i in reversed(top_p):
             pp[_decode[i]] = _p[i]
         return pp
 
-    def top(self, K):
+    def top(self, K: int) -> dict[bytes | None, Any]:
         return self.materialize(top=K)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return repr(self.materialize())
 
-    def argmax(self):
+    def argmax(self) -> bytes | None:
         """Return the token with the highest log-probability."""
         return self._decode[self._p.argmax()]
 
-    def sample(self):
+    def sample(self) -> bytes | None:
         """Sample a token from the distribution."""
         logps = self._p.copy().astype(np.float64)
         logps -= logps.max()
@@ -167,14 +171,14 @@ class LazyProb:
         probs /= probs.sum()
         return self._decode[np.random.choice(len(probs), p=probs)]
 
-    def apply(self, f):
+    def apply(self, f: Any) -> LazyProb:
         return LazyProb(
             _p=f(self._p),
             encode=self._encode,
             decode=self._decode,
         )
 
-    def copy(self):
+    def copy(self) -> LazyProb:
         return self.apply(lambda x: x.copy())
 
 
@@ -184,29 +188,32 @@ class LazyProb:
 
 # TODO: This class will encounter issues when its token vocabulary has multiple
 # token_ids that map to the same string of bytes.
-class TokenizedLLM(LM):
+class TokenizedLLM(LM[bytes]):
 
-    def __init__(self, tokenizer, model, byte_level=True):
+    def __init__(self, tokenizer: Any, model: Any, byte_level: bool = True) -> None:
         self.tokenizer = tokenizer
         self.model = model
         self.device = model.device
 
         assert byte_level, "Only byte_level=True is supported"
-        (_, self._encode, self._decode, _) = decode_hf_tokenizer(tokenizer)
-        self.eos = self.tokenizer.eos_token.encode()
+        vocab = HfTokenizerVocab(tokenizer)
+        self._encode = vocab.encode
+        self._decode = vocab.decode
+        self.eos: bytes = self.tokenizer.eos_token.encode()
 
-        self._calls = 0
-        self.V = set(self._decode)
+        self._calls: int = 0
+        self.V: set[bytes | None] = set(self._decode)
 
-    def initial(self):
+    def initial(self) -> StateLM:
         return StateLM.initial(self)
 
-    def encode_prompt(self, prompt):
+    def encode_prompt(self, prompt: str) -> tuple[Any, ...]:
         "Encode ``prompt`` as a tuple of tokens (each a bytes object)."
         return unflatten(tuple(self._decode[i] for i in self.tokenizer.encode(prompt)))
 
 
-def load_model_by_name(model_name, device=None, **kwargs):
+def load_model_by_name(model_name: str, device: torch.device | None = None,
+                       **kwargs: Any) -> TokenizedLLM:
     """Load an LLM from HuggingFace into a ``TokenizedLLM``."""
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -221,7 +228,7 @@ def load_model_by_name(model_name, device=None, **kwargs):
     )
 
 
-class StateLM(LMState):
+class StateLM(LMState[bytes]):
     """Immutable LM state for incremental decoding with KV cache sharing.
 
     ``state >> token`` returns a new state; the parent's cache is reused.
@@ -252,14 +259,15 @@ class StateLM(LMState):
     vs. forward pass, safe regardless of ``>>`` ordering.
     """
 
-    def __init__(self, lm, logp, context, parent):
+    def __init__(self, lm: TokenizedLLM, logp: float,
+                 context: tuple[Any, ...], parent: StateLM | None) -> None:
         self.lm = lm
         self.eos = lm.eos
         self.logp = logp
         self.context = context
         self.parent = parent
 
-    def __rshift__(self, x):
+    def __rshift__(self, x: bytes) -> StateLM:
         if x not in self.logp_next or x == self.eos:
             raise ValueError(f"Out of vocabulary: {x!r}")
         return StateLM(
@@ -270,7 +278,7 @@ class StateLM(LMState):
         )
 
     @cached_property
-    def logp_next(self):
+    def logp_next(self) -> LazyProb:  # type: ignore[override]
         with torch.no_grad():
             return LazyProb(
                 torch.nn.functional.log_softmax(self.out.logits, dim=-1).squeeze().detach().numpy(),
@@ -278,7 +286,7 @@ class StateLM(LMState):
             )
 
     @cached_property
-    def out(self):
+    def out(self) -> Any:
         self.lm._calls += 1
         lm = self.lm
         with torch.no_grad():
@@ -289,7 +297,7 @@ class StateLM(LMState):
                 (_, x) = self.context
                 i = lm._encode[x]
                 input_ids = torch.LongTensor([[i]], device=lm.device)
-                past_kv = self.parent.out.past_key_values
+                past_kv = self.parent.out.past_key_values  # type: ignore[union-attr]
                 if isinstance(past_kv, DynamicCache):
                     raise TypeError(
                         "StateLM does not support DynamicCache (mutates in-place, "
@@ -303,17 +311,17 @@ class StateLM(LMState):
                 )
 
     @cached_property
-    def p_next(self):
+    def p_next(self) -> LazyProb:
         return self.logp_next.apply(np.exp)
 
-    def token_ids(self):
+    def token_ids(self) -> list[int]:
         return [self.lm._encode[x] for x in flatten(self.context)]
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f'{self.__class__.__name__}({[x for x in flatten(self.context)]})'
 
     @classmethod
-    def initial(cls, lm):
+    def initial(cls, lm: TokenizedLLM | str) -> StateLM:
         if isinstance(lm, str):
             lm = load_model_by_name(lm, byte_level=True)
         return cls(

@@ -439,7 +439,11 @@ sets and finality:
 | parity_copy | False | 42 | 36 | 1.2x | 71.4% | 83.3% | 0 |
 | **BPE(100)** | **True** | **18** | **18** | **1.0x** | **100.0%** | **100.0%** | **0** |
 | **BPE(500)** | **True** | **95** | **95** | **1.0x** | **100.0%** | **100.0%** | **0** |
-| **PTB** | **False** | **634** | **18** | **35.2x** | **100.0%** | **100.0%** | **0** |
+| **PTB** | **False** | **634** | **18** | **35.2x**† | **100.0%** | **100.0%** | **0** |
+
+†*Update: These PTB numbers (634→18, 35.2x) were from a shorter target and
+used descriptors that stripped FST state from truncated elements. With
+corrected descriptors, the full 45-symbol target gives 37,803→217 (174x).*
 
 ### Key findings
 
@@ -456,17 +460,20 @@ Note: BPE's compression ratio is 1.0x — position sets are already unique, so t
 quotient doesn't compress. `TokenDecompose`'s advantage is not compression but
 *representation*: it avoids constructing `(fst_state, buffer)` pairs entirely.
 
-**2. PTB is 100% TokenDecomposable with 35.2x compression.**
+**2. PTB is TokenDecomposable with significant compression.**
 
 This is the major new finding. PTB has `all_input_universal = False` and 296 FST
-states, yet its DFA transitions are entirely determined by position sets. The
-634 reachable DFA states collapse to just 18 distinct position sets — a **35.2x
-compression ratio**.
+states, yet its DFA transitions are largely determined by position sets.
 
-This means `TokenDecompose` (or a generalization of it) could be applied to PTB,
-achieving a massive state-space reduction. Currently PTB uses the full
-`PrecoverNFA.det()` pipeline, which tracks all `(fst_state, buffer)` pairs.
-Switching to position-only tracking would reduce the DFA from 634 states to 18.
+*Update (2026-02-20):* The original analysis measured 634→18 states (35.2x) on
+a shorter target and used position descriptors that stripped FST state from
+truncated NFA elements. This was later found to produce incorrect results:
+truncated elements need the FST state in their descriptor because truncation
+breaks the TD invariant. With the corrected descriptors (FST state included for
+truncated elements, position-only for non-truncated), the full 45-symbol PTB
+target compresses from 37,803 DFA states to 217 position sets — **174x
+compression**. The compression is less extreme than originally measured but
+still dramatic, and now correct.
 
 **3. `all_input_universal` is sufficient but not necessary for TD.**
 
@@ -492,7 +499,7 @@ position-only quotient from being exact.
 For 100% TD FSTs, the compression ratio directly measures the state-space
 reduction from position-only tracking:
 - BPE: 1.0x (no compression, but simpler representation)
-- PTB: **35.2x** (massive compression)
+- PTB: **174x** (massive compression; corrected from 35.2x)
 - replace/delete_b: 1.0x (simple FSTs, already compact)
 
 For partially TD FSTs, the compression ratio is modest (1.2-2.0x), and the
@@ -538,9 +545,10 @@ efficient representation of this same abstract DFA.
 
 ### Major finding: PTB is 100% TokenDecomposable
 
-PTB's DFA transitions depend only on position sets, with **35.2x compression**
-(634 DFA states collapse to 18 position sets). This means a `TokenDecompose`-
-style algorithm could handle PTB, reducing the state space by a factor of 35.
+PTB's DFA transitions depend on position sets, with **174x compression** on the
+full 45-symbol target (37,803→217 position sets). Truncated NFA elements require
+the FST state in their descriptor for correctness; non-truncated elements
+compress by position only.
 
 This finding was unexpected because PTB has `all_input_universal = False` — the
 property that was assumed to be necessary for `TokenDecompose`-style algorithms.
@@ -551,7 +559,7 @@ condition than `all_input_universal`.
 
 1. **For BPE**: Continue using `TokenDecompose` (Python) or the Rust backend.
 
-2. **For PTB**: **Generalize `TokenDecompose` to handle PTB.** The 35.2x
+2. **For PTB**: **Generalize `TokenDecompose` to handle PTB.** The 174x
    compression ratio makes this highly worthwhile. The key challenge is that
    PTB lacks `all_input_universal`, so universality is non-trivial — but the
    position-only quotient is still exact. A generalized `TokenDecompose` would

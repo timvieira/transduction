@@ -304,7 +304,7 @@ class FSA(Generic[A]):
 
     def rename_apart(self, other: FSA[A]) -> tuple[FSA[A], FSA[A]]:
         """Rename states of ``self`` and ``other`` so their state sets are disjoint."""
-        f: Integerizer[Any] = Integerizer()
+        f: Integerizer[State] = Integerizer()
         self = self.rename(lambda i: f((0, i)))
         other = other.rename(lambda i: f((1, i)))
         assert self.states.isdisjoint(other.states)
@@ -363,7 +363,7 @@ class FSA(Generic[A]):
                 eps_m._add_eps(i, j)
 
         @lru_cache
-        def eps_accessible(i: Any) -> set[Any]:
+        def eps_accessible(i: State) -> set[State]:
             return eps_m._accessible({i})
 
         m: FSA[A] = FSA()
@@ -388,7 +388,7 @@ class FSA(Generic[A]):
         """Determinize via the powerset (subset) construction. Returns a DFA."""
         self = self.epsremove()
 
-        def powerarcs(Q: Any) -> Iterator[tuple[A, Any]]:
+        def powerarcs(Q: State) -> Iterator[tuple[A, State]]:
             for a in self.syms:
                 yield a, frozenset(j for i in Q for j in self.edges[i][a])
 
@@ -439,21 +439,21 @@ class FSA(Generic[A]):
         self = self.det().renumber()
 
         # calculate inverse of transition function (i.e., reverse arcs)
-        inv: defaultdict[tuple[Any, A], set[Any]] = defaultdict(set)
+        inv: defaultdict[tuple[State, A], set[State]] = defaultdict(set)
         for i,a,j in self.arcs():
             inv[j,a].add(i)
 
         final = self.stop
         nonfinal = self.states - final
 
-        P: list[set[Any]] = [final, nonfinal]
-        W: list[set[Any]] = [final, nonfinal]
+        P: list[set[State]] = [final, nonfinal]
+        W: list[set[State]] = [final, nonfinal]
 
         while W:
             S = W.pop()
             for a in self.syms:
                 X = {i for j in S for i in inv[j,a]}
-                R: list[set[Any]] = []
+                R: list[set[State]] = []
                 for Y in P:
                     if X.isdisjoint(Y) or X >= Y:
                         R.append(Y)
@@ -466,7 +466,7 @@ class FSA(Generic[A]):
                 P = R
 
         # create new equivalence classes of states
-        minstates: dict[Any, int] = {}
+        minstates: dict[State, int] = {}
         for i, qs in enumerate(P):
             for q in qs:
                 minstates[q] = i #minstate
@@ -482,17 +482,17 @@ class FSA(Generic[A]):
         self = self.det().renumber()
 
         # calculate inverse of transition function (i.e., reverse arcs)
-        inv: defaultdict[tuple[Any, A], set[Any]] = defaultdict(set)
+        inv: defaultdict[tuple[State, A], set[State]] = defaultdict(set)
         for i,a,j in self.arcs():
             inv[j,a].add(i)
 
         final = self.stop
         nonfinal = self.states - final
 
-        P: list[set[Any]] = [final, nonfinal]
-        W: list[set[Any]] = [final, nonfinal]
+        P: list[set[State]] = [final, nonfinal]
+        W: list[set[State]] = [final, nonfinal]
 
-        find: dict[Any, int] = {i: block for block, elements in enumerate(P) for i in elements}
+        find: dict[State, int] = {i: block for block, elements in enumerate(P) for i in elements}
 
         while W:
 
@@ -502,7 +502,7 @@ class FSA(Generic[A]):
                 # Group pre-images by their current block; this lets us
                 # replace the O(|Y|) superset check `X >= Y` with an
                 # O(1) length comparison.
-                block_members: defaultdict[int, set[Any]] = defaultdict(set)
+                block_members: defaultdict[int, set[State]] = defaultdict(set)
                 for j in S:
                     for i in inv[j, a]:
                         block_members[find[i]].add(i)
@@ -556,11 +556,11 @@ class FSA(Generic[A]):
         [q] = other.start
 
         stack = [(p, q)]
-        iso: dict[Any, Any] = {p: q}
+        iso: dict[State, State] = {p: q}
 
         syms = self.syms | other.syms
 
-        done: set[tuple[Any, Any]] = set()
+        done: set[tuple[State, State]] = set()
         while stack:
             (p, q) = stack.pop()
             done.add((p,q))
@@ -592,7 +592,7 @@ class FSA(Generic[A]):
         self = self.epsremove().renumber()
         other = other.epsremove().renumber()
 
-        def product_arcs(Q: Any) -> Iterator[tuple[A, Any]]:
+        def product_arcs(Q: State) -> Iterator[tuple[A, State]]:
             (q1, q2) = Q
             for a, j1 in self.arcs(q1):
                 for j2 in other.edges[q2][a]:
@@ -664,7 +664,7 @@ class FSA(Generic[A]):
 
         # quotient arcs are very similar to product arcs except that the common
         # string is "erased" in the new machine.
-        def quotient_arcs(Q: Any) -> Iterator[tuple[str, Any]]:
+        def quotient_arcs(Q: State) -> Iterator[tuple[str, State]]:
             (q1, q2) = Q
             for a, j1 in self.arcs(q1):
                 for j2 in other.edges[q2][a]:
@@ -747,7 +747,7 @@ class FSA(Generic[A]):
     def merge(self, S: set[State], name: State | None = None) -> FSA[A]:
         """Merge all states in ``S`` into a single state (default name: ``min(S)``)."""
         if name is None: name = min(S)
-        def f(s: Any) -> Any:
+        def f(s: State) -> State:
             return name if s in S else s
         m: FSA[A] = FSA()
         for x in self.start:
@@ -770,7 +770,7 @@ class FSA(Generic[A]):
 
     def language(self, max_length: int | None = None) -> Iterator[Str[A]]:
         "Enumerate strings in the language of this FSA."
-        worklist: deque[tuple[Any, Str[A]]] = deque()
+        worklist: deque[tuple[State, Str[A]]] = deque()
         worklist.extend([(i, ()) for i in self.start])
         while worklist:
             (i, x) = worklist.popleft()

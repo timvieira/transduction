@@ -20,34 +20,39 @@ Usage:
     state = state >> 'a'
 """
 
+from __future__ import annotations
+
 import numpy as np
 from functools import cached_property
+from typing import Any
 
 from transduction.fsa import EPSILON
-from transduction.lm.base import LM, LMState
-from transduction.util import LogDistr, log1mexp, logsumexp
+from transduction.fst import FST
+from transduction.lm.base import LM, LMState, Token
+from transduction.util import LogDistr, Str, log1mexp, logsumexp
 from transduction.precover import Precover
 
 
-class ReferenceTransducedLM(LM):
+class ReferenceTransducedLM(LM[Token]):
     """Ground-truth transduced LM using Precover decomposition.
 
     Computes exact next-token probabilities by enumerating Q/R languages.
     Only terminates when Q and R are finite.
     """
 
-    def __init__(self, inner_lm, fst, eos='<EOS>'):
+    def __init__(self, inner_lm: LM, fst: FST[Any, Any],
+                 eos: Token = '<EOS>') -> None:  # type: ignore[assignment]
         self.inner_lm = inner_lm
         self.fst = fst
         self.eos = eos
         self._decomp = Precover.factory(fst)
         self._target_alphabet = fst.B - {EPSILON}
 
-    def initial(self):
+    def initial(self) -> ReferenceTransducedState:
         return ReferenceTransducedState(self, (), 0.0)
 
 
-class ReferenceTransducedState(LMState):
+class ReferenceTransducedState(LMState[Token]):
     """Immutable state for the ReferenceTransducedLM.
 
     Supports:
@@ -57,14 +62,15 @@ class ReferenceTransducedState(LMState):
         state.eos          -> EOS token
     """
 
-    def __init__(self, tlm, target, logp):
+    def __init__(self, tlm: ReferenceTransducedLM, target: Str[Token],
+                 logp: float) -> None:
         self.tlm = tlm
         self.eos = tlm.eos
         self._target = target
         self.logp = logp
 
     # Note: this is independent of the state
-    def _score(self, prefix):
+    def _score(self, prefix: Str[Token]) -> float:
         """Compute log P(output starts with prefix).
 
         Uses the Precover decomposition:
@@ -79,7 +85,7 @@ class ReferenceTransducedState(LMState):
         # of inner LM state updates
         result = self.tlm._decomp(prefix)
         inner_eos = self.tlm.inner_lm.eos
-        parts = []
+        parts: list[float] = []
         for src in result.quotient.language():
             state = self.tlm.inner_lm(src)
             parts.append(state.logp)
@@ -89,9 +95,9 @@ class ReferenceTransducedState(LMState):
         return logsumexp(parts)
 
     @cached_property
-    def logp_next(self):
+    def logp_next(self) -> LogDistr[Token]:
         Z = self._score(self._target)
-        scores = {}
+        scores: dict[Token, float] = {}
         for y in self.tlm._target_alphabet:
             s = self._score(self._target + (y,))
             if s > -np.inf:
@@ -102,7 +108,7 @@ class ReferenceTransducedState(LMState):
         scores[self.eos] = log1mexp(logsumexp(list(scores.values())))
         return LogDistr(scores)
 
-    def __rshift__(self, y):
+    def __rshift__(self, y: Token) -> ReferenceTransducedState:
         if y == self.eos:
             raise ValueError("Cannot advance past EOS")
         lp = self.logp_next[y]
@@ -110,14 +116,14 @@ class ReferenceTransducedState(LMState):
             raise ValueError(f"Symbol {y!r} has zero probability")
         return ReferenceTransducedState(self.tlm, self._target + (y,), self.logp + lp)
 
-    def path(self):
+    def path(self) -> list[Token]:
         return list(self._target)
 
-    def _repr_html_(self):
+    def _repr_html_(self) -> str:
         from transduction.viz import render_logp_next_html
         return render_logp_next_html(
             'ReferenceTransducedState', self._target, self.logp, self.logp_next,
         )
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f'ReferenceTransducedState(target={self._target!r})'

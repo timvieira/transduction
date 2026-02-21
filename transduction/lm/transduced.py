@@ -32,13 +32,16 @@ Usage:
     print(state.logp)
 """
 
+from __future__ import annotations
+
 import heapq
 import numpy as np
 from collections import defaultdict
+from typing import Any
 
-from transduction import EPSILON
-from transduction.lm.base import LM, LMState
-from transduction.util import logsumexp, LogVector
+from transduction.lm.base import LM, LMState, Token
+from transduction.fst import FST
+from transduction.util import LogDistr, LogVector, State, Str
 from transduction.viz import _format_nfa_set, render_particles_html
 
 # Default incremental decomposition (Rust backend).
@@ -58,17 +61,18 @@ class Particle:
     """
     __slots__ = ('dfa_state', 'lm_state', 'log_weight', 'source_path')
 
-    def __init__(self, dfa_state, lm_state, log_weight, source_path):
+    def __init__(self, dfa_state: State, lm_state: LMState, log_weight: float,
+                 source_path: Str[Token]) -> None:
         self.dfa_state = dfa_state
         self.lm_state = lm_state
         self.log_weight = log_weight
         self.source_path = source_path
 
-    def __lt__(self, other):
+    def __lt__(self, other: Particle) -> bool:
         # max-heap: higher weight = higher priority
         return self.log_weight > other.log_weight
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f'Particle(w={self.log_weight:.3f}, {self.source_path})'
 
 
@@ -83,7 +87,9 @@ class _RhoExpander:
     __slots__ = ('rho_dest', 'lm_state', 'source_path',
                  '_sorted', '_index')
 
-    def __init__(self, rho_dest, lm_state, source_path, sorted_children):
+    def __init__(self, rho_dest: State, lm_state: LMState,
+                 source_path: Str[Token],
+                 sorted_children: list[tuple[float, Token]]) -> None:
         self.rho_dest = rho_dest
         self.lm_state = lm_state
         self.source_path = source_path
@@ -91,18 +97,18 @@ class _RhoExpander:
         self._index = 0
 
     @property
-    def log_weight(self):
+    def log_weight(self) -> float:
         return self._sorted[self._index][0]
 
-    def __lt__(self, other):
+    def __lt__(self, other: _RhoExpander | Particle) -> bool:
         # max-heap: higher weight = higher priority (matches Particle)
         return self.log_weight > other.log_weight
 
     @property
-    def exhausted(self):
+    def exhausted(self) -> bool:
         return self._index >= len(self._sorted)
 
-    def pop_next(self):
+    def pop_next(self) -> Particle:
         """Materialize the next highest-weight child Particle."""
         w, x = self._sorted[self._index]
         self._index += 1
@@ -114,7 +120,7 @@ class _RhoExpander:
 # Selection
 # ---------------------------------------------------------------------------
 
-def _select_top_k(particles, k):
+def _select_top_k(particles: list[Particle], k: int) -> list[Particle]:
     """Select the k highest-weight particles in O(n) expected time."""
     n = len(particles)
     if n <= k:
@@ -130,7 +136,7 @@ def _select_top_k(particles, k):
 # TransducedState
 # ---------------------------------------------------------------------------
 
-class TransducedState(LMState):
+class TransducedState(LMState[Token]):
     """Immutable state for the TransducedLM.
 
     Supports:
@@ -146,27 +152,29 @@ class TransducedState(LMState):
     passes particles at Q/R/resume-frontier states to the next target step.
     """
 
-    def __init__(self, tlm, peekaboo_state, particles, logp, path=()):
+    def __init__(self, tlm: TransducedLM, peekaboo_state: State,
+                 particles: list[Particle], logp: float,
+                 path: Str[Token] = ()) -> None:
         self.tlm = tlm
         self.eos = tlm.eos
         self._peekaboo_state = peekaboo_state
         self._particles = particles
         self.logp = logp
         self.path = path
-        self._logp_next_cache = None
-        self._carry_forward = None
+        self._logp_next_cache: LogDistr[Token] | None = None
+        self._carry_forward: dict[Token, list[Particle]] | None = None
 
-    def _ensure_computed(self):
+    def _ensure_computed(self) -> None:
         if self._logp_next_cache is None:
             self._compute_logp_next()
 
     @property
-    def logp_next(self):
+    def logp_next(self) -> LogDistr[Token]:
         """Log-probability distribution over next target symbols."""
         self._ensure_computed()
-        return self._logp_next_cache
+        return self._logp_next_cache  # type: ignore[return-value]
 
-    def __rshift__(self, y):
+    def __rshift__(self, y: Token) -> TransducedState:
         """Advance by target symbol ``y``, returning a new TransducedState."""
         if y not in self.tlm.fst.B:
             raise ValueError(f"Out of vocabulary: {y!r}")
@@ -175,18 +183,28 @@ class TransducedState(LMState):
         # Advance peekaboo decomposition state
         new_peekaboo = self._peekaboo_state >> y
 
-        # Translate carry-forward particles `carry_forward[y]` into the new DFA.
-        # Resume-frontier states persist directly; others are replayed
-        # through the child DFA using the source path from the LM state.
+        # Translate carry-forward particles into the new DFA.
+        # Resume-frontier states can be kept directly when the Rust arena
+        # hasn't been reset (same generation); otherwise all particles must
+        # be replayed through run() because DFA state IDs are stale.
         carry = self._carry_forward.get(y, [])
-        resume = self._peekaboo_state.resume_frontiers.get(y, set())
         new_dfa = new_peekaboo.dfa
+        parent_gen = getattr(self._peekaboo_state, 'generation', None)
+        child_gen = getattr(new_peekaboo, 'generation', None)
+        ids_valid = (parent_gen is not None and parent_gen == child_gen)
 
         new_particles = []
-        for p in carry:
-            if p.dfa_state in resume:
-                new_particles.append(p)
-            else:
+        if ids_valid:
+            resume = self._peekaboo_state.resume_frontiers.get(y, set())
+            for p in carry:
+                if p.dfa_state in resume:
+                    new_particles.append(p)
+                else:
+                    s = new_dfa.run(p.source_path)
+                    assert s is not None
+                    new_particles.append(Particle(s, p.lm_state, p.log_weight, p.source_path))
+        else:
+            for p in carry:
                 s = new_dfa.run(p.source_path)
                 assert s is not None
                 new_particles.append(Particle(s, p.lm_state, p.log_weight, p.source_path))
@@ -199,7 +217,7 @@ class TransducedState(LMState):
             path = self.path + (y,),
         )
 
-    def _compute_logp_next(self):
+    def _compute_logp_next(self) -> None:
         """Best-first search through the DFA to score next target symbols.
 
         Pops the highest-weight particle, classifies its DFA state, scores
@@ -225,11 +243,11 @@ class TransducedState(LMState):
                 resume_of.setdefault(state, set()).add(y)
 
         # --- Accumulators ---
-        scores = LogVector()
-        carry_forward = defaultdict(list)   # y -> [particle, ...]
-        cf_paths = defaultdict(set)         # y -> set of source_paths added
+        scores: LogVector[Token] = LogVector()
+        carry_forward: defaultdict[Token, list[Particle]] = defaultdict(list)
+        cf_paths: defaultdict[Token, set[Str[Token]]] = defaultdict(set)
 
-        def _score(particle):
+        def _score(particle: Particle) -> tuple[set[Token], set[Token]]:
             """Classify particle and accumulate scores.
 
             Returns (q_syms, r_syms) for the particle's DFA state.
@@ -264,7 +282,7 @@ class TransducedState(LMState):
 
             return q_syms, r_syms
 
-        def _add_carry_checked(y, particle):
+        def _add_carry_checked(y: Token, particle: Particle) -> None:
             """Add particle to carry_forward[y], skipping duplicates and prefix-dominated paths.
 
             If the exact source_path or a shorter prefix is already in cf_paths[y],
@@ -278,7 +296,8 @@ class TransducedState(LMState):
             carry_forward[y].append(particle)
             cf_paths[y].add(path)
 
-        def _carry_forward(particle, q_syms, r_syms):
+        def _carry_forward(particle: Particle, q_syms: set[Token],
+                           r_syms: set[Token]) -> None:
             """Add particle to carry-forward sets for relevant symbols.
 
             Q-absorbed particles are not expanded, so they cannot create
@@ -373,7 +392,7 @@ class TransducedState(LMState):
         self._logp_next_cache = scores.normalize()
         self._carry_forward = carry_forward
 
-    def _repr_html_(self):
+    def _repr_html_(self) -> str:
         decomp = self._peekaboo_state.decomp
         q_states, r_states = set(), set()
         for d in decomp.values():
@@ -382,8 +401,8 @@ class TransducedState(LMState):
 
         ps = self._peekaboo_state
         can_decode = hasattr(ps, 'decode_dfa_state')
-        decode_cache = {}
-        def decode_fn(dfa_state):
+        decode_cache: dict[State, str] = {}
+        def decode_fn(dfa_state: State) -> str:
             if not can_decode:
                 return str(dfa_state)
             if dfa_state not in decode_cache:
@@ -409,7 +428,7 @@ class TransducedState(LMState):
         )
         return result
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return (f'TransducedState(target={self._peekaboo_state.target!r},'
                 f' K={len(self._particles)})')
 
@@ -418,7 +437,7 @@ class TransducedState(LMState):
 # TransducedLM
 # ---------------------------------------------------------------------------
 
-class TransducedLM(LM):
+class TransducedLM(LM[Token]):
     """Incremental transduced language model with particle-based inference.
 
     Computes the pushforward of an inner LM through an FST using a beam of
@@ -452,8 +471,10 @@ class TransducedLM(LM):
         ``max_expansions`` to ``K``.
     """
 
-    def __init__(self, inner_lm, fst, K, max_expansions=1000, eos='<EOS>',
-                 decomp_state_cls=None, univ_cls=_DefaultUniv):
+    def __init__(self, inner_lm: LM, fst: FST[Any, Any], K: int,
+                 max_expansions: int = 1000, eos: Token = '<EOS>',  # type: ignore[assignment]
+                 decomp_state_cls: type | None = None,
+                 univ_cls: type = _DefaultUniv) -> None:
         self.inner_lm = inner_lm
         self.fst = fst
         self.max_expansions = max_expansions
@@ -462,7 +483,7 @@ class TransducedLM(LM):
         self._decomp_state_cls = decomp_state_cls or _DefaultDecompState
         self._univ = univ_cls(fst)
 
-    def initial(self):
+    def initial(self) -> TransducedState:
         """Return the initial TransducedState (empty target prefix)."""
         peekaboo = self._decomp_state_cls(self.fst, '', parent=None, univ=self._univ)
         inner_initial = self.inner_lm.initial()
@@ -476,5 +497,5 @@ class TransducedLM(LM):
             ],
         )
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f'TransducedLM(inner={self.inner_lm!r})'

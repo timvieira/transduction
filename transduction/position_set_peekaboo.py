@@ -4,8 +4,8 @@ Position-set peekaboo decomposition for token-decomposable FSTs.
 Quotients the PeekabooLookaheadNFA DFA by position descriptor sets: frozensets
 of (buf_len, extra_sym_or_None, truncated) triples.  Under token-decomposability,
 states with the same position set have identical transitions, finality, and
-per-symbol Q/R classification, giving dramatic compression (e.g., 634->18 states
-for PTB).
+per-symbol Q/R classification, giving dramatic compression (e.g., 174x:
+37,803->217 states for PTB).
 
 Implements the decomp_state_cls interface for TransducedLM.
 
@@ -33,13 +33,19 @@ from transduction.peekaboo_incremental import FstUniversality, TruncatedDFA
 def _peekaboo_position_set(dfa_state, N):
     """Extract peekaboo position set from a PeekabooLookaheadNFA DFA state.
 
-    Each NFA triple (fst_state, buffer, truncated) maps to a position descriptor
-    (buf_len, extra_sym_or_None, truncated).  extra_sym is buf[N] when
-    buf_len > N, None otherwise.  The position set is the frozenset of all
-    descriptors in the DFA state.
+    Each NFA triple (fst_state, buffer, truncated) maps to a position descriptor.
+    - **Truncated** elements include the FST state: (q, buf_len, extra_sym, True).
+      Truncation breaks TD because all output arcs are followed regardless of
+      target match, so the FST state determines transitions and finality.
+    - **Non-truncated** elements use position only: (buf_len, extra_sym, False).
+      TD guarantees equivalence across FST states.
     """
     return frozenset(
-        (len(buf), buf[N] if len(buf) > N else None, truncated)
+        # Truncated: include FST state (identity matters for transitions & finality)
+        (q, len(buf), buf[N] if len(buf) > N else None, True)
+        if truncated else
+        # Non-truncated: position only (TD guarantees equivalence)
+        (len(buf), buf[N] if len(buf) > N else None, False)
         for (q, buf, truncated) in dfa_state
     )
 
@@ -127,7 +133,7 @@ class PositionSetPeekabooState:
 
     Quotients the PeekabooLookaheadNFA DFA by position descriptor sets.
     For token-decomposable FSTs, this gives identical Q/R with dramatically
-    fewer states (e.g., 634->18 for PTB).
+    fewer states (e.g., 174x compression for PTB).
 
     Attributes (lazy, computed on first access):
         decomp : dict[symbol, DecompositionResult]
@@ -259,8 +265,14 @@ class PositionSetPeekabooState:
             rep = canonical[ps]
 
             # Relevant symbols: position descriptors with buf_len > N
+            # Descriptors are 3-tuples (buf_len, extra_sym, False) for non-truncated
+            # or 4-tuples (q, buf_len, extra_sym, True) for truncated
             relevant_symbols = set()
-            for (buf_len, extra_sym, truncated) in ps:
+            for desc in ps:
+                if len(desc) == 4:
+                    _q, buf_len, extra_sym, _trunc = desc
+                else:
+                    buf_len, extra_sym, _trunc = desc
                 if buf_len > N and extra_sym is not None:
                     relevant_symbols.add(extra_sym)
 

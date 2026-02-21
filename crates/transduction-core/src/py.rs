@@ -605,6 +605,12 @@ impl RustDirtyPeekabooDecomp {
         rho::RHO
     }
 
+    /// Generation counter — incremented on every full_reset().
+    /// Used by Python to detect when DFA state IDs have been invalidated.
+    fn generation(&self) -> u64 {
+        self.persistent.generation()
+    }
+
     /// Run a source path (sequence of u32 labels) from the global start state.
     /// Returns the reached DFA state, or None if any arc is missing.
     fn run(&self, source_path: Vec<u32>) -> Option<u32> {
@@ -907,6 +913,200 @@ impl RustLazyPeekabooDFA {
     /// Return the RHO sentinel label value.
     fn rho_label(&self) -> u32 {
         rho::RHO
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Position-set peekaboo decomposition
+// ---------------------------------------------------------------------------
+
+/// Python-visible position-set peekaboo decomposition wrapper.
+/// Exploits token-decomposability for dramatic state compression.
+#[pyclass(unsendable)]
+pub struct RustPositionSetPeekabooDecomp {
+    fst: Py<RustFst>,
+    persistent: crate::position_set_peekaboo::PositionSetPeekaboo,
+}
+
+#[pymethods]
+impl RustPositionSetPeekabooDecomp {
+    #[new]
+    fn new(py: Python<'_>, fst: Py<RustFst>) -> Self {
+        let persistent = crate::position_set_peekaboo::PositionSetPeekaboo::new(
+            &fst.borrow(py).inner,
+        );
+        RustPositionSetPeekabooDecomp { fst, persistent }
+    }
+
+    /// Decompose the FST for the given target, returning a lightweight
+    /// PeekabooBeamView for beam search.
+    fn decompose_for_beam(&mut self, py: Python<'_>, target: Vec<u32>) -> PyResult<PeekabooBeamView> {
+        let fst = &self.fst.borrow(py).inner;
+        self.persistent.decompose_bfs_only(fst, &target);
+
+        let step_n = target.len() as u16;
+        let start_id = self.persistent.global_start_id();
+        let preimage_stops = self.persistent.compute_preimage_stops(fst, step_n);
+        let resume_frontiers_raw = self.persistent.compute_resume_frontiers();
+
+        let idx_to_sym = self.persistent.idx_to_sym();
+        let reachable_flags = self.persistent.reachable_flags();
+
+        let mut decomp_q: Vec<(u32, Vec<u32>)> = Vec::new();
+        for (&y_idx, sids) in self.persistent.decomp_q() {
+            let sym = idx_to_sym[y_idx as usize];
+            let filtered: Vec<u32> = sids.iter()
+                .filter(|&&sid| (sid as usize) < reachable_flags.len() && reachable_flags[sid as usize])
+                .copied().collect();
+            if !filtered.is_empty() {
+                decomp_q.push((sym, filtered));
+            }
+        }
+
+        let mut decomp_r: Vec<(u32, Vec<u32>)> = Vec::new();
+        for (&y_idx, sids) in self.persistent.decomp_r() {
+            let sym = idx_to_sym[y_idx as usize];
+            let filtered: Vec<u32> = sids.iter()
+                .filter(|&&sid| (sid as usize) < reachable_flags.len() && reachable_flags[sid as usize])
+                .copied().collect();
+            if !filtered.is_empty() {
+                decomp_r.push((sym, filtered));
+            }
+        }
+
+        let mut resume_frontiers: Vec<(u32, Vec<u32>)> = Vec::new();
+        for (y_idx, sids) in resume_frontiers_raw {
+            let sym = idx_to_sym[y_idx as usize];
+            resume_frontiers.push((sym, sids));
+        }
+
+        Ok(PeekabooBeamView {
+            start_id,
+            preimage_stops,
+            decomp_q,
+            decomp_r,
+            resume_frontiers,
+        })
+    }
+
+    /// Return the arcs from a DFA state.
+    fn arcs_for(&self, py: Python<'_>, state_id: u32) -> Vec<(u32, u32)> {
+        let _ = py;
+        if self.persistent.state_has_rho(state_id) {
+            let (_, rho_dest, explicit) = self.persistent.rho_arcs(state_id);
+            let mut result = explicit;
+            if let Some(rd) = rho_dest {
+                let explicit_syms: rustc_hash::FxHashSet<u32> = result.iter()
+                    .map(|&(lbl, _)| lbl)
+                    .collect();
+                for &sym in self.persistent.source_alphabet() {
+                    if !explicit_syms.contains(&sym) {
+                        result.push((sym, rd));
+                    }
+                }
+            }
+            result
+        } else {
+            self.persistent.arcs_from(state_id).to_vec()
+        }
+    }
+
+    /// Return rho-arc information for a DFA state.
+    fn rho_arcs_for(&self, py: Python<'_>, state_id: u32) -> (bool, Option<u32>, Vec<(u32, u32)>) {
+        let _ = py;
+        self.persistent.rho_arcs(state_id)
+    }
+
+    /// Return the source alphabet.
+    fn source_alphabet(&self, py: Python<'_>) -> Vec<u32> {
+        let _ = py;
+        self.persistent.source_alphabet().to_vec()
+    }
+
+    /// Return the RHO sentinel label value.
+    fn rho_label(&self) -> u32 {
+        rho::RHO
+    }
+
+    /// Generation counter — incremented on every full_reset().
+    /// Used by Python to detect when DFA state IDs have been invalidated.
+    fn generation(&self) -> u64 {
+        self.persistent.generation()
+    }
+
+    /// Run a source path from the global start state.
+    fn run(&self, source_path: Vec<u32>) -> Option<u32> {
+        self.persistent.run(&source_path)
+    }
+
+    /// Decode a DFA state ID to its NFA constituents (via canonical rep).
+    fn decode_state(&self, state_id: u32) -> Vec<(u32, u16, u16, bool)> {
+        self.persistent.canonical_rep(state_id)
+            .iter()
+            .map(|&packed| crate::peekaboo::unpack_peekaboo(packed))
+            .collect()
+    }
+
+    /// Return the idx→symbol mapping.
+    fn idx_to_sym_map(&self) -> Vec<u32> {
+        self.persistent.idx_to_sym().to_vec()
+    }
+
+    /// Decompose the FST for the given target, returning per-symbol Q/R.
+    #[pyo3(signature = (target, minimize=false))]
+    fn decompose(&mut self, py: Python<'_>, target: Vec<u32>, minimize: bool) -> PyResult<PeekabooDecompResult> {
+        let result = self.persistent.decompose(&self.fst.borrow(py).inner, &target);
+
+        let mut per_symbol = rustc_hash::FxHashMap::default();
+        let mut symbols: Vec<u32> = result.per_symbol.keys().copied().collect();
+        symbols.sort_unstable();
+
+        for (sym, (q_fsa, r_fsa)) in result.per_symbol {
+            let (q_fsa, r_fsa) = if minimize {
+                (minimize::minimize(&q_fsa), minimize::minimize(&r_fsa))
+            } else {
+                (q_fsa, r_fsa)
+            };
+
+            let q = Py::new(py, RustFsa {
+                num_states: q_fsa.num_states, start: q_fsa.start, stop: q_fsa.stop,
+                src: q_fsa.arc_src, lbl: q_fsa.arc_lbl, dst: q_fsa.arc_dst,
+            })?;
+            let r = Py::new(py, RustFsa {
+                num_states: r_fsa.num_states, start: r_fsa.start, stop: r_fsa.stop,
+                src: r_fsa.arc_src, lbl: r_fsa.arc_lbl, dst: r_fsa.arc_dst,
+            })?;
+
+            per_symbol.insert(sym, (q, r));
+        }
+
+        let s = &result.stats;
+        let stats = Py::new(py, RustPeekabooStats {
+            total_ms: s.total_ms,
+            init_ms: s.init_ms,
+            bfs_ms: s.bfs_ms,
+            extract_ms: s.extract_ms,
+            num_steps: s.num_steps,
+            per_step_visited: s.per_step_visited.clone(),
+            per_step_frontier_size: s.per_step_frontier_size.clone(),
+            total_bfs_visited: s.total_bfs_visited,
+            compute_arcs_ms: s.compute_arcs_ms,
+            compute_arcs_calls: s.compute_arcs_calls,
+            intern_ms: s.intern_ms,
+            intern_calls: s.intern_calls,
+            universal_ms: s.universal_ms,
+            universal_calls: s.universal_calls,
+            universal_true: s.universal_true,
+            universal_false: s.universal_false,
+            arena_size: s.arena_size,
+            max_powerset_size: s.max_powerset_size,
+            avg_powerset_size: s.avg_powerset_size,
+            merged_incoming_states: s.merged_incoming_states,
+            merged_incoming_arcs: s.merged_incoming_arcs,
+            eps_cache_clears: s.eps_cache_clears,
+        })?;
+
+        Ok(PeekabooDecompResult { per_symbol, symbols, stats })
     }
 }
 

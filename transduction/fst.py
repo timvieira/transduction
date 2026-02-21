@@ -329,7 +329,7 @@ class FST(Generic[A, B]):
         other: FSA[Any] = d.invert(self.A - {EPSILON}).min()  # pyright: ignore[reportOperatorIssue,reportUnknownMemberType,reportUnknownArgumentType,reportUnknownVariableType]
 
         _ns = object()  # unique namespace sentinel — cannot collide with any existing state
-        def gensym(i: Any) -> tuple[object, Any]: return (_ns, i)
+        def gensym(i: State) -> tuple[object, State]: return (_ns, i)
         m = self.spawn(keep_arcs=True, keep_init=True, keep_stop=True)
 
         # copy arcs from `other` such that they read the same symbol, but now
@@ -569,11 +569,11 @@ class FST(Generic[A, B]):
 
         # --- Phase 1: Build product automaton (q1, q2) sharing input ---
         # Forward reachability from all start pairs.
-        product_arcs: dict[tuple[Any, Any], list[tuple[Any, Any, Any, Any, Any]]] = {}
-        product_final: set[tuple[Any, Any]] = set()
+        product_arcs: dict[tuple[State, State], list[tuple[Any, Any, Any, State, State]]] = {}
+        product_final: set[tuple[State, State]] = set()
 
-        fwd: set[tuple[Any, Any]] = set()
-        queue: deque[tuple[Any, Any]] = deque()
+        fwd: set[tuple[State, State]] = set()
+        queue: deque[tuple[State, State]] = deque()
         for s1 in t.start:
             for s2 in t.start:
                 pair = (s1, s2)
@@ -584,7 +584,7 @@ class FST(Generic[A, B]):
             q1, q2 = pair = queue.popleft()
             if q1 in t.stop and q2 in t.stop:
                 product_final.add(pair)
-            arcs: list[tuple[Any, Any, Any, Any, Any]] = []
+            arcs: list[tuple[Any, Any, Any, State, State]] = []
             for a, b1, j1 in t.arcs(q1):
                 for a2, b2, j2 in t.arcs(q2):
                     if a != a2:
@@ -602,13 +602,13 @@ class FST(Generic[A, B]):
         assert product_final, "product_final empty: (s,s) always reaches (f,f) after trim"
 
         # --- Phase 2: Backward reachability → co-accessible states ---
-        rev: defaultdict[tuple[Any, Any], set[tuple[Any, Any]]] = defaultdict(set)
+        rev: defaultdict[tuple[State, State], set[tuple[State, State]]] = defaultdict(set)
         for pair, arcs in product_arcs.items():
             for _, _, _, j1, j2 in arcs:
                 rev[(j1, j2)].add(pair)
 
-        co: set[tuple[Any, Any]] = set(product_final)
-        queue: deque[tuple[Any, Any]] = deque(product_final)
+        co: set[tuple[State, State]] = set(product_final)
+        queue: deque[tuple[State, State]] = deque(product_final)
         while queue:
             pair = queue.popleft()
             for prev in rev[pair]:
@@ -628,8 +628,8 @@ class FST(Generic[A, B]):
         # to acceptance → non-functional.
         delay_bound = max(len(trimmed_product), 1)
 
-        visited: set[tuple[Any, Any, int, Str[Any]]] = set()
-        worklist: deque[tuple[Any, Any, int, Str[Any], Str[Any], Str[Any], Str[Any]]] = deque()
+        visited: set[tuple[State, State, int, Str[Any]]] = set()
+        worklist: deque[tuple[State, State, int, Str[Any], Str[Any], Str[Any], Str[Any]]] = deque()
 
         for s1 in t.start:
             for s2 in t.start:

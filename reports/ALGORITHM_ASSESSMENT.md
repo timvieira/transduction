@@ -27,7 +27,7 @@ including those with infinite quotient/remainder languages.
 | `Precover` | Python | `precover.py` | No | Reference implementation |
 | `NonrecursiveDFADecomp` | Python | `dfa_decomp_nonrecursive.py` | No | Same algorithm, cleaner interface |
 | `TruncatedIncrementalDFADecomp` | Python | `dfa_decomp_incremental_truncated.py` | Yes | Dirty-state incremental DFA decomp |
-| `PeekabooState` | Python | `peekaboo_incremental.py` | Yes | **Recommended.** Batched next-symbol |
+| `PeekabooState` | Python | `peekaboo_incremental.py` | Yes | Batched next-symbol (Python fallback; Rust default is `RustPeekabooState`) |
 | `Peekaboo` (nonrecursive) | Python | `peekaboo_nonrecursive.py` | No | Non-incremental peekaboo |
 | `Peekaboo` (incremental helper) | Python | `peekaboo_incremental.py` | — | Internal helper used by `PeekabooState` |
 | `DirtyPeekaboo` | Python | `peekaboo_dirty.py` | Yes | Dirty-state incremental peekaboo |
@@ -42,6 +42,55 @@ internally by `PeekabooState`. The `__init__.py` exports the latter.
 All implementations now support the `>>` operator: incremental algorithms provide
 optimized `__rshift__`; non-incremental implementations inherit `DecompositionResult.__rshift__`
 which constructs a fresh decomposition for the extended target.
+
+### Position-Set / Token-Decomposable Algorithms
+
+These algorithms exploit token-decomposability to reduce DFA state counts via
+position-set quotienting. The compression is significant (174x: 37,803→217
+states for the full PTB target). `RustPositionSetPeekabooState` combines
+position-set compression with Rust speed and dirty-state incremental reuse,
+achieving ~50 ms/step on PTB (2.5x faster than standard TransducedLM).
+
+| Algorithm | Language | File | Incremental | Peekaboo | Dirty-state | Notes |
+|-----------|----------|------|:-----------:|:--------:|:-----------:|-------|
+| `PositionSetPeekabooState` | Python | `position_set_peekaboo.py` | rebuilds‡ | ✓ | | 174x compression for PTB; `>>` rebuilds BFS from scratch each step |
+| `GeneralTokenDecompose` | Python | `general_token_decompose.py` | | | | 331x vs Python `NonrecursiveDFADecomp`; one-shot only |
+| `TokenDecompose` | Python | `token_decompose.py` | | | | EXPERIMENTAL; requires `all_input_universal` + hub structure |
+| `FactoredDecomp` | Python | `factored_decompose.py` | ✓ | | ✓ | Position-based universality caching; no measured speedup |
+
+‡`PositionSetPeekabooState.__rshift__` creates a new object that reruns the full
+BFS. `resume_frontiers` is hardcoded empty — no DFA state carried between steps.
+This means every decode step pays the full BFS cost, unlike `RustPeekabooState`
+which persists dirty-state across steps.
+
+**`RustPositionSetPeekabooState` combines all three optimizations:** Rust speed,
+incremental dirty-state, and peekaboo batching — plus position-set compression
+(174x: 37,803→217 DFA states for PTB). This achieves ~50 ms/step on PTB,
+2.5x faster than standard `TransducedLM`. The Python-only `GeneralTokenDecompose`
+provides 331x decomposition speedup vs Python `NonrecursiveDFADecomp`, but
+the Rust position-set backend supersedes it for TransducedLM integration.
+
+**Note on BPE:** BPE is trivially token-decomposable (`all_input_universal = True`)
+but has compression 1.0x — every DFA state already has a unique position set.
+Position-set algorithms provide zero benefit on BPE.
+
+### Rho-Arc Compression Algorithms
+
+Orthogonal to position-set (not TD-specific):
+
+| Algorithm | Language | File | Notes |
+|-----------|----------|------|-------|
+| `SymbolicLazyDeterminize` | Python | `symbolic_precover.py` | Rho-arc DFA compression for PrecoverNFA |
+| `RustRhoDfa` | Rust | `rho.rs` | Rust rho-arc factored determinization |
+
+### Pynini-Backed Reference Implementations
+
+These use OpenFST/pynini WFST operations for composition-based P(y)/Q(y)/R(y).
+
+| Algorithm | Language | File | Notes |
+|-----------|----------|------|-------|
+| `pynini_ops` | Python | `pynini_ops.py` | Precover, quotient, remainder via pynini composition/projection |
+| `PyniniTransducedLM` | Python | `lm/pynini_transduced.py` | Pynini-backed transduced LM with particle inference |
 
 ### Finite-Only Decomposition Algorithms
 
@@ -74,6 +123,8 @@ quotients. Tested separately in `test_finite.py`.
 | `FusedTransducedLM` | `lm/fused_transduced.py` | Single-pass interleaved decomposition + LM search |
 | `RustPeekabooState` | `rust_bridge.py` | Rust-backed incremental peekaboo state (default for TransducedLM) |
 | `RustLazyPeekabooDFA` | `rust_bridge.py` | Rust-backed lazy DFA interface for TransducedLM beam search |
+| `ReferenceTransducedLM` | `lm/reference_transduced.py` | Ground-truth transduced LM via Precover (finite-relation FSTs only) |
+| `PyniniTransducedLM` | `lm/pynini_transduced.py` | Pynini-backed transduced LM with particle-based inference |
 
 Self-contained (no external tokenization deps). Example:
 ```python
@@ -87,52 +138,122 @@ pe = prioritized_enumeration(lm, fst, target, max_steps=20)
 
 ## Recommended Algorithms
 
+The library has two layers: **decomposition** (compute Q/R structural decompositions)
+and **LM integration** (compute next-symbol probabilities using an inner LM). Most
+users want the LM integration layer.
+
 ```mermaid
 graph TD
-    Q1{"Use case?"}
-    Q1 -->|"Autoregressive decoding<br/>(token by token)"| Q2{"Rust available?"}
-    Q1 -->|"One-shot decomposition"| Q3{"Rust available?"}
-    Q1 -->|"Finite-language FST only"| FIN["LazyIncremental<br/>PrioritizedLazyIncremental"]
+    Q0{"Need LM probabilities?"}
+    Q0 -->|"Yes — autoregressive P(y|prefix)"| LM_BRANCH
+    Q0 -->|"No — just structural Q/R"| DECOMP_BRANCH
 
-    Q2 -->|"Yes"| BEST["<b>RustDirtyPeekaboo</b><br/><i>fastest: dirty-state + batched</i>"]
-    Q2 -->|"No"| PY["PeekabooState<br/><i>Python incremental</i>"]
+    subgraph LM_BRANCH["LM Integration"]
+        LM1["<b>TransducedLM</b><br/><i>defaults to RustPeekabooState</i>"]
+        LM2["ReferenceTransducedLM<br/><i>exact; finite-relation only</i>"]
+    end
 
-    Q3 -->|"Yes"| RUST1["<b>RustDecomp</b>"]
-    Q3 -->|"No"| PY1["NonrecursiveDFADecomp"]
+    subgraph DECOMP_BRANCH["Decomposition Only"]
+        D1{"FST type?"}
+        D1 -->|"Token-decomposable<br/>(one-shot, Python)"| GTD["<b>GeneralTokenDecompose</b><br/><i>331x on PTB vs Python baseline</i>"]
+        D1 -->|"General, Rust available"| RDP["<b>RustDirtyPeekaboo</b><br/><i>dirty-state + batched</i>"]
+        D1 -->|"General, Python only"| PY["PeekabooState<br/><i>Python incremental</i>"]
+        D1 -->|"One-shot, Rust"| RUST1["RustDecomp"]
+        D1 -->|"One-shot, Python"| PY1["NonrecursiveDFADecomp"]
+    end
 
-    style BEST fill:#d4edda
-    style RUST1 fill:#d4edda
+    style LM1 fill:#d4edda
+    style LM2 fill:#fff3cd
+    style GTD fill:#d4edda
+    style RDP fill:#d4edda
     style PY fill:#cce5ff
+    style RUST1 fill:#cce5ff
     style PY1 fill:#cce5ff
-    style FIN fill:#fff3cd
 ```
 
-### For Autoregressive Decoding
+### For Autoregressive Decoding with an LM
 
-Use **`RustDirtyPeekaboo`** or **`RustDirtyState`** (or Python `PeekabooState` if Rust unavailable).
+**Most users should start here.** Use **`TransducedLM`** — it handles decomposition,
+beam search, particle carry-forward, and quotient exact marginalization:
 
-Peekaboo builds a *single* DFA for all next-symbol extensions and extracts all $|\mathcal{Y}|$
-decompositions from it. This amortizes DFA construction across all next symbols — an
-asymptotic win when the target alphabet is large (e.g., 256 bytes).
+```python
+from transduction.lm.transduced import TransducedLM
+from transduction.lm.ngram import CharNgramLM
+from transduction import examples
 
-The dirty-state variants (`RustDirtyPeekaboo`, `DirtyPeekaboo`) additionally persist
-DFA state across decoding steps, avoiding redundant recomputation as the target grows.
+inner = CharNgramLM.train("hello world", n=2)
+fst = examples.lowercase()
+tlm = TransducedLM(inner, fst, K=20)
+state = tlm >> 'h'
+print(state.logp_next['e'])  # log P(next='e' | target='h')
+```
+
+`TransducedLM` defaults to `RustPeekabooState` for decomposition. On PTB:
+169 ms/step average (45 steps, K=20, max_expansions=200, CharNgramLM).
+
+**`FusedTransducedLM`** interleaves decomposition and LM search in a single pass
+(2.4x faster than `TransducedLM` on PTB at 71 ms/step), but has a known logp
+disagreement (max |diff| = 2.03 on PTB) that needs investigation before
+production use.
+
+**Position-set decomposition backends** (`PositionSetPeekabooState`,
+`RustPositionSetPeekabooState`, `GeneralTokenDecompose`) achieve dramatic DFA
+state compression for token-decomposable FSTs (174x: 37,803→217 states for
+PTB). `RustPositionSetPeekabooState` combines position-set compression with
+Rust speed and dirty-state incremental reuse, achieving ~50 ms/step on PTB
+(2.5x faster than standard `TransducedLM`, completing all 45 steps).
+
+**`ReferenceTransducedLM`** computes exact transduced probabilities by enumerating
+Q/R languages via Precover. Only works on finite-relation FSTs. Used for
+validation, not production.
+
+### For Structural Decomposition (No LM)
+
+For **token-decomposable FSTs** (Python one-shot), use **`GeneralTokenDecompose`**
+(331x on PTB vs `NonrecursiveDFADecomp`):
+
+```python
+from transduction.general_token_decompose import GeneralTokenDecompose
+decomp = GeneralTokenDecompose(fst, target)
+print(decomp.quotient, decomp.remainder)
+```
+
+For **general FSTs** with incremental autoregressive use, use **`RustDirtyPeekaboo`**
+(dirty-state + batched next-symbol):
 
 ```python
 from transduction.rust_bridge import RustDirtyPeekaboo
-from transduction import examples
-
-fst = examples.newspeak2()
 peekaboo = RustDirtyPeekaboo(fst)
 decomps = peekaboo.decompose_next()  # Q/R for all next symbols
 ```
 
-The Python incremental variant (`peekaboo_incremental.PeekabooState`) also supports incremental
-computation via the `>>` operator for step-by-step decoding.
+For **one-shot decomposition**, use `RustDecomp` (Rust) or `NonrecursiveDFADecomp` (Python).
 
-### For One-Shot Decomposition
+For **pynini-backed reference** (41x on BPE vs Python), use `PyniniNonrecursiveDecomp`
+(requires the `pynini` optional dependency).
 
-Use **`RustDecomp`** or **`NonrecursiveDFADecomp`**.
+### Finite-Only Algorithms
+
+`LazyIncremental`, `LazyNonrecursive`, and `PrioritizedLazyIncremental` lack target-buffer
+truncation and may diverge on FSTs with infinite quotients. They are retained for finite-language
+FSTs, but for token-decomposable finite FSTs with high compression ratios
+(e.g., PTB: 174x), `GeneralTokenDecompose` is vastly faster in the Python
+decomposition layer. (BPE is trivially TD but has compression 1.0x — no
+position-set benefit.)
+
+### Open Questions
+
+1. ~~**End-to-end TransducedLM + PositionSet**~~ — **Resolved.**
+   `RustPositionSetPeekabooState` achieves ~50 ms/step on PTB (2.5x faster
+   than standard TransducedLM), completing all 45 steps. The TD violation was
+   fixed by including FST state in truncated descriptors.
+
+2. **FusedTransducedLM logp disagreement**: Max |logp| diff of 2.03 on PTB vs
+   TransducedLM. Need `ReferenceTransducedLM` ground-truth comparison (requires
+   finite-relation test FST) to determine which is more accurate.
+
+3. **BPE TransducedLM benchmark**: The BPE notebook cells have no saved outputs.
+   Unknown whether BPE behaves differently from PTB at the LM integration layer.
 
 ---
 
@@ -176,24 +297,33 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 
 6. **UniversalityFilter cascade** — AUI fast path -> witness check -> monotonicity caches -> BFS fallback.
 
+7. **Position-set compression** — For token-decomposable FSTs, quotient the powerset DFA by position descriptor sets. Truncated NFA elements include the FST state in their descriptor; non-truncated elements compress by position only. Reduces the PTB DFA from 37,803 to 217 states (174x compression). BPE is trivially TD but has compression 1.0x (no benefit).
+
+8. **Rho-arc factoring** — `SymbolicLazyDeterminize`/`RustRhoDfa`: detect complete DFA states and replace the most-common destination with a single rho arc, reducing arc count.
+
 ---
 
 ## Test Status
 
-- **`test_general.py`**: 353 passed, 0 skipped
+- **`test_general.py`**: 454 passed, 31 skipped
 - **`test_finite.py`**: 119 passed
-- **`test_fst.py`**: 57 passed
+- **`test_pynini_ops.py`**: 115 passed
+- **`test_transduced.py`**: 106 passed
+- **`test_lazy.py`**: 100 passed
+- **`test_symbolic_precover.py`**: 84 passed
+- **`test_fst.py`**: 56 passed
 - **`test_enumeration.py`**: 55 passed
-- **`test_transduced.py`**: 81 passed
+- **`test_position_set_peekaboo.py`**: 52 passed
 - **`test_push_labels.py`**: 35 passed
+- **`test_fsa.py`**: 28 passed
 - **`test_is_functional.py`**: 26 passed
 - **`test_lazy_peekaboo_dfa.py`**: 23 passed
 - **`test_ngram.py`**: 22 passed
-- **`test_lazy.py`**: 100 passed
+- **`test_rho_fused.py`**: 15 passed
 - **`test_ptb_nltk.py`**: 4 passed
 - **`test_make_total.py`**: 3 passed
 - **`test_statelm_kv_cache.py`**: 3 passed
-- **Total**: 881 tests across 13 test files, all passing, 0 skipped
+- **Total**: 1141 tests across 18 test files, 31 skipped
 
 ---
 

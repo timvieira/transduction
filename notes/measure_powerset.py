@@ -4,12 +4,12 @@ from transformers import AutoTokenizer
 from transduction.applications.bpe import bpe_wfst
 from transduction.fst import FST
 from transduction.fsa import EPSILON
-from transduction.lm.statelm import decode_hf_tokenizer
+from transduction.lm.statelm import HfTokenizerVocab
 from transduction.util import set_memory_limit
 set_memory_limit(8)
 
 tokenizer = AutoTokenizer.from_pretrained('gpt2', use_fast=False)
-_, _, _decode, _ = decode_hf_tokenizer(tokenizer)
+_decode = HfTokenizerVocab(tokenizer).decode
 drop = {x.encode() for x in tokenizer.all_special_tokens}
 
 all_token_ids = sorted(i for i in range(len(_decode)) if _decode[i] not in drop)

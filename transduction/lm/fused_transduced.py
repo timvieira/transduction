@@ -34,12 +34,16 @@ Usage:
     print(state.logp_next['e'])
 """
 
+from __future__ import annotations
+
 import heapq
 import numpy as np
 from collections import defaultdict
+from typing import Any
 
-from transduction.lm.base import LM, LMState
-from transduction.util import logsumexp, LogVector
+from transduction.lm.base import LM, LMState, Token
+from transduction.fst import FST
+from transduction.util import LogDistr, LogVector, State, Str
 from transduction.lm.transduced import Particle, _select_top_k, _RhoExpander
 from transduction.rust_bridge import to_rust_fst
 
@@ -54,7 +58,8 @@ class _FusedSearch:
     Instantiated once per call to _compute_logp_next, then discarded.
     """
 
-    def __init__(self, tlm, target, particles):
+    def __init__(self, tlm: FusedTransducedLM, target: Str[Token],
+                 particles: list[Particle]) -> None:
         self._max_steps = tlm.max_steps
         self._tlm = tlm
         self._inner_eos = tlm.inner_lm.eos
@@ -87,16 +92,16 @@ class _FusedSearch:
 
     # --- Carry-forward ---
 
-    def _is_prefix_dominated(self, y, path):
+    def _is_prefix_dominated(self, y: Token, path: Str[Token]) -> bool:
         """Check if path is dominated by an existing shorter path in cf_paths[y]."""
         return any(path[:k] in self._cf_paths[y] for k in range(len(path)))
 
-    def _add_carry_q(self, y, item):
+    def _add_carry_q(self, y: Token, item: Particle) -> None:
         """Carry forward a Q-absorbed item (no prefix check needed)."""
         self.carry_forward[y].append(item)
         self._cf_paths[y].add(item.source_path)
 
-    def _add_carry_checked(self, y, item):
+    def _add_carry_checked(self, y: Token, item: Particle) -> None:
         """Carry forward with prefix-domination check (for non-Q items)."""
         path = item.source_path
         if path in self._cf_paths[y] or self._is_prefix_dominated(y, path):
@@ -104,7 +109,7 @@ class _FusedSearch:
         self.carry_forward[y].append(item)
         self._cf_paths[y].add(path)
 
-    def _add_carry_sentinel_checked(self, y, item):
+    def _add_carry_sentinel_checked(self, y: Token, item: Particle) -> None:
         """Carry forward with sentinel dfa_state=None and prefix check."""
         path = item.source_path
         if path in self._cf_paths[y] or self._is_prefix_dominated(y, path):
@@ -115,7 +120,7 @@ class _FusedSearch:
 
     # --- Scoring + carry-forward ---
 
-    def _score_item(self, item):
+    def _score_item(self, item: Particle) -> bool:
         """Accumulate this item's contributions to scores and carry-forward.
 
         Q-absorbed carry-forward bypasses the prefix check (Q particles are
@@ -157,7 +162,7 @@ class _FusedSearch:
 
     # --- Expansion ---
 
-    def _expand(self, item):
+    def _expand(self, item: Particle) -> None:
         """Advance by each source symbol and push successors into the queue.
 
         Uses rho-arc compression: at complete DFA states (where all source
@@ -220,7 +225,7 @@ class _FusedSearch:
 
     # --- Main loop ---
 
-    def search(self):
+    def search(self) -> tuple[LogVector[Token], float, dict[Token, list[Particle]]]:
         """Run the search.  Returns (scores, eos_score, carry_forward)."""
         steps = 0
         while self._queue and steps < self._max_steps:
@@ -236,12 +241,17 @@ class _FusedSearch:
                 if not self._score_item(item):
                     self._expand(item)
 
-        # Budget exhausted — score remaining Particles without expanding.
-        # _RhoExpanders are skipped (remaining children are below the budget
-        # cutoff and have lower weight than all processed items).
+        # Budget exhausted — score remaining items without expanding.
+        # Drain _RhoExpanders fully so all rho children contribute to scores,
+        # matching TransducedLM's drain behavior.
         while self._queue:
             item = heapq.heappop(self._queue)
-            if not isinstance(item, _RhoExpander):
+            if isinstance(item, _RhoExpander):
+                particle = item.pop_next()
+                if not item.exhausted:
+                    heapq.heappush(self._queue, item)
+                self._score_item(particle)
+            else:
                 self._score_item(item)
 
         return self.scores, self.eos_score, self.carry_forward
@@ -251,55 +261,57 @@ class _FusedSearch:
 # Public API
 # ---------------------------------------------------------------------------
 
-class FusedTransducedState(LMState):
+class FusedTransducedState(LMState[Token]):
     """Immutable state for FusedTransducedLM.
 
     Unlike TransducedState, this does not carry a PeekabooState — it performs
     decomposition inline during the LM-weighted search.
     """
 
-    def __init__(self, tlm, particles, target, logp, path=()):
+    def __init__(self, tlm: FusedTransducedLM, particles: list[Particle],
+                 target: Str[Token], logp: float,
+                 path: Str[Token] = ()) -> None:
         self.tlm = tlm
         self.eos = tlm.eos
         self._particles = particles
         self._target = target
         self.logp = logp
         self.path = path
-        self._logp_next_cache = None
-        self._carry_forward_cache = None
+        self._logp_next_cache: LogDistr[Token] | None = None
+        self._carry_forward_cache: dict[Token, list[Particle]] | None = None
 
-    def decode_dfa_state(self, state_id):
+    def decode_dfa_state(self, state_id: int) -> frozenset[Any]:
         """Decode a DFA state ID to NFA constituents.
 
         Delegates to FusedTransducedLM.decode_dfa_state with the current target.
         """
         return self.tlm.decode_dfa_state(state_id, self._target)
 
-    def _ensure_computed(self):
+    def _ensure_computed(self) -> None:
         if self._logp_next_cache is None:
             self._compute_logp_next()
 
     @property
-    def logp_next(self):
+    def logp_next(self) -> LogDistr[Token]:
         self._ensure_computed()
-        return self._logp_next_cache
+        return self._logp_next_cache  # type: ignore[return-value]
 
-    def __rshift__(self, y):
+    def __rshift__(self, y: Token) -> FusedTransducedState:
         self._ensure_computed()
-        if y not in self._logp_next_cache:
+        if y not in self._logp_next_cache:  # type: ignore[operator]
             raise ValueError(f"Out of vocabulary: {y!r}")
 
-        new_particles = self._carry_forward_cache.get(y, [])
+        new_particles = self._carry_forward_cache.get(y, [])  # type: ignore[union-attr]
         new_particles = _select_top_k(new_particles, self.tlm.max_beam)
 
         return FusedTransducedState(
             self.tlm, new_particles,
             self._target + (y,),
-            self.logp + self._logp_next_cache[y],
+            self.logp + self._logp_next_cache[y],  # type: ignore[index]
             path=self.path + (y,),
         )
 
-    def _compute_logp_next(self):
+    def _compute_logp_next(self) -> None:
         search = _FusedSearch(self.tlm, self._target, self._particles)
         scores, eos_score, carry_forward = search.search()
 
@@ -307,13 +319,13 @@ class FusedTransducedState(LMState):
         self._logp_next_cache = scores.normalize()
         self._carry_forward_cache = carry_forward
 
-    def _repr_html_(self):
+    def _repr_html_(self) -> str:
         from transduction.viz import render_particles_html, _format_nfa_set
         decode_fn = None
         if hasattr(self.tlm, 'decode_dfa_state'):
-            decode_cache = {}
+            decode_cache: dict[State, str] = {}
             target_tuple = tuple(self._target)
-            def decode_fn(dfa_state):    # pylint: disable=E0102
+            def decode_fn(dfa_state: State) -> str:    # pylint: disable=E0102
                 if dfa_state not in decode_cache:
                     try:
                         decoded = self.tlm.decode_dfa_state(dfa_state, target_tuple)
@@ -327,11 +339,11 @@ class FusedTransducedState(LMState):
             decode_fn=decode_fn,
         )
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f'FusedTransducedState(target={self._target!r})'
 
 
-class FusedTransducedLM(LM):
+class FusedTransducedLM(LM[Token]):
     """Fused transduced language model.
 
     Combines decomposition and LM-weighted search into a single best-first
@@ -339,7 +351,9 @@ class FusedTransducedLM(LM):
     reachable via high-probability source paths are expanded.
     """
 
-    def __init__(self, inner_lm, fst, max_steps=1000, max_beam=100, eos='<EOS>'):
+    def __init__(self, inner_lm: LM, fst: FST[Any, Any],
+                 max_steps: int = 1000, max_beam: int = 100,
+                 eos: Token = '<EOS>') -> None:  # type: ignore[assignment]
         import transduction_core
 
         self.inner_lm = inner_lm
@@ -351,15 +365,16 @@ class FusedTransducedLM(LM):
         # Build Rust FST and helper
         rust_fst, sym_map, state_map = to_rust_fst(fst)
         self._rust_helper = transduction_core.RustLazyPeekabooDFA(rust_fst)
-        self._sym_map = {k: v for k, v in sym_map.items()}
-        self._inv_sym_map = {v: k for k, v in sym_map.items()}
+        self._sym_map: dict[Token, int] = {k: v for k, v in sym_map.items()}
+        self._inv_sym_map: dict[int, Token] = {v: k for k, v in sym_map.items()}
         self._state_map = state_map
 
         # Cache source alphabet for rho expansion
-        self._source_alphabet_u32 = self._rust_helper.source_alphabet()
-        self._rho_label = self._rust_helper.rho_label()
+        self._source_alphabet_u32: list[int] = self._rust_helper.source_alphabet()
+        self._rho_label: int | None = self._rust_helper.rho_label()
 
-    def decode_dfa_state(self, state_id, target):
+    def decode_dfa_state(self, state_id: int,
+                         target: Str[Token]) -> frozenset[Any]:
         """Decode a lazy-DFA state ID to NFA constituents.
 
         Returns frozenset of (fst_state, buffer_tuple, truncated) matching
@@ -375,7 +390,7 @@ class FusedTransducedLM(LM):
         NO_EXTRA = 0xFFFF
         raw = self._rust_helper.decode_state(state_id)
 
-        result = set()
+        result: set[tuple[Any, ...]] = set()
         for fst_state_u32, buf_len, extra_sym_idx, truncated in raw:
             py_fst_state = inv_state.get(fst_state_u32, fst_state_u32)
             if extra_sym_idx == NO_EXTRA:
@@ -388,12 +403,12 @@ class FusedTransducedLM(LM):
 
         return frozenset(result)
 
-    def run(self, source_path):
+    def run(self, source_path: Str[Token]) -> int | None:
         """Run a source path through the current-step DFA. Returns state or None."""
         path_u32 = [self._sym_map[x] for x in source_path]
         return self._rust_helper.run(path_u32)
 
-    def initial(self):
+    def initial(self) -> FusedTransducedState:
         """Return the initial FusedTransducedState (empty target prefix)."""
         self._rust_helper.new_step([])
         start_ids = self._rust_helper.start_ids()
@@ -403,5 +418,5 @@ class FusedTransducedLM(LM):
 
         return FusedTransducedState(self, particles, (), 0.0)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f'FusedTransducedLM(inner={self.inner_lm!r}, fst={self.fst!r})'

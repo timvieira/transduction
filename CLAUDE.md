@@ -26,11 +26,17 @@ Do not auto-commit after finishing work.
 - `transduction/prioritized_lazy_incremental.py` — PrioritizedLazyIncremental (finite-language, heuristic BFS)
 - `transduction/viz.py` — Visualization/display utilities for automata (used in notebooks)
 - `transduction/enumeration.py` — LM-weighted path enumeration (prioritized_enumeration, importance_sampling)
+- `transduction/position_set_peekaboo.py` — `PositionSetPeekabooState` (position-set quotient of PeekabooLookaheadNFA DFA; 174x compression e.g. 37,803→217 states for PTB)
+- `transduction/general_token_decompose.py` — `GeneralTokenDecompose` (position-set decomposition for arbitrary token-decomposable FSTs)
+- `transduction/token_decompose.py` — Token-level decomposition for `all_input_universal` BPE-like FSTs (EXPERIMENTAL)
+- `transduction/symbolic_precover.py` — `SymbolicLazyDeterminize`, `ExpandRho` (rho-arc DFA compression for PrecoverNFA)
+- `transduction/pynini_ops.py` — Pynini/OpenFST-backed reference P(y)/Q(y)/R(y) via composition and projection
+- `transduction/factored_decompose.py` — Factored DFA state representation with position-based universality caching
 - `transduction/lazy.py` — Lazy automaton framework (LazyDeterminize, EpsilonRemove)
 - `transduction/applications/bpe.py` — BPE WFST builder (`bpe_wfst`)
 - `transduction/applications/ptb.py` — PTB tokenizer FST built with pynini
 - `transduction/applications/wikitext.py` — WikiText data loading (`load_wikitext`, `wikitext_detokenize`)
-- `transduction/rust_bridge.py` — Python ↔ Rust conversion layer; also provides `RustPeekabooState`, `RustLazyPeekabooDFA`
+- `transduction/rust_bridge.py` — Python ↔ Rust conversion layer; also provides `RustPeekabooState`, `RustPositionSetPeekabooState`, `RustLazyPeekabooDFA`
 - `transduction/util.py` — Shared utilities: `Integerizer`, `logsumexp`, `LogVector` (mutable log-space accumulator), `LogDistr` (immutable log-probability distribution), `memoize`, `timelimit`, `set_memory_limit`, `memory_limit`, `sample`, `colors`
 - `transduction/examples.py` — Example FSTs for testing
 
@@ -46,11 +52,12 @@ Self-contained language model interface for use with enumeration/sampling:
   - `state >> token` advances by one token (bytes), caching KV pairs
   - `state.logp_next[token]` returns log-probability (accepts bytes or int token ID)
   - `state.eos` returns the EOS token (bytes)
-  - Includes inlined dependencies: `decode_hf_tokenizer`, `LazyProb`, `flatten`/`unflatten`
+  - Includes inlined dependencies: `HfTokenizerVocab`, `LazyProb`, `flatten`/`unflatten`
   - External deps: `torch`, `transformers`, `arsenal`
 - `transduction/lm/transduced.py` — `TransducedLM`, `TransducedState` (pushforward of an inner LM through an FST; defaults to Rust backend)
 - `transduction/lm/fused_transduced.py` — `FusedTransducedLM`, `FusedTransducedState` (single-pass interleaved decomposition + LM search)
 - `transduction/lm/reference_transduced.py` — `ReferenceTransducedLM` (ground-truth transduced LM via Precover; enumerates Q/R languages exactly; finite-relation FSTs only)
+- `transduction/lm/pynini_transduced.py` — `PyniniTransducedLM` (pynini-backed transduced LM with particle-based inference)
 
 ### Rust Acceleration (`crates/transduction-core/`)
 
@@ -61,7 +68,10 @@ Self-contained language model interface for use with enumeration/sampling:
 - `precover.rs` — PrecoverNFA with eps closure caching (Rc<Vec<u64>> avoids cloning)
 - `powerset.rs` — PowersetArena (hash-consing DFA states; single-element fast path for 99% of BPE cases)
 - `minimize.rs` — DFA minimization
-- `py.rs` — PyO3 bindings (RustFst, RustFsa, DecompResult, PeekabooDecompResult)
+- `rho.rs` — Rho-arc factored determinization (`RhoDfaResult`; exposed as `RustRhoDfa`)
+- `token_decompose.rs` — Rust token-level decomposition using position-set bitsets
+- `position_set_peekaboo.rs` — Position-set peekaboo with dirty-state (TD FSTs: position-set DFA compression + dirty-state incremental reuse)
+- `py.rs` — PyO3 bindings (RustFst, RustFsa, DecompResult, PeekabooDecompResult, RustPositionSetPeekabooDecomp, RustRhoDfa)
 
 ## Dependencies
 
@@ -87,29 +97,34 @@ Optional deps:
 
 Eliminated deps (previously external, now inlined):
 - `arsenal` — `Integerizer`, `colors`, `memoize`, `timelimit`, `timeit`, `sample`, `set_memory_limit`, `memory_limit` inlined into `util.py`
-- `genlm` — `get_byte_vocab` replaced with local `decode_hf_tokenizer`
+- `genlm` — `get_byte_vocab` replaced with local `HfTokenizerVocab`
 - `tokenization` — `StateLM`, `LazyProb`, `logsumexp` all copied/inlined
 - `LogpNext` (formerly in `lm/base.py`) — replaced by `LogDistr` in `util.py`
 
 ## Test Status
 
-- `test_general.py`: 353 passed, 0 skipped
+- `test_general.py`: 454 passed, 31 skipped
 - `test_finite.py`: 119 passed
-- `test_enumeration.py`: 55 passed
-- `test_transduced.py`: 81 passed
-- `test_fst.py`: 57 passed
-- `test_push_labels.py`: 35 passed
+- `test_pynini_ops.py`: 115 passed
+- `test_transduced.py`: 106 passed
 - `test_lazy.py`: 100 passed
+- `test_symbolic_precover.py`: 84 passed
+- `test_fst.py`: 56 passed
+- `test_enumeration.py`: 55 passed
+- `test_position_set_peekaboo.py`: 52 passed
+- `test_push_labels.py`: 35 passed
+- `test_fsa.py`: 28 passed
 - `test_is_functional.py`: 26 passed
 - `test_lazy_peekaboo_dfa.py`: 23 passed
 - `test_ngram.py`: 22 passed
+- `test_rho_fused.py`: 15 passed
 - `test_ptb_nltk.py`: 4 passed
 - `test_make_total.py`: 3 passed
 - `test_statelm_kv_cache.py`: 3 passed
-- **Total: 881 tests, 0 skipped**
+- **Total: 1141 tests across 18 files, 31 skipped**
 - `test_general.py` tests the **general-case** algorithms (handle infinite quotients/remainders):
   NonrecursiveDFADecomp, TruncatedIncrementalDFADecomp, PeekabooState, PeekabooNonrecursive,
-  DirtyPeekaboo, RustDecomp, RustDirtyState, RustDirtyPeekaboo.
+  DirtyPeekaboo, RustDecomp, RustDirtyState, RustDirtyPeekaboo, RustPositionSetPeekabooState.
 - **Finite-only algorithms are excluded from test_general.py** and tested in
   `test_finite.py`. These diverge on FSTs with infinite quotients because they
   don't truncate the target buffer:
@@ -121,6 +136,24 @@ Eliminated deps (previously external, now inlined):
     variants, Rust backends) terminate on all inputs; those that don't may diverge.
   - When adding new algorithms or test cases, classify them as general vs finite-only
     and put them in the appropriate test file.
+
+## Style Conventions
+
+- **`Str[T]` for symbol strings**: Use `Str[Token]`, `Str[int]`, etc. instead of
+  `tuple[Token, ...]`, `tuple[int, ...]` when the type represents a string
+  (sequence of symbols) in the automata-theory sense.  `Str` is defined in
+  `transduction/util.py` as `Str = tuple[_T, ...]`.  This does **not** apply
+  to non-string tuples (arc lists, cons-cell histories, etc.).
+
+- **`LogDistr` and `LogVector` over raw dicts**: Prefer `LogDistr[T]` for
+  immutable log-probability distributions and `LogVector[T]` for mutable
+  log-space accumulators instead of plain `dict` or `defaultdict`.  Both are
+  defined in `transduction/util.py`.
+
+- **`State` for automaton states**: Use the `State` type alias (defined in
+  `transduction/util.py` as `State: TypeAlias = Any`) in type annotations for
+  automaton states, even though it resolves to `Any`.  This conveys intent and
+  makes signatures more readable.
 
 ## CRITICAL: Memory Limits
 

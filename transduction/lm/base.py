@@ -9,11 +9,18 @@ Concrete implementations: :mod:`transduction.lm.ngram`,
 :mod:`transduction.lm.statelm`, :mod:`transduction.lm.transduced`.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
+from collections.abc import Hashable, Iterable
+from typing import Generic, TypeVar
+
 from transduction.util import LogDistr
 
+Token = TypeVar('Token', bound=Hashable)
 
-class LM(ABC):
+
+class LM(ABC, Generic[Token]):
     """Abstract base for language models; delegates to self.initial().
 
     The LM / LMState design mirrors Python's Iterable / Iterator pattern.
@@ -32,38 +39,40 @@ class LM(ABC):
     Subclasses must implement ``initial()`` returning an ``LMState``.
     """
 
+    eos: Token
+
     @abstractmethod
-    def initial(self):
+    def initial(self) -> LMState:
         """Return the initial LMState (conditioned on the empty context)."""
         ...
 
-    def __call__(self, xs):
+    def __call__(self, xs: Iterable[Token]) -> LMState:
         """Shorthand for ``self.initial()(xs)``."""
         return self.initial()(xs)
 
-    def __rshift__(self, token):
+    def __rshift__(self, token: Token) -> LMState:
         """Shorthand for ``self.initial() >> token``."""
         return self.initial() >> token
 
     @property
-    def logp_next(self):
+    def logp_next(self) -> LogDistr[Token]:
         """Shorthand for ``self.initial().logp_next``."""
         return self.initial().logp_next
 
-    def greedy_decode(self, max_len=100):
+    def greedy_decode(self, max_len: int = 100) -> list[Token]:
         """Shorthand for ``self.initial().greedy_decode(max_len)``."""
         return self.initial().greedy_decode(max_len)
 
-    def sample(self):
+    def sample(self) -> LMState:
         """Shorthand for ``self.initial().sample()``."""
         return self.initial().sample()
 
-    def sample_decode(self, max_len=100):
+    def sample_decode(self, max_len: int = 100) -> list[Token]:
         """Shorthand for ``self.initial().sample_decode(max_len)``."""
         return self.initial().sample_decode(max_len)
 
 
-class LMState(ABC):
+class LMState(ABC, Generic[Token]):
     """An immutable position in an autoregressive decode — a conditional
     distribution P(next_token | tokens_so_far).
 
@@ -80,9 +89,12 @@ class LMState(ABC):
         __call__   — advance state by a sequence of tokens, returns final state
     """
 
+    eos: Token
+    logp: float
+
     @property
     @abstractmethod
-    def logp_next(self):
+    def logp_next(self) -> LogDistr[Token]:
         """Log-probability distribution over next tokens.
 
         Returns a dict-like object supporting ``logp_next[token]`` -> float
@@ -92,14 +104,14 @@ class LMState(ABC):
         ...
 
     @abstractmethod
-    def __rshift__(self, token):
+    def __rshift__(self, token: Token) -> LMState:
         """Advance by one token, returning a new LMState conditioned on the extended context."""
         ...
 
-    def greedy_decode(self, max_len=100):
+    def greedy_decode(self, max_len: int = 100) -> list[Token]:
         """Greedy decode until EOS or max_len. Returns list of tokens."""
         state = self
-        tokens = []
+        tokens: list[Token] = []
         for _ in range(max_len):
             best_tok = state.logp_next.argmax()
             if best_tok == state.eos:
@@ -108,24 +120,24 @@ class LMState(ABC):
             state = state >> best_tok
         return tokens
 
-    def __call__(self, xs):
+    def __call__(self, xs: Iterable[Token]) -> LMState:
         """Advance state by a sequence of tokens. Returns the final state."""
         s = self
         for x in xs:
             s = s >> x
         return s
 
-    def sample(self):
+    def sample(self) -> LMState:
         """Sample one token and advance. Returns new state (or self if EOS)."""
         tok = self.logp_next.sample()
         if tok == self.eos:
             return self
         return self >> tok
 
-    def sample_decode(self, max_len=100):
+    def sample_decode(self, max_len: int = 100) -> list[Token]:
         """Sample autoregressively until EOS or max_len. Returns list of tokens."""
         state = self
-        tokens = []
+        tokens: list[Token] = []
         for _ in range(max_len):
             tok = state.logp_next.sample()
             if tok == state.eos:

@@ -22,8 +22,20 @@
 | `RustDirtyState` | ✓ | | ✓ | N | ✓ | ✓ | ✓ | ✓ | rust ext |
 | `RustDirtyPeekaboo` | ✓ | ✓ | ✓ | N+K | ✓ | ✓ | ✓ | ✓ | rust ext |
 | `RustLazyPeekabooDFA` | ✓ | ✓ | ✓ | N+K | ✓ | ✓ | ✓ | ✓ | rust ext; lazy DFA for TransducedLM |
+| **Position-set / Token-decomposable** | | | | | | | | | |
+| `GeneralTokenDecompose` | | | | N | ✓ | gfp | ✓ | | TD FSTs only |
+| `PositionSetPeekabooState` | ‡ | ✓ | | N+K | ✓ | ✓ | ✓ | | TD FSTs only |
+| `TokenDecompose` | | | | N | ✓ | aiu | ✓ | | aiu + hub only |
+| `FactoredDecomp` | ✓ | | ✓ | N | ✓ | ✓ | ✓ | | |
+| **Rho-arc compression** | | | | | | | | | |
+| `SymbolicLazyDeterminize` | | | | N | ✓ | | ✓ | | |
+| `RustRhoDfa` | | | | N | ✓ | | ✓ | ✓ | rust ext |
+| **Pynini reference** | | | | | | | | | |
+| `PyniniNonrecursiveDecomp` | | | | N | ✓ | pynini | ✓ | | pynini dep |
 
 †`TruncatedIncrementalDFADecomp.decompose_next()` creates per-symbol overlay children sharing the parent's clean arcs — batched via overlays, not via a single BFS pass like Peekaboo.
+
+‡`PositionSetPeekabooState` has `>>` but it rebuilds from scratch each step (no dirty-state reuse, `resume_frontiers` always empty). Not truly incremental.
 
 ## Key columns explained
 

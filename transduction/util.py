@@ -300,19 +300,19 @@ def log1mexp(x: float) -> float:
 
 _NEG_INF = float('-inf')
 
-V = TypeVar('V', bound=Hashable)
+K = TypeVar('K', bound=Hashable)
 
 
-class _SparseLogMap(dict[V, float]):
+class _SparseLogMap(dict[K, float]):
     """Dict subclass for sparse mappings in log-space (keys -> log-values).
 
     Missing keys return ``-inf`` (via ``__missing__``).
     """
 
-    def __missing__(self, key: V) -> float:
+    def __missing__(self, key: K) -> float:
         return _NEG_INF
 
-    def materialize(self, top: int | None = None) -> dict[V, float]:
+    def materialize(self, top: int | None = None) -> dict[K, float]:
         """Return a dict of ``{key: value}`` sorted by descending value.
 
         If ``top`` is given, return only the top-k entries.
@@ -322,11 +322,11 @@ class _SparseLogMap(dict[V, float]):
             items = items[:int(top)]
         return dict(items)
 
-    def top(self, K: int) -> dict[V, float]:
-        """Return a dict of the top-K entries by value."""
-        return self.materialize(top=K)
+    def top(self, k: int) -> dict[K, float]:
+        """Return a dict of the top-k entries by value."""
+        return self.materialize(top=k)
 
-    def argmax(self) -> V:
+    def argmax(self) -> K:
         """Return the key with the highest value."""
         return max(self, key=self.__getitem__)
 
@@ -355,13 +355,13 @@ class _SparseLogMap(dict[V, float]):
         )
 
 
-class LogVector(_SparseLogMap[V]):
+class LogVector(_SparseLogMap[K]):
     """Mutable accumulator for sparse log-nonneg-real vectors.
 
     Replaces the ``defaultdict(lambda: -np.inf)`` + ``logaddexp`` pattern.
     """
 
-    def logaddexp(self, key: V, value: float) -> None:
+    def logaddexp(self, key: K, value: float) -> None:
         """Accumulate: ``self[key] = logaddexp(self[key], value)``."""
         prev = self.get(key)
         if prev is None:
@@ -369,19 +369,19 @@ class LogVector(_SparseLogMap[V]):
         else:
             self[key] = float(np.logaddexp(prev, value))
 
-    def normalize(self) -> LogDistr[V]:
+    def normalize(self) -> LogDistr[K]:
         """Return a ``LogDistr`` by subtracting ``logsumexp`` from each entry."""
         Z = logsumexp(list(self.values()))
         return LogDistr({k: float(v - Z) for k, v in self.items()})
 
 
-class LogDistr(_SparseLogMap[V]):
+class LogDistr(_SparseLogMap[K]):
     """Immutable normalized distribution in log-space.
 
     Supports ``sample()`` but not mutation.
     """
 
-    def sample(self) -> V:
+    def sample(self) -> K:
         """Sample a key proportional to ``exp(value)``."""
         toks = list(self.keys())
         logps = np.array(list(self.values()), dtype=np.float64)

@@ -71,10 +71,10 @@ use std::time::Instant;
 // NFA state packing
 // ---------------------------------------------------------------------------
 
-const NO_EXTRA: u16 = 0xFFFF;
+pub(crate) const NO_EXTRA: u16 = 0xFFFF;
 
 #[inline]
-fn pack_peekaboo(fst_state: u32, buf_len: u16, extra_sym: u16, truncated: bool) -> u64 {
+pub(crate) fn pack_peekaboo(fst_state: u32, buf_len: u16, extra_sym: u16, truncated: bool) -> u64 {
     ((fst_state as u64) << 32)
         | ((buf_len as u64) << 17)
         | ((extra_sym as u64) << 1)
@@ -98,15 +98,15 @@ pub(crate) fn unpack_peekaboo(packed: u64) -> (u32, u16, u16, bool) {
 ///
 /// This mirrors Python's `PeekabooPrecover(fst, target[:step_n])` with K=1.
 /// NFA state encoding is step-independent (same buffer → same packed u64).
-struct PeekabooNFAMapped<'a> {
-    fst: &'a Fst,
-    full_target: &'a [u32],
-    step_n: u16,
-    sym_to_idx: &'a FxHashMap<u32, u16>,
+pub(crate) struct PeekabooNFAMapped<'a> {
+    pub(crate) fst: &'a Fst,
+    pub(crate) full_target: &'a [u32],
+    pub(crate) step_n: u16,
+    pub(crate) sym_to_idx: &'a FxHashMap<u32, u16>,
 }
 
 impl<'a> PeekabooNFAMapped<'a> {
-    fn new(
+    pub(crate) fn new(
         fst: &'a Fst,
         full_target: &'a [u32],
         step_n: u16,
@@ -120,7 +120,7 @@ impl<'a> PeekabooNFAMapped<'a> {
         }
     }
 
-    fn start_states(&self) -> Vec<u64> {
+    pub(crate) fn start_states(&self) -> Vec<u64> {
         self.fst
             .start_states
             .iter()
@@ -135,7 +135,7 @@ impl<'a> PeekabooNFAMapped<'a> {
     /// A final state has buf_len == step_n + 1 and extra_sym != NO_EXTRA.
     /// Since buf_len-1 == step_n >= step_n, it's always prefix-compatible.
     #[inline]
-    fn is_final(&self, packed: u64) -> bool {
+    pub(crate) fn is_final(&self, packed: u64) -> bool {
         let (fst_state, buf_len, extra_sym, _truncated) = unpack_peekaboo(packed);
         self.fst.is_final[fst_state as usize]
             && buf_len == self.step_n + 1
@@ -178,7 +178,7 @@ impl<'a> PeekabooNFAMapped<'a> {
     /// - effective_extra: the extra symbol (or NO_EXTRA)
     /// - is_valid: whether the state is prefix-compatible at this step
     #[inline]
-    fn effective_state(
+    pub(crate) fn effective_state(
         &self,
         buf_len: u16,
         extra_sym: u16,
@@ -296,7 +296,7 @@ impl<'a> PeekabooNFAMapped<'a> {
 
     /// Epsilon-closure of a single NFA state (cached).
     /// Cache stores (closure, max_buf_len) for O(1) eviction on prefix extension.
-    fn eps_closure_single(&self, state: u64, cache: &mut FxHashMap<u64, (Vec<u64>, u16)>) -> Vec<u64> {
+    pub(crate) fn eps_closure_single(&self, state: u64, cache: &mut FxHashMap<u64, (Vec<u64>, u16)>) -> Vec<u64> {
         if let Some(cached) = cache.get(&state) {
             return cached.0.clone();
         }
@@ -333,7 +333,7 @@ impl<'a> PeekabooNFAMapped<'a> {
         result
     }
 
-    fn eps_closure_set(&self, states: &[u64], cache: &mut FxHashMap<u64, (Vec<u64>, u16)>) -> Vec<u64> {
+    pub(crate) fn eps_closure_set(&self, states: &[u64], cache: &mut FxHashMap<u64, (Vec<u64>, u16)>) -> Vec<u64> {
         let mut result = Vec::new();
         for &s in states {
             let closure = self.eps_closure_single(s, cache);
@@ -351,7 +351,7 @@ impl<'a> PeekabooNFAMapped<'a> {
     /// (buf_len, extra_sym) affect only the packed representation, not which FST
     /// states are reachable.  A local FST-level closure cache collapses ~|V|
     /// redundant packed-state BFS computations into one per unique FST state.
-    fn compute_all_arcs(
+    pub(crate) fn compute_all_arcs(
         &self,
         states: &[u64],
         cache: &mut FxHashMap<u64, (Vec<u64>, u16)>,
@@ -499,7 +499,7 @@ impl<'a> PeekabooNFAMapped<'a> {
 // Universality filter for peekaboo (per target-symbol)
 // ---------------------------------------------------------------------------
 
-struct PeekabooUniversalityFilter {
+pub(crate) struct PeekabooUniversalityFilter {
     witnesses: FxHashSet<u64>,
     pos_index: FxHashMap<u64, Vec<u32>>,
     pos_sizes: Vec<usize>,
@@ -508,7 +508,7 @@ struct PeekabooUniversalityFilter {
 }
 
 impl PeekabooUniversalityFilter {
-    fn new(_fst: &Fst, step_n: u16, y_idx: u16, ip_universal_states: &[bool]) -> Self {
+    pub(crate) fn new(_fst: &Fst, step_n: u16, y_idx: u16, ip_universal_states: &[bool]) -> Self {
         let mut witnesses = FxHashSet::default();
 
         for (q, &is_univ) in ip_universal_states.iter().enumerate() {
@@ -526,7 +526,7 @@ impl PeekabooUniversalityFilter {
         }
     }
 
-    fn add_pos(&mut self, nfa_set: &[u64]) {
+    pub(crate) fn add_pos(&mut self, nfa_set: &[u64]) {
         let eid = self.pos_sizes.len() as u32;
         self.pos_sizes.push(nfa_set.len());
         for &e in nfa_set {
@@ -534,7 +534,7 @@ impl PeekabooUniversalityFilter {
         }
     }
 
-    fn add_neg(&mut self, nfa_set: &[u64]) {
+    pub(crate) fn add_neg(&mut self, nfa_set: &[u64]) {
         let eid = self.neg_next;
         self.neg_next += 1;
         for &e in nfa_set {
@@ -582,7 +582,7 @@ impl PeekabooUniversalityFilter {
     }
 
     /// Project the full DFA state to y-compatible NFA states, applying refine.
-    fn project_and_refine(&self, full_nfa_set: &[u64], y_idx: u16, step_n: u16) -> Vec<u64> {
+    pub(crate) fn project_and_refine(&self, full_nfa_set: &[u64], y_idx: u16, step_n: u16) -> Vec<u64> {
         let mut projected = Vec::new();
         let target_len = step_n + 1;
 
@@ -603,7 +603,7 @@ impl PeekabooUniversalityFilter {
         projected
     }
 
-    fn is_universal(
+    pub(crate) fn is_universal(
         &mut self,
         full_nfa_set: &[u64],
         y_idx: u16,
@@ -713,7 +713,7 @@ impl PeekabooUniversalityFilter {
         true
     }
 
-    fn is_projected_final(
+    pub(crate) fn is_projected_final(
         &self,
         full_nfa_set: &[u64],
         y_idx: u16,
@@ -783,15 +783,15 @@ pub struct PeekabooResult {
 // DirtyPeekaboo: true dirty-state incremental peekaboo decomposition
 // ---------------------------------------------------------------------------
 // State status constants for DirtyPeekaboo
-const STATUS_NEW: u8 = 0;       // needs full expansion
-const STATUS_INTERIOR: u8 = 1;  // non-final, expanded (has cached arcs)
-const STATUS_QSTOP: u8 = 2;     // universal final, no outgoing arcs
-const STATUS_RSTOP: u8 = 3;     // non-universal final, expanded (has cached arcs)
+pub(crate) const STATUS_NEW: u8 = 0;       // needs full expansion
+pub(crate) const STATUS_INTERIOR: u8 = 1;  // non-final, expanded (has cached arcs)
+pub(crate) const STATUS_QSTOP: u8 = 2;     // universal final, no outgoing arcs
+pub(crate) const STATUS_RSTOP: u8 = 3;     // non-universal final, expanded (has cached arcs)
 
 /// Evict stale eps_cache entries for a peekaboo prefix extension.
 /// An entry is stale if the key NFA state has buf_len >= frontier,
 /// or the closure result contains states with buf_len >= frontier.
-fn evict_peekaboo_eps_cache(cache: &mut FxHashMap<u64, (Vec<u64>, u16)>, frontier: u16) {
+pub(crate) fn evict_peekaboo_eps_cache(cache: &mut FxHashMap<u64, (Vec<u64>, u16)>, frontier: u16) {
     cache.retain(|&key, (_value, max_bl)| {
         let key_bl = ((key >> 17) & 0x7FFF) as u16;
         key_bl < frontier && *max_bl < frontier
@@ -836,6 +836,10 @@ pub struct DirtyPeekaboo {
 
     // Target tracking
     prev_target: Vec<u32>,
+
+    // Generation counter: incremented on every full_reset() so callers can
+    // detect when DFA state IDs have been invalidated.
+    generation: u64,
 }
 
 impl DirtyPeekaboo {
@@ -892,6 +896,7 @@ impl DirtyPeekaboo {
             eps_cache: FxHashMap::default(),
             fst_univ_cache: FxHashMap::default(),
             prev_target: Vec::new(),
+            generation: 0,
         }
     }
 
@@ -903,6 +908,7 @@ impl DirtyPeekaboo {
     }
 
     fn full_reset(&mut self) {
+        self.generation += 1;
         self.arena = PowersetArena::new();
         self.global_start_id = 0;
         self.arcs_from.clear();
@@ -1097,6 +1103,11 @@ impl DirtyPeekaboo {
 
     pub fn global_start_id(&self) -> u32 {
         self.global_start_id
+    }
+
+    /// Generation counter — incremented on every full_reset().
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub fn arcs_from(&self, sid: u32) -> &[(u32, u32)] {
