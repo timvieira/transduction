@@ -6,9 +6,8 @@
 
 ### fst.py
 
-- [ ] Refactor `delta` data structure to separate input/output labels (line 66)
-- [ ] Convert `_compose()` to lazy machine pattern (line 320)
-- [ ] Convert `_augment_epsilon_transitions()` to lazy pattern (line 379)
+- [ ] Convert `_compose()` to lazy machine pattern (line 381)
+- [ ] Convert `_augment_epsilon_transitions()` to lazy pattern (line 440)
 
 ### peekaboo_incremental.py
 
@@ -32,12 +31,21 @@
   and total BFS work across iterations.  See the note at the top of the
   file.
 - [ ] Fix graphviz visualization: plates show precover for next-symbol
-  extension, not current target (line 110)
+  extension, not current target (line 114)
 - [ ] Use `Integerizer` in graphviz so nodes aren't misidentified by string
-  repr (line 116)
-- [ ] Color active vs inactive nodes in graphviz (line 119)
-- [ ] Add output ports between graphviz plates (line 125)
+  repr (line 120)
+- [ ] Color active vs inactive nodes in graphviz (line 123)
+- [ ] Add output ports between graphviz plates (line 129)
 
+### pynini_ops.py / PyniniNonrecursiveDecomp
+
+- [ ] Fix `PyniniNonrecursiveDecomp` on BPE-style FSTs with epsilon-input output
+  chains (`test_bpe_like`, `test_bpe_embedded` are xfailed for this impl)
+
+### lm/reference_transduced.py
+
+- [ ] Structure Q/R strings into a trie to reduce redundant inner LM state
+  updates (line 84)
 
 ### fsa.py & fst.py
 
