@@ -548,3 +548,229 @@ class RustPeekabooState:
         )
 
 
+# ---------------------------------------------------------------------------
+# RustTokenPeekabooState: position-set-quotiented adapter for TransducedLM
+# ---------------------------------------------------------------------------
+
+class _RustTokenDFAAdapter:
+    """Wraps RustTokenPeekabooDFA arc queries for beam search in TransducedLM."""
+
+    __slots__ = ('_helper', '_inv', '_fwd', '_start_ids')
+
+    def __init__(self, helper, inv_sym_map, start_ids):
+        self._helper = helper
+        self._inv = inv_sym_map
+        self._fwd = {v: k for k, v in inv_sym_map.items()}
+        self._start_ids = start_ids
+
+    def arcs(self, state_id):
+        raw = self._helper.arcs(state_id)
+        return [(self._inv[lbl], dst) for lbl, dst in raw]
+
+    def run(self, source_path):
+        path_u32 = [self._fwd[x] for x in source_path]
+        return self._helper.run(path_u32)
+
+    def start(self):
+        return list(self._start_ids)
+
+
+class RustTokenPeekabooState:
+    """PeekabooState adapter backed by RustTokenPeekabooDFA.
+
+    Uses position-set-quotiented peekaboo for much smaller DFAs on
+    token-decomposable FSTs.  Drop-in replacement for RustPeekabooState.
+    """
+
+    _LAZY_BFS_ATTRS = frozenset({
+        'decomp', 'dfa', 'resume_frontiers', 'preimage_stops',
+    })
+
+    def __init__(self, fst, target=(), parent=None, *, univ=None,
+                 _rust_state=None):
+        self.fst = fst
+        self.target = tuple(target) if not isinstance(target, tuple) else target
+        self.target_alphabet = fst.B - {EPSILON}
+        self.source_alphabet = fst.A - {EPSILON}
+        oov = set(self.target) - self.target_alphabet
+        if oov:
+            raise ValueError(f"Out of vocabulary target symbols: {oov}")
+
+        if _rust_state is not None:
+            self._rust_state = _rust_state
+        else:
+            import transduction_core
+            rust_fst, sym_map, state_map = to_rust_fst(fst)
+            helper = transduction_core.RustTokenPeekabooDFA(rust_fst)
+            self._rust_state = (helper, sym_map, state_map, rust_fst)
+
+        self._bfs_done = False
+
+    def __getattr__(self, name):
+        if name in RustTokenPeekabooState._LAZY_BFS_ATTRS:
+            self._ensure_bfs()
+            return self.__dict__[name]
+        raise AttributeError(
+            f"'{type(self).__name__}' object has no attribute {name!r}"
+        )
+
+    def _ensure_bfs(self):
+        if self._bfs_done:
+            return
+
+        helper, sym_map, state_map, rust_fst = self._rust_state
+        inv_sym_map = {v: k for k, v in sym_map.items()}
+
+        target_u32 = [sym_map(y) for y in self.target]
+        helper.new_step(target_u32)
+
+        start_ids = helper.start_ids()
+
+        # Walk the eagerly-built DFA to collect decomp, resume_frontiers, preimage
+        decomp = {}
+        resume_frontiers = {}
+        preimage_stops = set()
+
+        visited = set()
+        worklist = list(start_ids)
+        for s in start_ids:
+            visited.add(s)
+
+        while worklist:
+            sid = worklist.pop(0)
+            result = helper.classify(sid)
+
+            q_sym = inv_sym_map[result.quotient_sym] if result.quotient_sym is not None else None
+            r_syms = [inv_sym_map[s] for s in result.remainder_syms]
+
+            if q_sym is not None:
+                if q_sym not in decomp:
+                    decomp[q_sym] = DecompositionResult(set(), set())
+                decomp[q_sym].quotient.add(sid)
+
+            for y in r_syms:
+                if y not in decomp:
+                    decomp[y] = DecompositionResult(set(), set())
+                decomp[y].remainder.add(sid)
+
+            if result.is_preimage:
+                preimage_stops.add(sid)
+
+            # Resume frontiers from truncation boundary
+            if result.has_truncated:
+                for y_u32 in result.trunc_output_syms:
+                    y = inv_sym_map[y_u32]
+                    resume_frontiers.setdefault(y, set())
+
+            # Expand arcs
+            for _lbl, dest in helper.arcs(sid):
+                if dest not in visited:
+                    visited.add(dest)
+                    worklist.append(dest)
+
+                # Detect truncation boundary
+                if not result.has_truncated:
+                    dest_result = helper.classify(dest)
+                    if dest_result.has_truncated:
+                        for y_u32 in dest_result.trunc_output_syms:
+                            y = inv_sym_map[y_u32]
+                            resume_frontiers.setdefault(y, set()).add(sid)
+
+            # Add Q/R states to resume frontiers
+            if q_sym is not None and not result.has_truncated:
+                resume_frontiers.setdefault(q_sym, set()).add(sid)
+            for y in r_syms:
+                if not result.has_truncated:
+                    resume_frontiers.setdefault(y, set()).add(sid)
+
+        dfa = _RustTokenDFAAdapter(helper, inv_sym_map, start_ids)
+
+        self.decomp = decomp
+        self.resume_frontiers = resume_frontiers
+        self.preimage_stops = preimage_stops
+        self.dfa = dfa
+        self._bfs_done = True
+
+    def _collect_incoming(self):
+        if hasattr(self, '_incoming_cache'):
+            return self._incoming_cache
+        from collections import deque
+        dfa = self.dfa
+        incoming = {}
+        visited = set()
+        worklist = deque(dfa.start())
+        for s in dfa.start():
+            visited.add(s)
+        while worklist:
+            state = worklist.popleft()
+            for label, dest in dfa.arcs(state):
+                incoming.setdefault(dest, set()).add((label, state))
+                if dest not in visited:
+                    visited.add(dest)
+                    worklist.append(dest)
+        self._incoming_cache = incoming
+        return incoming
+
+    def build_qr_fsa(self, y):
+        self._ensure_bfs()
+        d = self.decomp.get(y)
+        if d is None:
+            return FSA(), FSA()
+        incoming = self._collect_incoming()
+        get_incoming = lambda s: incoming.get(s, ())
+        start_states = self.dfa.start()
+        q_fsa = _trimmed_fsa(start_states, d.quotient, get_incoming)
+        r_fsa = _trimmed_fsa(start_states, d.remainder, get_incoming)
+        return q_fsa, r_fsa
+
+    def __rshift__(self, y):
+        return RustTokenPeekabooState(
+            self.fst, self.target + (y,),
+            _rust_state=self._rust_state,
+        )
+
+
+# ---------------------------------------------------------------------------
+# RustLazyPrecoverDFA: lazy DFA for traversal / sampling
+# ---------------------------------------------------------------------------
+
+class RustLazyPrecoverDFA:
+    """Rust-backed lazy DFA over the precover NFA.
+
+    Wraps the same PrecoverNFA + PowersetArena machinery as ``RustDecomp``
+    but exposes the DFA for on-demand traversal instead of materializing
+    the full Q/R FSAs.  Useful for sampling random tokenizations.
+    """
+
+    def __init__(self, fst, target):
+        import transduction_core
+
+        rust_fst, sym_map, _ = to_rust_fst(fst)
+        target_u32 = [sym_map(y) for y in target]
+        self._inner = transduction_core.RustLazyPrecoverDFA(rust_fst, target_u32)
+        self._inv_sym = {v: k for k, v in sym_map.items()}
+
+    def start(self):
+        """Return the start state ID."""
+        return self._inner.start_id()
+
+    def is_final(self, sid):
+        """Whether a DFA state is final."""
+        return self._inner.is_final(sid)
+
+    def arcs(self, sid):
+        """Return arcs from a DFA state as a list of (label, dest_sid) pairs.
+
+        Labels are mapped back to Python symbols.
+        """
+        return [(self._inv_sym[lbl], dst) for lbl, dst in self._inner.arcs(sid)]
+
+    def powerset_size(self, sid):
+        """Number of NFA states in the powerset for a DFA state."""
+        return self._inner.powerset_size(sid)
+
+    def num_states(self):
+        """Total number of interned DFA states so far."""
+        return self._inner.num_states()
+
+

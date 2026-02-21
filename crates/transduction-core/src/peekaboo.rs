@@ -219,7 +219,7 @@ impl<'a> PeekabooNFAMapped<'a> {
 
     /// Compute all arcs from an NFA state (including epsilon arcs).
     /// Mirrors Python's `PeekabooPrecover.arcs()`.
-    fn arcs(&self, packed: u64) -> Vec<(u32, u64)> {
+    pub(crate) fn arcs(&self, packed: u64) -> Vec<(u32, u64)> {
         let (i, buf_len, extra_sym, truncated) = unpack_peekaboo(packed);
         let step_n = self.step_n;
 

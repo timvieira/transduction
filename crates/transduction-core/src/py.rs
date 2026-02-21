@@ -1,6 +1,6 @@
 use pyo3::prelude::*;
 use crate::fst::{Fst, compute_ip_universal_states};
-use crate::{decompose, peekaboo, incremental, minimize};
+use crate::{decompose, peekaboo, incremental, minimize, token_peekaboo, lazy_precover};
 use std::time::Instant;
 
 /// Python-visible FST wrapper. Constructed once from Python arrays, then
@@ -852,4 +852,125 @@ impl RustLazyPeekabooDFA {
 
 }
 
+// ---------------------------------------------------------------------------
+// RustTokenPeekabooDFA: position-set-quotiented lazy DFA
+// ---------------------------------------------------------------------------
 
+/// Rust-backed position-set-quotiented peekaboo DFA.
+///
+/// Same interface as `RustLazyPeekabooDFA` but uses position-key quotienting
+/// for much smaller DFAs on token-decomposable FSTs (~45 states for BPE vs
+/// ~7,000 with the generic approach).  The DFA is built eagerly in `new_step()`
+/// since it's small.
+#[pyclass(unsendable)]
+pub struct RustTokenPeekabooDFA {
+    fst: Py<RustFst>,
+    inner: token_peekaboo::TokenPeekabooDFA,
+}
+
+#[pymethods]
+impl RustTokenPeekabooDFA {
+    #[new]
+    fn new(py: Python<'_>, fst: Py<RustFst>) -> Self {
+        let inner = token_peekaboo::TokenPeekabooDFA::new(&fst.borrow(py).inner);
+        RustTokenPeekabooDFA { fst, inner }
+    }
+
+    /// Reset the DFA for the given target prefix.  Builds the entire
+    /// quotiented DFA eagerly (typically ~45 states for BPE).
+    fn new_step(&mut self, py: Python<'_>, target: Vec<u32>) {
+        let inner_fst = &self.fst.borrow(py).inner;
+        self.inner.new_step(inner_fst, target);
+    }
+
+    /// Return the start state IDs for the current step.
+    fn start_ids(&self) -> Vec<u32> {
+        self.inner.start_ids().to_vec()
+    }
+
+    /// Return arcs from a DFA state: Vec<(input_label_u32, dest_sid)>.
+    fn arcs(&self, sid: u32) -> Vec<(u32, u32)> {
+        self.inner.arcs(sid).to_vec()
+    }
+
+    /// Run a source path by simulating the NFA directly.
+    fn run(&mut self, py: Python<'_>, source_path: Vec<u32>) -> Option<u32> {
+        let inner_fst = &self.fst.borrow(py).inner;
+        self.inner.run_nfa(inner_fst, &source_path)
+    }
+
+    /// Classify a DFA state: quotient/remainder/preimage/truncated.
+    fn classify(&self, sid: u32) -> PeekabooClassifyResult {
+        let cls = self.inner.classify(sid);
+        let idx_to_sym = self.inner.idx_to_sym();
+        PeekabooClassifyResult {
+            quotient_sym: cls.quotient_sym.map(|idx| idx_to_sym[idx as usize]),
+            remainder_syms: cls.remainder_syms
+                .iter().map(|&idx| idx_to_sym[idx as usize]).collect(),
+            is_preimage: cls.is_preimage,
+            has_truncated: cls.has_truncated,
+            trunc_output_syms: cls.trunc_output_syms
+                .iter().map(|&idx| idx_to_sym[idx as usize]).collect(),
+        }
+    }
+
+    /// Return the idx→symbol mapping for decoding.
+    fn idx_to_sym_map(&self) -> Vec<u32> {
+        self.inner.idx_to_sym().to_vec()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RustLazyPrecoverDFA: lazy DFA over the precover NFA
+// ---------------------------------------------------------------------------
+
+/// Rust-backed lazy DFA over the precover NFA.
+///
+/// Wraps PrecoverNFA + PowersetArena and exposes on-demand state expansion.
+/// States are interned as u32 IDs. Arcs are computed lazily on first access.
+#[pyclass(unsendable)]
+pub struct RustLazyPrecoverDFA {
+    fst: Py<RustFst>,
+    inner: lazy_precover::LazyPrecoverDFA,
+}
+
+#[pymethods]
+impl RustLazyPrecoverDFA {
+    #[new]
+    fn new(py: Python<'_>, fst: Py<RustFst>, target: Vec<u32>) -> Self {
+        let inner = lazy_precover::LazyPrecoverDFA::new(&fst.borrow(py).inner, target);
+        RustLazyPrecoverDFA { fst, inner }
+    }
+
+    /// Return the start state ID.
+    fn start_id(&self) -> u32 {
+        self.inner.start_id()
+    }
+
+    /// Return arcs from a DFA state: Vec<(input_label_u32, dest_sid)>.
+    fn arcs(&mut self, py: Python<'_>, sid: u32) -> Vec<(u32, u32)> {
+        let fst = &self.fst.borrow(py).inner;
+        self.inner.arcs(fst, sid).to_vec()
+    }
+
+    /// Whether a DFA state is final.
+    fn is_final(&self, sid: u32) -> bool {
+        self.inner.is_final(sid)
+    }
+
+    /// Number of NFA states in the powerset for a DFA state.
+    fn powerset_size(&self, sid: u32) -> usize {
+        self.inner.powerset_size(sid)
+    }
+
+    /// Run a source path from start, returning the reached DFA state or None.
+    fn run(&mut self, py: Python<'_>, source_path: Vec<u32>) -> Option<u32> {
+        let fst = &self.fst.borrow(py).inner;
+        self.inner.run(fst, &source_path)
+    }
+
+    /// Total number of interned DFA states so far.
+    fn num_states(&self) -> usize {
+        self.inner.num_states()
+    }
+}

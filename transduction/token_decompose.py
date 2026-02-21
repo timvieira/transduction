@@ -229,13 +229,19 @@ class _PeekabooClassifyResult:
 class TokenPeekabooHelper:
     """FusedTransducedLM helper using position-set-quotiented peekaboo DFA.
 
-    Builds the standard PeekabooLookaheadNFA (optionally with trie-dispatch),
-    determinizes with position-set quotienting, and provides the
-    ``classify``/``arcs``/``run`` interface expected by ``FusedTransducedLM``.
+    Two modes depending on FST structure:
 
-    For token-decomposable FSTs, the quotiented DFA is much smaller than the
-    standard DFA.  For BPE (1,313 states): ~45 position-set states vs
-    ~7,000 standard DFA states per step.
+    **Trie mode** (``all_input_universal``): States are frozensets of
+    ``(buf_len, extra_byte_or_None, truncated)`` descriptors tracking hub
+    positions only.  Arcs are computed lazily via ByteTrie matching,
+    bypassing NFA epsilon-closure entirely.
+
+    **NFA mode** (non-AIU fallback): States are frozensets of NFA elements
+    ``(fst_state, buffer, truncated)``, quotiented by position key.  Arcs
+    are computed lazily via NFA expansion + epsilon closure on demand.
+
+    Both modes provide the ``classify``/``arcs``/``run`` interface expected
+    by ``FusedTransducedLM``.
     """
 
     def __init__(self, fst):
@@ -250,15 +256,27 @@ class TokenPeekabooHelper:
         from transduction.peekaboo_incremental import FstUniversality
         self._univ = FstUniversality(fst)
 
-        self._dfa_states = None       # canonical_key -> representative frozenset
-        self._dfa_arcs = None         # representative -> [(label, representative)]
-        self._dfa_starts = None       # list of representative frozensets
-        self._decomp = None
-        self._resume_frontiers = None
-        self._preimage_stops = None
-        self._classify_cache = {}
-        self._arcs_cache = {}
-        self._target = ()
+        # Trie mode: all_input_universal AND all hubs (start states) are final
+        self._use_trie = (
+            self._univ.all_input_universal
+            and all(fst.is_final(s) for s in fst.start)
+        )
+        if self._use_trie:
+            token_list = extract_token_bytes(fst)
+            self._trie = build_trie(fst)
+            self._token_bytes = {tid: bs for tid, bs in token_list}
+            self._all_tokens = [(tid, bs) for tid, bs in token_list if bs]
+            self._zero_len_tokens = [tid for tid, bs in token_list if not bs]
+
+        # Per-step state (reset in new_step)
+        self._classify_cache: dict = {}
+        self._arcs_cache: dict = {}
+        self._target: tuple = ()
+        self._N: int = 0
+        self._dfa_starts: list = []
+        self._lazy_arcs: dict = {}        # state -> [(label, dest_state)]
+        self._canonical: dict = {}        # frozenset -> canonical frozenset
+        self._resume_membership: dict = {}  # id(state) -> set of output symbols
 
     def idx_to_sym_map(self):
         out = [s for s in self._sym_map if s in self.fst.B and s != EPSILON]
@@ -267,160 +285,285 @@ class TokenPeekabooHelper:
     def new_step(self, target_u32):
         target = tuple(self._inv_sym[u] for u in target_u32)
         self._target = target
+        N = len(target)
+        self._N = N
         self._classify_cache.clear()
         self._arcs_cache.clear()
+        self._lazy_arcs.clear()
+        self._canonical.clear()
+        self._resume_membership.clear()
 
-        N = len(target)
+        if self._use_trie:
+            self._new_step_trie(target, N)
+        else:
+            self._new_step_nfa(target, N)
 
-        # Build peekaboo NFA (with trie dispatch if available)
+    def _new_step_trie(self, target, N):
+        # Precompute trie matches for each target position
+        self._matches = [self._trie.matches_at(target, p) for p in range(N)]
+
+        # Start state: hub at position 0
+        start = frozenset({(0, None, False)})
+        self._canonical[start] = start
+        self._dfa_starts = [start]
+
+    def _new_step_nfa(self, target, N):
         from transduction.trie_dispatch import TrieDispatchPeekabooPrecover
-        nfa = TrieDispatchPeekabooPrecover(self.fst, target)
-
-        # Quotiented powerset determinization + classification in a single BFS.
-        # `canonical` maps position keys to representative DFA states (frozensets).
-        canonical: dict[frozenset, frozenset] = {}
-        dfa_arcs: dict[frozenset, list[tuple[Any, frozenset]]] = {}
+        self._nfa = TrieDispatchPeekabooPrecover(self.fst, target)
 
         # Compute NFA start states and epsilon closure
-        raw_starts: set = set()
-        for s in nfa.start():
-            raw_starts.add(s)
-        # Epsilon closure of start
-        start_fs = self._eps_closure(nfa, frozenset(raw_starts))
+        raw_starts = set(self._nfa.start())
+        start_fs = self._eps_closure(self._nfa, frozenset(raw_starts))
         start_key = _position_key(start_fs, N)
-        canonical[start_key] = start_fs
+        self._canonical[start_key] = start_fs
+        self._dfa_starts = [start_fs]
 
-        worklist: deque = deque()
-        worklist.append(start_key)
+        # Lazily built universality filters (non-AIU only)
+        self._univ_filters: dict = {}
 
-        decomp: dict[Any, DecompositionResult] = {}
-        resume_frontiers: dict[Any, set] = {}
-        preimage_stops: set = set()
+    # ---- Trie-based lazy expansion (AIU path) ----
 
-        _all_input_universal = self._univ.all_input_universal
-        _fst_is_final = self.fst.is_final
+    def _expand_trie(self, state):
+        """Compute arcs from ``state`` using trie matching."""
+        N = self._N
+        by_token: dict = defaultdict(set)
 
-        if not _all_input_universal:
-            from transduction.peekaboo_incremental import TruncatedDFA, FstUniversality
-            truncated_dfas: dict = {}
-            univ_filters: dict = {}
+        for (pos, extra, truncated) in state:
+            if pos < N:
+                # Hub within target: use precomputed trie matches
+                for (tid, advance) in self._matches[pos]:
+                    tlen = len(self._token_bytes[tid])
+                    if tlen == advance:
+                        # Token fits within (or exactly at) target boundary
+                        by_token[tid].add((pos + advance, None, False))
+                    else:
+                        # Token extends beyond target
+                        extra_byte = self._token_bytes[tid][N - pos]
+                        trunc = tlen > (N - pos) + 1
+                        by_token[tid].add((N + 1, extra_byte, trunc))
+            elif pos == N and extra is None:
+                # Hub at target end: all tokens fire
+                for tid, bs in self._all_tokens:
+                    by_token[tid].add((N + 1, bs[0], len(bs) > 1))
+            elif pos == N + 1 and not truncated:
+                # Non-truncated lookahead: all non-zero tokens -> truncated
+                for tid, _bs in self._all_tokens:
+                    by_token[tid].add((N + 1, extra, True))
+            elif pos == N + 1 and truncated:
+                # Already truncated: all tokens -> self-loop
+                for tid, _bs in self._all_tokens:
+                    by_token[tid].add((N + 1, extra, True))
 
-        def ensure_symbol(y):
-            if y not in decomp:
-                decomp[y] = DecompositionResult(set(), set())
-                resume_frontiers[y] = set()
-                if not _all_input_universal:
-                    # Build the truncated DFA and universality filter for y
-                    # We need a LazyDeterminize-compatible DFA object.
-                    # Use the NFA for target + (y,)
-                    from transduction.peekaboo_incremental import TruncatedDFA
-                    nfa_y = TrieDispatchPeekabooPrecover(self.fst, target + (y,))
-                    trunc_dfa = TruncatedDFA(
-                        dfa=None, fst=self.fst, target=target + (y,),
-                    )
-                    # For non-aiu, store a reference for later universality checks.
-                    # We use the _univ helper's make_filter, which needs a DFA-like
-                    # object with arcs().  We pass None and rely on the state-level check.
-                    truncated_dfas[y] = trunc_dfa
-                    univ_filters[y] = self._univ.make_filter(
-                        self.fst, target + (y,), trunc_dfa, self.fst.A - {EPSILON},
-                    )
+        # Build arc list, canonicalize successor states
+        arcs_list: list = []
+        state_has_truncated = any(t for _, _, t in state)
+        resume_syms: set = set()
 
-        expanded_keys: set = set()
+        for tid, succ_descs in by_token.items():
+            succ_state = frozenset(succ_descs)
+            succ_state = self._canonicalize(succ_state)
+            arcs_list.append((tid, succ_state))
 
-        while worklist:
-            key = worklist.popleft()
-            if key in expanded_keys:
-                continue
-            expanded_keys.add(key)
+            # Resume frontier detection: non-truncated source -> truncated dest
+            if not state_has_truncated:
+                for (_, extra_d, trunc_d) in succ_state:
+                    if trunc_d and extra_d is not None:
+                        resume_syms.add(extra_d)
 
-            state = canonical[key]
+        # Zero-length tokens: self-loops
+        for tid in self._zero_len_tokens:
+            arcs_list.append((tid, state))
 
-            # --- Classify this state ---
-            relevant_symbols: set = set()
-            final_symbols: set = set()
-            state_has_truncated = False
-            state_is_preimage = False
+        self._lazy_arcs[state] = arcs_list
 
-            for (i, ys, truncated) in state:
-                if len(ys) == N and _fst_is_final(i):
-                    state_is_preimage = True
-                if len(ys) > N:
-                    y = ys[N]
-                    relevant_symbols.add(y)
-                    if ys[:N] == target and _fst_is_final(i):
-                        final_symbols.add(y)
-                state_has_truncated = state_has_truncated or truncated
+        # Record resume frontier membership
+        if resume_syms:
+            self._resume_membership.setdefault(id(state), set()).update(
+                resume_syms,
+            )
 
-            if state_is_preimage:
-                preimage_stops.add(state)
+    def _compute_classify_trie(self, state):
+        """Compute classification for a trie-based state."""
+        N = self._N
 
-            continuous = None
-            for y in relevant_symbols:
-                ensure_symbol(y)
-                is_univ = (
-                    y in final_symbols if _all_input_universal
-                    else univ_filters[y].is_universal(state)
+        relevant_symbols: set = set()
+        has_truncated = False
+        is_preimage = False
+
+        for (pos, extra, truncated) in state:
+            if pos == N and extra is None and not truncated:
+                is_preimage = True
+            if pos == N + 1 and extra is not None:
+                relevant_symbols.add(extra)
+            has_truncated = has_truncated or truncated
+
+        # With all_input_universal + all hubs final: every relevant symbol
+        # with a final hub is universal (Q-absorbed).
+        quotient_sym = None
+        remainder_syms: list = []
+        for y in relevant_symbols:
+            if quotient_sym is not None:
+                raise ValueError(
+                    f"State is universal for both {quotient_sym!r} and {y!r}"
                 )
-                if is_univ:
-                    if continuous is not None:
-                        raise ValueError(
-                            f"State is universal for both {continuous!r} and {y!r}"
-                        )
-                    decomp[y].quotient.add(state)
-                    continuous = y
-                    continue
-                if y in final_symbols:
-                    decomp[y].remainder.add(state)
+            quotient_sym = y
 
-            if continuous is not None:
-                # Q-absorbed — don't expand further
-                dfa_arcs[state] = []
+        # Trunc output syms
+        trunc_output_syms_set: set = set()
+        rm = self._resume_membership.get(id(state))
+        if rm:
+            trunc_output_syms_set.update(rm)
+        # Non-truncated Q/R states are also resume frontiers
+        if not has_truncated:
+            if quotient_sym is not None:
+                trunc_output_syms_set.add(quotient_sym)
+            for y in remainder_syms:
+                trunc_output_syms_set.add(y)
+
+        return _PeekabooClassifyResult(
+            quotient_sym=(
+                self._sym_map(quotient_sym)
+                if quotient_sym is not None else None
+            ),
+            remainder_syms=[self._sym_map(y) for y in remainder_syms],
+            is_preimage=is_preimage,
+            has_truncated=has_truncated,
+            trunc_output_syms=[
+                self._sym_map(y) for y in trunc_output_syms_set
+            ],
+        )
+
+    # ---- NFA-based lazy expansion (non-AIU fallback) ----
+
+    def _expand_nfa(self, state):
+        """Compute arcs from ``state`` using NFA expansion + epsilon closure."""
+        N = self._N
+        nfa = self._nfa
+
+        by_label: dict = defaultdict(set)
+        for nfa_elem in state:
+            for (x, dest) in nfa.arcs(nfa_elem):
+                if x != EPSILON:
+                    by_label[x].add(dest)
+
+        arcs_list: list = []
+        closure_cache: dict = {}
+        state_has_truncated = any(t for _, _, t in state)
+        resume_syms: set = set()
+
+        for x, dest_set in by_label.items():
+            dest_key_raw = frozenset(dest_set)
+            if dest_key_raw not in closure_cache:
+                closure_cache[dest_key_raw] = self._eps_closure(
+                    nfa, dest_key_raw,
+                )
+            dest_fs = closure_cache[dest_key_raw]
+            dest_key = _position_key(dest_fs, N)
+            if dest_key not in self._canonical:
+                self._canonical[dest_key] = dest_fs
+            dest_rep = self._canonical[dest_key]
+            arcs_list.append((x, dest_rep))
+
+            # Resume frontier detection
+            if not state_has_truncated:
+                for (_, ys_d, trunc_d) in dest_rep:
+                    if trunc_d:
+                        y_d = ys_d[-1] if ys_d else None
+                        if y_d is not None:
+                            resume_syms.add(y_d)
+
+        self._lazy_arcs[state] = arcs_list
+
+        if resume_syms:
+            self._resume_membership.setdefault(id(state), set()).update(
+                resume_syms,
+            )
+
+    def _ensure_univ_filter(self, y):
+        """Lazily build universality filter for output symbol ``y``."""
+        if y not in self._univ_filters:
+            from transduction.peekaboo_incremental import TruncatedDFA
+            target = self._target
+            trunc_dfa = TruncatedDFA(
+                dfa=None, fst=self.fst, target=target + (y,),
+            )
+            self._univ_filters[y] = self._univ.make_filter(
+                self.fst, target + (y,), trunc_dfa,
+                self.fst.A - {EPSILON},
+            )
+
+    def _compute_classify_nfa(self, state):
+        """Compute classification for an NFA-based state."""
+        N = self._N
+        target = self._target
+        _fst_is_final = self.fst.is_final
+        _all_input_universal = self._univ.all_input_universal
+
+        relevant_symbols: set = set()
+        final_symbols: set = set()
+        has_truncated = False
+        is_preimage = False
+
+        for (i, ys, truncated) in state:
+            if len(ys) == N and _fst_is_final(i):
+                is_preimage = True
+            if len(ys) > N:
+                y = ys[N]
+                relevant_symbols.add(y)
+                if ys[:N] == target and _fst_is_final(i):
+                    final_symbols.add(y)
+            has_truncated = has_truncated or truncated
+
+        quotient_sym = None
+        remainder_syms: list = []
+        for y in relevant_symbols:
+            if _all_input_universal:
+                is_univ = y in final_symbols
+            else:
+                self._ensure_univ_filter(y)
+                is_univ = self._univ_filters[y].is_universal(state)
+            if is_univ:
+                if quotient_sym is not None:
+                    raise ValueError(
+                        f"State is universal for both {quotient_sym!r} "
+                        f"and {y!r}"
+                    )
+                quotient_sym = y
                 continue
+            if y in final_symbols:
+                remainder_syms.append(y)
 
-            # --- Expand: compute NFA successors per input symbol ---
-            by_label: dict[Any, set] = defaultdict(set)
-            for nfa_elem in state:
-                for (x, dest) in nfa.arcs(nfa_elem):
-                    if x != EPSILON:
-                        by_label[x].add(dest)
+        # Trunc output syms
+        trunc_output_syms_set: set = set()
+        rm = self._resume_membership.get(id(state))
+        if rm:
+            trunc_output_syms_set.update(rm)
+        if not has_truncated:
+            if quotient_sym is not None:
+                trunc_output_syms_set.add(quotient_sym)
+            for y in remainder_syms:
+                trunc_output_syms_set.add(y)
 
-            # Epsilon closure of each successor set
-            arcs_list: list[tuple[Any, frozenset]] = []
-            for x, dest_set in by_label.items():
-                dest_fs = self._eps_closure(nfa, frozenset(dest_set))
-                dest_key = _position_key(dest_fs, N)
-                if dest_key not in canonical:
-                    canonical[dest_key] = dest_fs
-                dest_rep = canonical[dest_key]
-                arcs_list.append((x, dest_rep))
+        return _PeekabooClassifyResult(
+            quotient_sym=(
+                self._sym_map(quotient_sym)
+                if quotient_sym is not None else None
+            ),
+            remainder_syms=[self._sym_map(y) for y in remainder_syms],
+            is_preimage=is_preimage,
+            has_truncated=has_truncated,
+            trunc_output_syms=[
+                self._sym_map(y) for y in trunc_output_syms_set
+            ],
+        )
 
-                if dest_key not in expanded_keys:
-                    worklist.append(dest_key)
+    # ---- Shared helpers ----
 
-                # Truncation-boundary carry-forward detection
-                if not state_has_truncated:
-                    for (_, ys_d, trunc_d) in dest_rep:
-                        if trunc_d:
-                            y_d = ys_d[-1] if ys_d else None
-                            if y_d is not None:
-                                ensure_symbol(y_d)
-                                resume_frontiers[y_d].add(state)
-
-            dfa_arcs[state] = arcs_list
-
-        # Add non-truncated Q/R states to resume frontiers
-        for y in decomp:
-            for st in decomp[y].quotient | decomp[y].remainder:
-                if not any(truncated for _, _, truncated in st):
-                    resume_frontiers.setdefault(y, set()).add(st)
-
-        self._dfa_states = canonical
-        self._dfa_arcs = dfa_arcs
-        self._dfa_starts = [canonical[start_key]]
-        self._decomp = decomp
-        self._resume_frontiers = resume_frontiers
-        self._preimage_stops = preimage_stops
+    def _canonicalize(self, state):
+        if state in self._canonical:
+            return self._canonical[state]
+        self._canonical[state] = state
+        return state
 
     def _eps_closure(self, nfa, state_set: frozenset) -> frozenset:
         """Compute epsilon closure of a set of NFA states."""
@@ -434,6 +577,16 @@ class TokenPeekabooHelper:
                     worklist.append(dest)
         return frozenset(result)
 
+    def _ensure_expanded(self, state):
+        """Ensure arcs for ``state`` have been computed."""
+        if state not in self._lazy_arcs:
+            if self._use_trie:
+                self._expand_trie(state)
+            else:
+                self._expand_nfa(state)
+
+    # ---- Public interface ----
+
     def start_ids(self):
         return list(self._dfa_starts)
 
@@ -441,20 +594,21 @@ class TokenPeekabooHelper:
         cached = self._arcs_cache.get(id(sid))
         if cached is not None:
             return cached
-        raw = self._dfa_arcs.get(sid, [])
+        self._ensure_expanded(sid)
+        raw = self._lazy_arcs.get(sid, [])
         arcs = [(self._sym_map(x), dest) for x, dest in raw]
         self._arcs_cache[id(sid)] = arcs
         return arcs
 
     def run(self, source_path):
         path = [self._inv_sym[x] for x in source_path]
-        states = self._dfa_starts
-        if not states:
+        if not self._dfa_starts:
             return None
-        state = states[0]
+        state = self._dfa_starts[0]
         for x in path:
+            self._ensure_expanded(state)
             found = False
-            for (lbl, dest) in self._dfa_arcs.get(state, []):
+            for (lbl, dest) in self._lazy_arcs.get(state, []):
                 if lbl == x:
                     state = dest
                     found = True
@@ -467,31 +621,10 @@ class TokenPeekabooHelper:
         cached = self._classify_cache.get(id(sid))
         if cached is not None:
             return cached
-
-        quotient_sym = None
-        remainder_syms = []
-        for y, d in self._decomp.items():
-            if sid in d.quotient:
-                if quotient_sym is not None and quotient_sym != y:
-                    raise ValueError("Multiple quotient symbols for one state")
-                quotient_sym = y
-            if sid in d.remainder:
-                remainder_syms.append(y)
-
-        is_preimage = sid in self._preimage_stops
-        has_truncated = any(truncated for _, _, truncated in sid)
-        trunc_output_syms = [
-            y for y, states in self._resume_frontiers.items()
-            if sid in states
-        ]
-
-        result = _PeekabooClassifyResult(
-            quotient_sym=(self._sym_map(quotient_sym) if quotient_sym is not None else None),
-            remainder_syms=[self._sym_map(y) for y in remainder_syms],
-            is_preimage=is_preimage,
-            has_truncated=has_truncated,
-            trunc_output_syms=[self._sym_map(y) for y in trunc_output_syms],
-        )
+        if self._use_trie:
+            result = self._compute_classify_trie(sid)
+        else:
+            result = self._compute_classify_nfa(sid)
         self._classify_cache[id(sid)] = result
         return result
 
@@ -543,23 +676,57 @@ class TokenPeekabooState:
 
         helper = self._helper
         sym_map = helper._sym_map
-        inv_sym = helper._inv_sym
 
         target_u32 = [sym_map(y) for y in self.target]
         helper.new_step(target_u32)
 
-        # Build decomp: {py_sym: DecompositionResult(quotient=set, remainder=set)}
-        decomp = {}
-        for y, d in helper._decomp.items():
-            decomp[y] = DecompositionResult(set(d.quotient), set(d.remainder))
+        # Materialize all reachable states to extract decomp/resume/preimage.
+        worklist: deque = deque(helper._dfa_starts)
+        visited: set = {id(s) for s in helper._dfa_starts}
 
-        resume_frontiers = {}
-        for y, states in helper._resume_frontiers.items():
-            resume_frontiers[y] = set(states)
+        decomp: dict = {}
+        resume_frontiers: dict = {}
+        preimage_stops: set = set()
+        inv = helper._inv_sym
 
-        preimage_stops = set(helper._preimage_stops)
+        while worklist:
+            state = worklist.popleft()
+            cls = helper.classify(state)
 
-        # DFA adapter
+            if cls.is_preimage:
+                preimage_stops.add(state)
+
+            q_sym = (
+                inv[cls.quotient_sym] if cls.quotient_sym is not None
+                else None
+            )
+            r_syms = [inv[s] for s in cls.remainder_syms]
+            trunc_syms = [inv[s] for s in cls.trunc_output_syms]
+
+            for y in trunc_syms:
+                resume_frontiers.setdefault(y, set()).add(state)
+
+            if q_sym is not None:
+                decomp.setdefault(
+                    q_sym, DecompositionResult(set(), set()),
+                )
+                decomp[q_sym].quotient.add(state)
+                # Q-absorbed: don't expand arcs
+                continue
+
+            for y in r_syms:
+                decomp.setdefault(
+                    y, DecompositionResult(set(), set()),
+                )
+                decomp[y].remainder.add(state)
+
+            # Expand
+            helper._ensure_expanded(state)
+            for (_, dest) in helper._lazy_arcs.get(state, []):
+                if id(dest) not in visited:
+                    visited.add(id(dest))
+                    worklist.append(dest)
+
         dfa = _TokenDFAAdapter(helper)
 
         self.decomp = decomp
@@ -582,17 +749,18 @@ class _TokenDFAAdapter:
         self._helper = helper
 
     def arcs(self, state):
-        raw = self._helper._dfa_arcs.get(state, [])
-        return list(raw)
+        self._helper._ensure_expanded(state)
+        return list(self._helper._lazy_arcs.get(state, []))
 
     def run(self, source_path):
-        states = self._helper._dfa_starts
-        if not states:
+        helper = self._helper
+        if not helper._dfa_starts:
             return None
-        state = states[0]
+        state = helper._dfa_starts[0]
         for x in source_path:
+            helper._ensure_expanded(state)
             found = False
-            for (lbl, dest) in self._helper._dfa_arcs.get(state, []):
+            for (lbl, dest) in helper._lazy_arcs.get(state, []):
                 if lbl == x:
                     state = dest
                     found = True

@@ -22,7 +22,7 @@ use std::time::Instant;
 ///
 /// Assumes the FST has a hub structure: start state(s) with non-epsilon input
 /// arcs leading into chains of epsilon-input arcs that return to a start state.
-fn extract_token_bytes(fst: &Fst) -> Vec<(u32, Vec<u32>)> {
+pub(crate) fn extract_token_bytes(fst: &Fst) -> Vec<(u32, Vec<u32>)> {
     let start_set: FxHashSet<u32> = fst.start_states.iter().copied().collect();
     let mut tokens = Vec::new();
 
@@ -68,21 +68,21 @@ fn extract_token_bytes(fst: &Fst) -> Vec<(u32, Vec<u32>)> {
 // Byte trie for fast prefix matching
 // ---------------------------------------------------------------------------
 
-struct ByteTrie {
-    children: Vec<FxHashMap<u32, u32>>,
+pub(crate) struct ByteTrie {
+    pub(crate) children: Vec<FxHashMap<u32, u32>>,
     /// (token_id, byte_length) for tokens completing at each node.
-    completions: Vec<Vec<(u32, u32)>>,
+    pub(crate) completions: Vec<Vec<(u32, u32)>>,
 }
 
 impl ByteTrie {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         ByteTrie {
             children: vec![FxHashMap::default()],
             completions: vec![Vec::new()],
         }
     }
 
-    fn insert(&mut self, token_id: u32, bytes: &[u32]) {
+    pub(crate) fn insert(&mut self, token_id: u32, bytes: &[u32]) {
         let mut node = 0usize;
         for &b in bytes {
             if let Some(&child) = self.children[node].get(&b) {
@@ -106,7 +106,7 @@ impl ByteTrie {
     /// 2. **Partial match**: the token's byte sequence extends beyond the
     ///    target. The first `target_len - pos` bytes match, and the
     ///    remaining bytes are consumed "post-target". Advance = target_len - pos.
-    fn matches_at(&self, target: &[u32], pos: usize) -> Vec<(u32, u32)> {
+    pub(crate) fn matches_at(&self, target: &[u32], pos: usize) -> Vec<(u32, u32)> {
         let mut result = Vec::new();
         let mut node = 0usize;
         let target_len = target.len();
