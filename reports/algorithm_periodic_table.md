@@ -22,10 +22,6 @@
 | `RustDirtyState` | ✓ | | ✓ | N | ✓ | ✓ | ✓ | ✓ | rust ext |
 | `RustDirtyPeekaboo` | ✓ | ✓ | ✓ | N+K | ✓ | ✓ | ✓ | ✓ | rust ext |
 | `RustLazyPeekabooDFA` | ✓ | ✓ | ✓ | N+K | ✓ | ✓ | ✓ | ✓ | rust ext; lazy DFA for TransducedLM |
-| **Position-set / Token-decomposable** | | | | | | | | | |
-| `GeneralTokenDecompose` | | | | N | ✓ | gfp | ✓ | | TD FSTs only |
-| `PositionSetPeekabooState` | ‡ | ✓ | | N+K | ✓ | ✓ | ✓ | | TD FSTs only |
-| `TokenDecompose` | | | | N | ✓ | aiu | ✓ | | aiu + hub only |
 | `FactoredDecomp` | ✓ | | ✓ | N | ✓ | ✓ | ✓ | | |
 | **Rho-arc compression** | | | | | | | | | |
 | `SymbolicLazyDeterminize` | | | | N | ✓ | | ✓ | | |
@@ -35,8 +31,6 @@
 
 †`TruncatedIncrementalDFADecomp.decompose_next()` creates per-symbol overlay children sharing the parent's clean arcs — batched via overlays, not via a single BFS pass like Peekaboo.
 
-‡`PositionSetPeekabooState` has `>>` but it rebuilds from scratch each step (no dirty-state reuse, `resume_frontiers` always empty). Not truly incremental.
-
 ## Key columns explained
 
 - **Incremental (`>>`)** — Extends by one target symbol, reusing prior computation (vs rebuilding from scratch).
@@ -44,7 +38,7 @@
 - **Dirty-state** — On `>>`, only re-expands DFA states affected by the extension (frontier/border states). "Resume-frontiers" is the peekaboo variant; "skip-steps" means the DirtyPeekaboo approach of skipping already-completed peekaboo steps.
 - **Buffer truncation** — Truncates the target-side buffer at depth N, N+1, or N+K to bound the state space. This is *the* mechanism that separates algorithms that terminate on general FSTs from those that don't.
 - **State-based** — Explores automaton states (finite) vs source strings (potentially infinite).
-- **UnivFilter** — Uses the cascading `UniversalityFilter` (all-input-universal fast path -> ip-universal witnesses -> monotonicity caches -> BFS fallback) vs a simpler bare BFS.
+- **UnivFilter** — Uses the cascading `UniversalityFilter` (all-input-universal fast path $\to$ ip-universal witnesses $\to$ monotonicity caches $\to$ BFS fallback) vs a simpler bare BFS.
 - **General (inf quotients)** — Terminates on FSTs where the quotient language is infinite (e.g., `triplets_of_doom`).
 
 ## Natural groupings
@@ -74,7 +68,7 @@ Note: `TruncatedIncrementalDFADecomp` and `RustDirtyState` use a frontier-marker
 
 ## Transduced Language Models
 
-The decomposition algorithms above compute *structural* Q/R decompositions. The transduced LM layer sits on top, combining a decomposition with an inner LM to compute the pushforward distribution $P(\text{target}) = \sum_{x \in T^{-1}(\text{target})} P_{\text{inner}}(x)$. All implementations conform to the `LM`/`LMState` interface: `state >> y` advances by one target symbol, `state.logp_next[y]` returns log P(y | target so far).
+The decomposition algorithms above compute *structural* Q/R decompositions. The transduced LM layer sits on top, combining a decomposition with an inner LM to compute the pushforward distribution $P(\text{target}) = \sum_{x \in T^{-1}(\text{target})} P_{\text{inner}}(x)$. All implementations conform to the `LM`/`LMState` interface: `state >> y` advances by one target symbol, `state.logp_next[y]` returns $\log P(y \mid \text{target so far})$.
 
 ### Feature Matrix
 
@@ -88,7 +82,7 @@ The decomposition algorithms above compute *structural* Q/R decompositions. The 
 
 **`TransducedLM`** (`lm/transduced.py`) — The primary approximate inference engine. Maintains K particles (source-prefix hypotheses), each tracking a DFA state and an inner LM state. Per target step:
 1. The peekaboo decomposition classifies DFA states as Q(y), R(y), or preimage.
-2. Best-first search pops particles by weight. Quotient particles are *absorbed* — their full weight contributes to y's score (exact marginalization over all continuations). Remainder particles contribute weight × $P_{\text{inner}}(\text{EOS})$. Non-classified particles are expanded by source symbols weighted by $P_{\text{inner}}$.
+2. Best-first search pops particles by weight. Quotient particles are *absorbed* — their full weight contributes to y's score (exact marginalization over all continuations). Remainder particles contribute $\text{weight} \times P_{\text{inner}}(\text{EOS})$. Non-classified particles are expanded by source symbols weighted by $P_{\text{inner}}$.
 3. After the expansion budget (`max_expansions`) is exhausted, remaining queued particles are scored without expansion.
 4. Carry-forward passes particles at Q/R/resume-frontier states to the next step; top-K pruning bounds the beam.
 
@@ -118,7 +112,7 @@ These are non-incremental baselines for estimating the prefix probability P(outp
 
 All three search through the precover DFA (the automaton recognizing source strings whose output starts with the target prefix), weighted by the inner LM.
 
-**`prioritized_enumeration`** — Best-first search (max-heap by LM weight). Pops the highest-weight item and classifies it: Q states are absorbed (full prefix probability), R states contribute weight × P(EOS). Non-terminal states are expanded by source symbols. Equivalent to the per-step search in `TransducedLM`, but for a single fixed target rather than incrementally.
+**`prioritized_enumeration`** — Best-first search (max-heap by LM weight). Pops the highest-weight item and classifies it: Q states are absorbed (full prefix probability), R states contribute $\text{weight} \times P(\text{EOS})$. Non-terminal states are expanded by source symbols. Equivalent to the per-step search in `TransducedLM`, but for a single fixed target rather than incrementally.
 
 **`importance_sampling`** — Samples a single source path through the precover DFA, proposing transitions proportional to the inner LM. At Q states the sample is absorbed; at R states, EOS can be chosen. The return value carries a log importance weight (the sum of proposal normalizers) for use in Monte Carlo estimation.
 

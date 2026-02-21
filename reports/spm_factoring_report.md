@@ -21,7 +21,7 @@ For SPM FSTs:
 - The remainder is empty (no FST state is "stuck" behind the target cursor).
 - The quotient generalizes the covering: `Q(y) = {x : f(x) starts with y}`.
 
-The `TokenDecompose` algorithm exploits SPM by tracking DFA states as sets of
+In principle, an SPM-aware algorithm could track DFA states as sets of
 *positions* `{0, ..., |y|}` instead of sets of `(fst_state, position)` pairs.
 This drops the FST-state dimension entirely, yielding O(N) states instead of
 O(|fst_states| * N).
@@ -109,10 +109,10 @@ are represented as chains of epsilon-input/byte-output arcs:
 ```
 Epsilon closure from any DFA state simultaneously reaches NFA elements at
 different depths in different token chains, mixing positions within a single
-DFA state. `TokenDecompose` avoids this entirely by bypassing `PrecoverNFA`
-and tracking positions directly against the BPE trie — a fundamentally different
-algorithm that the factored representation cannot replicate within the
-`PrecoverNFA` framework.
+DFA state. A position-only algorithm could avoid this entirely by bypassing
+`PrecoverNFA` and tracking positions directly against the BPE trie — a
+fundamentally different approach that the factored representation cannot
+replicate within the `PrecoverNFA` framework.
 
 ## 4. Empirical Results
 
@@ -386,140 +386,7 @@ confluence of factors absent in BPE/PTB:
 - 100% position-uniform → frontier cache maximally effective
 - Large DFA (131K states) → dirty-state reuse avoids significant work
 
-## 6. Token-Decomposability Analysis
-
-### The right question
-
-The previous saturation analysis (measuring whether each DFA state contains the
-full `Max(pos, target)` set) used a flawed definition: `Max` was computed as the
-union of FST states across *all* reachable DFA states, conflating different source
-contexts. This led to the incorrect conclusion that BPE was only 15-22%
-"saturated."
-
-The correct question is simpler and more powerful: **Do DFA transitions depend
-only on position sets, not on FST states?**
-
-### Definition: Token-Decomposability
-
-A decomposition is **TokenDecomposable** if two conditions hold across all
-reachable DFA states:
-
-1. **Position-deterministic transitions**: For all DFA states S1, S2 with
-   `positions(S1) = positions(S2)` and source symbol `a`:
-   `positions(succ(S1, a)) = positions(succ(S2, a))`
-
-2. **Position-deterministic finality**: For all DFA states S1, S2 with
-   `positions(S1) = positions(S2)`:
-   `is_final(S1) = is_final(S2)`
-
-When both hold, position sets alone determine DFA behavior. We can quotient away
-the FST-state dimension: instead of tracking `frozenset({(q, buf), ...})`, track
-`frozenset({pos1, pos2, ...})`. This is exactly what `TokenDecompose` does.
-
-The **compression ratio** `states / position_sets` measures how much this
-quotient compresses the DFA.
-
-### Empirical results
-
-Results from `reports/token_decomposability.py`, grouping DFA states by position
-set and checking whether all members of each group agree on successor position
-sets and finality:
-
-| FST | aiu | States | Pos Sets | Compress | TD States | TD Groups | Violations |
-|-----|-----|--------|----------|----------|-----------|-----------|------------|
-| replace(xyz) | True | 546 | 546 | 1.0x | **100.0%** | **100.0%** | 0 |
-| delete_b | True | 56 | 56 | 1.0x | **100.0%** | **100.0%** | 0 |
-| samuel_example | False | 357 | 276 | 1.3x | 55.2% | 71.0% | 120 |
-| doom(K=3) | False | 126 | 90 | 1.4x | 61.9% | 86.7% | 24 |
-| mystery1 | False | 112 | 56 | 2.0x | 46.4% | 46.4% | 30 |
-| mystery7 | False | 112 | 56 | 2.0x | 46.4% | 46.4% | 30 |
-| newspeak2 | False | 131,484 | 72,383 | 1.8x | 91.2% | 96.0% | 21,195 |
-| anbn | False | 109 | 78 | 1.4x | 45.0% | 61.5% | 30 |
-| backticks_to_quote | False | 312 | 175 | 1.8x | 52.9% | 63.4% | 121 |
-| parity_copy | False | 42 | 36 | 1.2x | 71.4% | 83.3% | 0 |
-| **BPE(100)** | **True** | **18** | **18** | **1.0x** | **100.0%** | **100.0%** | **0** |
-| **BPE(500)** | **True** | **95** | **95** | **1.0x** | **100.0%** | **100.0%** | **0** |
-| **PTB** | **False** | **634** | **18** | **35.2x**† | **100.0%** | **100.0%** | **0** |
-
-†*Update: These PTB numbers (634→18, 35.2x) were from a shorter target and
-used descriptors that stripped FST state from truncated elements. With
-corrected descriptors, the full 45-symbol target gives 37,803→217 (174x).*
-
-### Key findings
-
-**1. BPE is 100% TokenDecomposable (confirmed).**
-
-BPE has zero violations and 100% TD states. Despite the PrecoverNFA DFA states
-being only 11.1% position-uniform (Section 5.4), the *transitions* are fully
-determined by positions. This validates `TokenDecompose`'s correctness and
-explains why it works: position sets are the only information that matters for
-DFA behavior, even though the underlying states carry additional FST-state
-information.
-
-Note: BPE's compression ratio is 1.0x — position sets are already unique, so the
-quotient doesn't compress. `TokenDecompose`'s advantage is not compression but
-*representation*: it avoids constructing `(fst_state, buffer)` pairs entirely.
-
-**2. PTB is TokenDecomposable with significant compression.**
-
-This is the major new finding. PTB has `all_input_universal = False` and 296 FST
-states, yet its DFA transitions are largely determined by position sets.
-
-*Update (2026-02-20):* The original analysis measured 634→18 states (35.2x) on
-a shorter target and used position descriptors that stripped FST state from
-truncated NFA elements. This was later found to produce incorrect results:
-truncated elements need the FST state in their descriptor because truncation
-breaks the TD invariant. With the corrected descriptors (FST state included for
-truncated elements, position-only for non-truncated), the full 45-symbol PTB
-target compresses from 37,803 DFA states to 217 position sets — **174x
-compression**. The compression is less extreme than originally measured but
-still dramatic, and now correct.
-
-**3. `all_input_universal` is sufficient but not necessary for TD.**
-
-Both `aiu = True` FSTs (BPE, replace, delete_b) and PTB (`aiu = False`) are
-100% TD. The `aiu` property guarantees TD (all source symbols are accepted from
-all FST states, so transitions depend only on output structure). But PTB shows
-that TD can hold even without `aiu` — the FST structure may independently ensure
-that position sets determine transitions.
-
-**4. Non-aiu FSTs span a wide spectrum.**
-
-For FSTs that are NOT TokenDecomposable:
-- **Near-TD**: newspeak2 (91.2% TD states), parity_copy (71.4%)
-- **Partially TD**: doom (61.9%), samuel_example (55.2%), backticks_to_quote (52.9%)
-- **Low TD**: mystery1/7 (46.4%), anbn (45.0%)
-
-Violations measure the number of `(position_set, symbol)` pairs where different
-DFA states disagree on successor positions. These violations prevent the
-position-only quotient from being exact.
-
-**5. Compression ratio predicts TD benefit.**
-
-For 100% TD FSTs, the compression ratio directly measures the state-space
-reduction from position-only tracking:
-- BPE: 1.0x (no compression, but simpler representation)
-- PTB: **174x** (massive compression; corrected from 35.2x)
-- replace/delete_b: 1.0x (simple FSTs, already compact)
-
-For partially TD FSTs, the compression ratio is modest (1.2-2.0x), and the
-violations prevent exact quotient — an approximate or hybrid approach would be
-needed.
-
-### Why the saturation analysis was wrong
-
-The earlier saturation analysis defined `Max(pos, target)` as the union of FST
-states at position `pos` across *all* reachable DFA states. This conflates
-DFA states reached via different source prefixes — there's no reason to expect
-a DFA state reached by source prefix "ab" to contain the FST states activated
-by source prefix "cd".
-
-Token-decomposability avoids this error by asking a *relational* question: do
-states with the same position set *behave the same way* (same successors, same
-finality)? This doesn't require each state to be "maximal" — it only requires
-consistency within each position-set equivalence class.
-
-## 7. Conclusions
+## 6. Conclusions
 
 ### The factored decomposition: mixed results
 
@@ -530,54 +397,10 @@ hypothesis (Section 5) was refuted — only 11.1% of BPE DFA states are
 position-uniform due to epsilon-heavy trie structure. The incremental `>>`
 operator does help for context-dependent rewriting FSTs (8.22x on newspeak2).
 
-### TokenDecompose works because of token-decomposability
-
-`TokenDecompose`'s correctness rests on a simple structural property:
-DFA transitions are determined by position sets alone
-(token-decomposability, Section 6). This property holds for BPE (trivially,
-since `all_input_universal = True`) and — surprisingly — for PTB as well.
-
-The earlier saturation analysis incorrectly concluded that `TokenDecompose`
-works by "bypassing PrecoverNFA." In fact, `TokenDecompose` works because the
-underlying DFA *is* token-decomposable: position sets are sufficient to
-determine all transitions and finality. `TokenDecompose` just uses a more
-efficient representation of this same abstract DFA.
-
-### Major finding: PTB is 100% TokenDecomposable
-
-PTB's DFA transitions depend on position sets, with **174x compression** on the
-full 45-symbol target (37,803→217 position sets). Truncated NFA elements require
-the FST state in their descriptor for correctness; non-truncated elements
-compress by position only.
-
-This finding was unexpected because PTB has `all_input_universal = False` — the
-property that was assumed to be necessary for `TokenDecompose`-style algorithms.
-PTB shows that token-decomposability is a strictly weaker (and more useful)
-condition than `all_input_universal`.
-
 ### Recommendations
 
-1. **For BPE**: Continue using `TokenDecompose` (Python) or the Rust backend.
-
-2. **For PTB**: **Generalize `TokenDecompose` to handle PTB.** The 174x
-   compression ratio makes this highly worthwhile. The key challenge is that
-   PTB lacks `all_input_universal`, so universality is non-trivial — but the
-   position-only quotient is still exact. A generalized `TokenDecompose` would
-   need to:
-   - Build position successors against the FST structure (not a BPE trie)
-   - Compute universality per position set (cacheable, since TD guarantees
-     same-position-set states have same finality)
-   - This should be much cheaper than the full powerset construction
-
-3. **For context-dependent rewriting FSTs** (newspeak-like):
+1. **For context-dependent rewriting FSTs** (newspeak-like):
    `FactoredDecomp` with `>>` is worthwhile for large-alphabet, large-DFA cases.
 
-4. **TD detection as a preprocessing step**: Before running decomposition, check
-   token-decomposability on a few sample targets. If confirmed, use a
-   position-only algorithm; otherwise fall back to full powerset. The check
-   is cheap relative to the decomposition itself.
-
-5. **Open question — characterizing TD FSTs**: What structural properties of an
-   FST guarantee token-decomposability? `all_input_universal` is sufficient but
-   not necessary (PTB is a counterexample). Identifying the exact condition would
-   enable compile-time algorithm selection without runtime sampling.
+2. **For BPE/PTB**: The factored representation provides no benefit. Use the
+   standard pipeline with Rust acceleration instead.

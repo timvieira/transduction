@@ -43,36 +43,11 @@ All implementations now support the `>>` operator: incremental algorithms provid
 optimized `__rshift__`; non-incremental implementations inherit `DecompositionResult.__rshift__`
 which constructs a fresh decomposition for the extended target.
 
-### Position-Set / Token-Decomposable Algorithms
+### Other Algorithms
 
-These algorithms exploit token-decomposability to reduce DFA state counts via
-position-set quotienting. The compression is significant (174x: 37,803→217
-states for the full PTB target). `RustPositionSetPeekabooState` combines
-position-set compression with Rust speed and dirty-state incremental reuse,
-achieving ~50 ms/step on PTB (2.5x faster than standard TransducedLM).
-
-| Algorithm | Language | File | Incremental | Peekaboo | Dirty-state | Notes |
-|-----------|----------|------|:-----------:|:--------:|:-----------:|-------|
-| `PositionSetPeekabooState` | Python | `position_set_peekaboo.py` | rebuilds‡ | ✓ | | 174x compression for PTB; `>>` rebuilds BFS from scratch each step |
-| `GeneralTokenDecompose` | Python | `general_token_decompose.py` | | | | 331x vs Python `NonrecursiveDFADecomp`; one-shot only |
-| `TokenDecompose` | Python | `token_decompose.py` | | | | EXPERIMENTAL; requires `all_input_universal` + hub structure |
-| `FactoredDecomp` | Python | `factored_decompose.py` | ✓ | | ✓ | Position-based universality caching; no measured speedup |
-
-‡`PositionSetPeekabooState.__rshift__` creates a new object that reruns the full
-BFS. `resume_frontiers` is hardcoded empty — no DFA state carried between steps.
-This means every decode step pays the full BFS cost, unlike `RustPeekabooState`
-which persists dirty-state across steps.
-
-**`RustPositionSetPeekabooState` combines all three optimizations:** Rust speed,
-incremental dirty-state, and peekaboo batching — plus position-set compression
-(174x: 37,803→217 DFA states for PTB). This achieves ~50 ms/step on PTB,
-2.5x faster than standard `TransducedLM`. The Python-only `GeneralTokenDecompose`
-provides 331x decomposition speedup vs Python `NonrecursiveDFADecomp`, but
-the Rust position-set backend supersedes it for TransducedLM integration.
-
-**Note on BPE:** BPE is trivially token-decomposable (`all_input_universal = True`)
-but has compression 1.0x — every DFA state already has a unique position set.
-Position-set algorithms provide zero benefit on BPE.
+| Algorithm | Language | File | Incremental | Notes |
+|-----------|----------|------|:-----------:|-------|
+| `FactoredDecomp` | Python | `factored_decompose.py` | ✓ | Position-based universality caching; no measured speedup |
 
 ### Rho-Arc Compression Algorithms
 
@@ -155,7 +130,6 @@ graph TD
 
     subgraph DECOMP_BRANCH["Decomposition Only"]
         D1{"FST type?"}
-        D1 -->|"Token-decomposable<br/>(one-shot, Python)"| GTD["<b>GeneralTokenDecompose</b><br/><i>331x on PTB vs Python baseline</i>"]
         D1 -->|"General, Rust available"| RDP["<b>RustDirtyPeekaboo</b><br/><i>dirty-state + batched</i>"]
         D1 -->|"General, Python only"| PY["PeekabooState<br/><i>Python incremental</i>"]
         D1 -->|"One-shot, Rust"| RUST1["RustDecomp"]
@@ -164,7 +138,6 @@ graph TD
 
     style LM1 fill:#d4edda
     style LM2 fill:#fff3cd
-    style GTD fill:#d4edda
     style RDP fill:#d4edda
     style PY fill:#cce5ff
     style RUST1 fill:#cce5ff
@@ -196,27 +169,11 @@ print(state.logp_next['e'])  # log P(next='e' | target='h')
 disagreement (max |diff| = 2.03 on PTB) that needs investigation before
 production use.
 
-**Position-set decomposition backends** (`PositionSetPeekabooState`,
-`RustPositionSetPeekabooState`, `GeneralTokenDecompose`) achieve dramatic DFA
-state compression for token-decomposable FSTs (174x: 37,803→217 states for
-PTB). `RustPositionSetPeekabooState` combines position-set compression with
-Rust speed and dirty-state incremental reuse, achieving ~50 ms/step on PTB
-(2.5x faster than standard `TransducedLM`, completing all 45 steps).
-
 **`ReferenceTransducedLM`** computes exact transduced probabilities by enumerating
 Q/R languages via Precover. Only works on finite-relation FSTs. Used for
 validation, not production.
 
 ### For Structural Decomposition (No LM)
-
-For **token-decomposable FSTs** (Python one-shot), use **`GeneralTokenDecompose`**
-(331x on PTB vs `NonrecursiveDFADecomp`):
-
-```python
-from transduction.general_token_decompose import GeneralTokenDecompose
-decomp = GeneralTokenDecompose(fst, target)
-print(decomp.quotient, decomp.remainder)
-```
 
 For **general FSTs** with incremental autoregressive use, use **`RustDirtyPeekaboo`**
 (dirty-state + batched next-symbol):
@@ -236,23 +193,15 @@ For **pynini-backed reference** (41x on BPE vs Python), use `PyniniNonrecursiveD
 
 `LazyIncremental`, `LazyNonrecursive`, and `PrioritizedLazyIncremental` lack target-buffer
 truncation and may diverge on FSTs with infinite quotients. They are retained for finite-language
-FSTs, but for token-decomposable finite FSTs with high compression ratios
-(e.g., PTB: 174x), `GeneralTokenDecompose` is vastly faster in the Python
-decomposition layer. (BPE is trivially TD but has compression 1.0x — no
-position-set benefit.)
+FSTs.
 
 ### Open Questions
 
-1. ~~**End-to-end TransducedLM + PositionSet**~~ — **Resolved.**
-   `RustPositionSetPeekabooState` achieves ~50 ms/step on PTB (2.5x faster
-   than standard TransducedLM), completing all 45 steps. The TD violation was
-   fixed by including FST state in truncated descriptors.
-
-2. **FusedTransducedLM logp disagreement**: Max |logp| diff of 2.03 on PTB vs
+1. **FusedTransducedLM logp disagreement**: Max |logp| diff of 2.03 on PTB vs
    TransducedLM. Need `ReferenceTransducedLM` ground-truth comparison (requires
    finite-relation test FST) to determine which is more accurate.
 
-3. **BPE TransducedLM benchmark**: The BPE notebook cells have no saved outputs.
+2. **BPE TransducedLM benchmark**: The BPE notebook cells have no saved outputs.
    Unknown whether BPE behaves differently from PTB at the LM integration layer.
 
 ---
@@ -295,17 +244,15 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 
 5. **Rust acceleration** — Packed `u64` NFA states, interned `u32` DFA states, `Rc<Vec>` eps cache, single-element intern fast path.
 
-6. **UniversalityFilter cascade** — AUI fast path -> witness check -> monotonicity caches -> BFS fallback.
+6. **UniversalityFilter cascade** — AUI fast path $\to$ witness check $\to$ monotonicity caches $\to$ BFS fallback.
 
-7. **Position-set compression** — For token-decomposable FSTs, quotient the powerset DFA by position descriptor sets. Truncated NFA elements include the FST state in their descriptor; non-truncated elements compress by position only. Reduces the PTB DFA from 37,803 to 217 states (174x compression). BPE is trivially TD but has compression 1.0x (no benefit).
-
-8. **Rho-arc factoring** — `SymbolicLazyDeterminize`/`RustRhoDfa`: detect complete DFA states and replace the most-common destination with a single rho arc, reducing arc count.
+7. **Rho-arc factoring** — `SymbolicLazyDeterminize`/`RustRhoDfa`: detect complete DFA states and replace the most-common destination with a single rho arc, reducing arc count.
 
 ---
 
 ## Test Status
 
-- **`test_general.py`**: 454 passed, 31 skipped
+- **`test_general.py`**: 380 passed
 - **`test_finite.py`**: 119 passed
 - **`test_pynini_ops.py`**: 115 passed
 - **`test_transduced.py`**: 106 passed
@@ -313,7 +260,6 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 - **`test_symbolic_precover.py`**: 84 passed
 - **`test_fst.py`**: 56 passed
 - **`test_enumeration.py`**: 55 passed
-- **`test_position_set_peekaboo.py`**: 52 passed
 - **`test_push_labels.py`**: 35 passed
 - **`test_fsa.py`**: 28 passed
 - **`test_is_functional.py`**: 26 passed
@@ -323,7 +269,7 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 - **`test_ptb_nltk.py`**: 4 passed
 - **`test_make_total.py`**: 3 passed
 - **`test_statelm_kv_cache.py`**: 3 passed
-- **Total**: 1141 tests across 18 test files, 31 skipped
+- **Total**: 1037 tests across 17 test files
 
 ---
 

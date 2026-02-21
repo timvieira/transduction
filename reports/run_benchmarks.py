@@ -105,14 +105,12 @@ print('='*70)
 
 from transduction.dfa_decomp_nonrecursive import NonrecursiveDFADecomp
 from transduction.rust_bridge import RustDecomp
-from transduction.general_token_decompose import GeneralTokenDecompose
 
 ptb_target = tuple(ptb_target_seq[:10])
 
 ptb_decomp_methods = [
     ('Standard', lambda t: NonrecursiveDFADecomp(ptb_fst, t)),
     ('Rust',     lambda t: RustDecomp(ptb_fst, t)),
-    ('PositionSet', lambda t: GeneralTokenDecompose(ptb_fst, t)),
 ]
 
 ptb_prefix_lengths = [3, 5, 8, 10]
@@ -171,8 +169,6 @@ print('='*70)
 
 from transduction.lm.transduced import TransducedLM
 from transduction.lm.fused_transduced import FusedTransducedLM
-from transduction.position_set_peekaboo import PositionSetPeekabooState, _PositionSetPeekabooUniv
-from transduction.rust_bridge import RustPositionSetPeekabooState, _RustPositionSetPeekabooUniv
 
 MAX_DECODE = 44    # length of target
 MAX_SEARCH = 200
@@ -184,11 +180,6 @@ bpe_lm_results = defaultdict(list)
 bpe_configs = [
     ('TransducedLM', lambda: TransducedLM(
         bpe_inner_lm, bpe_fst, K=MAX_BEAM, max_expansions=MAX_SEARCH)),
-    ('TransducedLM+PosSet', lambda: TransducedLM(
-        bpe_inner_lm, bpe_fst, K=MAX_BEAM, max_expansions=MAX_SEARCH,
-        decomp_state_cls=PositionSetPeekabooState,
-        univ_cls=_PositionSetPeekabooUniv)),
-    # RustPosSet excluded from BPE: BPE FSTs are not token-decomposable
     ('FusedTransducedLM', lambda: FusedTransducedLM(
         bpe_inner_lm, bpe_fst, max_steps=MAX_SEARCH, max_beam=MAX_BEAM)),
 ]
@@ -271,14 +262,6 @@ ptb_lm_results = defaultdict(list)
 ptb_configs = [
     ('TransducedLM', lambda: TransducedLM(
         ptb_inner_lm, ptb_fst, K=PTB_MAX_BEAM, max_expansions=PTB_MAX_SEARCH)),
-    ('TransducedLM+PosSet', lambda: TransducedLM(
-        ptb_inner_lm, ptb_fst, K=PTB_MAX_BEAM, max_expansions=PTB_MAX_SEARCH,
-        decomp_state_cls=PositionSetPeekabooState,
-        univ_cls=_PositionSetPeekabooUniv)),
-    ('TransducedLM+RustPosSet', lambda: TransducedLM(
-        ptb_inner_lm, ptb_fst, K=PTB_MAX_BEAM, max_expansions=PTB_MAX_SEARCH,
-        decomp_state_cls=RustPositionSetPeekabooState,
-        univ_cls=_RustPositionSetPeekabooUniv)),
     ('FusedTransducedLM', lambda: FusedTransducedLM(
         ptb_inner_lm, ptb_fst, max_steps=PTB_MAX_SEARCH, max_beam=PTB_MAX_BEAM)),
 ]

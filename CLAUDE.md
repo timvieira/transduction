@@ -26,9 +26,6 @@ Do not auto-commit after finishing work.
 - `transduction/prioritized_lazy_incremental.py` — PrioritizedLazyIncremental (finite-language, heuristic BFS)
 - `transduction/viz.py` — Visualization/display utilities for automata (used in notebooks)
 - `transduction/enumeration.py` — LM-weighted path enumeration (prioritized_enumeration, importance_sampling)
-- `transduction/position_set_peekaboo.py` — `PositionSetPeekabooState` (position-set quotient of PeekabooLookaheadNFA DFA; 174x compression e.g. 37,803→217 states for PTB)
-- `transduction/general_token_decompose.py` — `GeneralTokenDecompose` (position-set decomposition for arbitrary token-decomposable FSTs)
-- `transduction/token_decompose.py` — Token-level decomposition for `all_input_universal` BPE-like FSTs (EXPERIMENTAL)
 - `transduction/symbolic_precover.py` — `SymbolicLazyDeterminize`, `ExpandRho` (rho-arc DFA compression for PrecoverNFA)
 - `transduction/pynini_ops.py` — Pynini/OpenFST-backed reference P(y)/Q(y)/R(y) via composition and projection
 - `transduction/factored_decompose.py` — Factored DFA state representation with position-based universality caching
@@ -36,7 +33,7 @@ Do not auto-commit after finishing work.
 - `transduction/applications/bpe.py` — BPE WFST builder (`bpe_wfst`)
 - `transduction/applications/ptb.py` — PTB tokenizer FST built with pynini
 - `transduction/applications/wikitext.py` — WikiText data loading (`load_wikitext`, `wikitext_detokenize`)
-- `transduction/rust_bridge.py` — Python ↔ Rust conversion layer; also provides `RustPeekabooState`, `RustPositionSetPeekabooState`, `RustLazyPeekabooDFA`
+- `transduction/rust_bridge.py` — Python ↔ Rust conversion layer; also provides `RustPeekabooState`, `RustLazyPeekabooDFA`
 - `transduction/util.py` — Shared utilities: `Integerizer`, `logsumexp`, `LogVector` (mutable log-space accumulator), `LogDistr` (immutable log-probability distribution), `memoize`, `timelimit`, `set_memory_limit`, `memory_limit`, `sample`, `colors`
 - `transduction/examples.py` — Example FSTs for testing
 
@@ -69,9 +66,7 @@ Self-contained language model interface for use with enumeration/sampling:
 - `powerset.rs` — PowersetArena (hash-consing DFA states; single-element fast path for 99% of BPE cases)
 - `minimize.rs` — DFA minimization
 - `rho.rs` — Rho-arc factored determinization (`RhoDfaResult`; exposed as `RustRhoDfa`)
-- `token_decompose.rs` — Rust token-level decomposition using position-set bitsets
-- `position_set_peekaboo.rs` — Position-set peekaboo with dirty-state (TD FSTs: position-set DFA compression + dirty-state incremental reuse)
-- `py.rs` — PyO3 bindings (RustFst, RustFsa, DecompResult, PeekabooDecompResult, RustPositionSetPeekabooDecomp, RustRhoDfa)
+- `py.rs` — PyO3 bindings (RustFst, RustFsa, DecompResult, PeekabooDecompResult, RustRhoDfa)
 
 ## Dependencies
 
@@ -103,7 +98,7 @@ Eliminated deps (previously external, now inlined):
 
 ## Test Status
 
-- `test_general.py`: 454 passed, 31 skipped
+- `test_general.py`: 380 passed
 - `test_finite.py`: 119 passed
 - `test_pynini_ops.py`: 115 passed
 - `test_transduced.py`: 106 passed
@@ -111,7 +106,6 @@ Eliminated deps (previously external, now inlined):
 - `test_symbolic_precover.py`: 84 passed
 - `test_fst.py`: 56 passed
 - `test_enumeration.py`: 55 passed
-- `test_position_set_peekaboo.py`: 52 passed
 - `test_push_labels.py`: 35 passed
 - `test_fsa.py`: 28 passed
 - `test_is_functional.py`: 26 passed
@@ -121,10 +115,10 @@ Eliminated deps (previously external, now inlined):
 - `test_ptb_nltk.py`: 4 passed
 - `test_make_total.py`: 3 passed
 - `test_statelm_kv_cache.py`: 3 passed
-- **Total: 1141 tests across 18 files, 31 skipped**
+- **Total: 1037 tests across 17 files**
 - `test_general.py` tests the **general-case** algorithms (handle infinite quotients/remainders):
   NonrecursiveDFADecomp, TruncatedIncrementalDFADecomp, PeekabooState, PeekabooNonrecursive,
-  DirtyPeekaboo, RustDecomp, RustDirtyState, RustDirtyPeekaboo, RustPositionSetPeekabooState.
+  DirtyPeekaboo, RustDecomp, RustDirtyState, RustDirtyPeekaboo.
 - **Finite-only algorithms are excluded from test_general.py** and tested in
   `test_finite.py`. These diverge on FSTs with infinite quotients because they
   don't truncate the target buffer:

@@ -13,16 +13,13 @@ Peekaboo decomposition, dirty-state persistence, and
 Rust acceleration form a layered optimization stack that achieves real-time
 per-step costs on production-scale FSTs. The user-facing `TransducedLM`
 now defaults to the Rust backend (`RustPeekabooState`) and implements
-particle-based beam-sum approximate inference (deterministic top-K, consistent
-as K -> inf). Quotient states provide exact marginalization over infinitely many
+particle-based beam-sum approximate inference (deterministic top-$K$, consistent
+as $K \to \infty$). Quotient states provide exact marginalization over infinitely many
 source continuations — the key variance reduction mechanism. All decomposition
 implementations now support the `>>` operator via `DecompositionResult.__rshift__`.
 Rich notebook display (`_repr_html_`) enables interactive exploration.
 The LM integration layer uses clean log-space types (`LogVector`, `LogDistr`)
-replacing ad-hoc patterns. Recent additions include position-set peekaboo
-(RustPositionSetPeekabooState: 174x compression, 37,803→217 DFA states for
-PTB, ~50 ms/step), general token decomposition (GeneralTokenDecompose: 331x
-speedup on PTB), rho-arc
+replacing ad-hoc patterns. Recent additions include rho-arc
 compression (SymbolicLazyDeterminize), pynini-backed reference operations,
 and a PyniniTransducedLM. Test coverage is comprehensive: 1097 tests across
 18 files, all passing with 0 skipped. Documentation now covers all public
@@ -37,9 +34,9 @@ path to production readiness: batch LM calls for GPU utilization.
 
 ### 1. Algorithmic Depth
 
-17+ decomposition algorithms spanning the full design space: reference
+15+ decomposition algorithms spanning the full design space: reference
 implementations, incremental variants, batched variants, Rust backends,
-position-set compression, and pynini-backed reference operations.
+and pynini-backed reference operations.
 Each variant serves a distinct niche:
 
 | Layer | Algorithm | Purpose |
@@ -47,13 +44,12 @@ Each variant serves a distinct niche:
 | Reference | `Precover`, `NonrecursiveDFADecomp` | Correctness oracle |
 | Batched | `PeekabooState`, `Peekaboo` (nonrecursive) | Amortize DFA across all next symbols |
 | Incremental | `DirtyPeekaboo`, `TruncatedIncrementalDFADecomp` | Reuse DFA state across decode steps |
-| Position-set | `RustPositionSetPeekabooState`, `PositionSetPeekabooState`, `GeneralTokenDecompose` | DFA state compression (174x on PTB) |
 | Rho-arc | `SymbolicLazyDeterminize`, `ExpandRho`, `RustRhoDfa` | DFA arc compression via rho arcs |
 | Pynini | `pynini_ops`, `PyniniTransducedLM` | WFST-composition reference; pynini-backed LM |
 | Rust | `RustDecomp`, `RustDirtyState`, `RustDirtyPeekaboo` | 3-25x over Python |
 | Finite-only | `LazyIncremental`, `LazyNonrecursive`, `PrioritizedLazy` | Finite-language FSTs |
 
-The parametrized test suite (`test_general.py`: 454 tests, 31 skipped) ensures all
+The parametrized test suite (`test_general.py`: 380 tests) ensures all
 general-case algorithms agree.
 
 ### 2. Optimizations With Measured Impact
@@ -62,8 +58,7 @@ general-case algorithms agree.
 |-------------|--------|-----------|
 | `all_input_universal` | 11,500x on BPE | Skip universality BFS entirely |
 | Peekaboo batching | ~\|Y\|x amortization | One DFA for all next symbols |
-| Position-set compression | 174x on PTB | Quotient DFA by position descriptor sets (37,803→217 states) |
-| Dirty-state persistence | Per-step -> 0.1ms | Reuse clean DFA states across steps |
+| Dirty-state persistence | Per-step $\to$ 0.1ms | Reuse clean DFA states across steps |
 | Rust backend | 3-25x | Packed u64 NFA states, interned DFA states |
 | Rho-arc compression | Arc count reduction | Replace most-common destination with single rho arc |
 
@@ -88,7 +83,7 @@ is self-contained with no pollution of core algorithms.
 
 ### 4. Solid Test Infrastructure
 
-- **1141 tests** across 18 test files, 31 skipped
+- **1037 tests** across 17 test files
 - Parametrized cross-algorithm validation catches disagreements automatically
 - Reference implementations (`Precover`) serve as correctness oracles
 - Real-model integration tests (GPT-2 + BPE FST in `test_enumeration.py`)
@@ -96,7 +91,6 @@ is self-contained with no pollution of core algorithms.
   convergence, carry-forward prefix-domination regression tests
 - `test_fst.py`: 56 tests covering FST methods (99% coverage)
 - `test_lazy_peekaboo_dfa.py`: Rust lazy DFA integration tests
-- `test_position_set_peekaboo.py`: 52 tests for position-set peekaboo
 - `test_pynini_ops.py`: 115 tests for pynini reference operations
 - `test_symbolic_precover.py`: 84 tests for rho-arc compression
 - `test_rho_fused.py`: 15 tests for rho-fused transduced LM
@@ -192,15 +186,6 @@ and carry-forward prefix-domination regression tests.
 
 ## Open Issues
 
-### ~~High: Position-Set TD Algorithms Are Python-Only~~ (Resolved)
-
-`RustPositionSetPeekabooState` now combines position-set compression (174x:
-37,803→217 DFA states for PTB) with Rust speed, dirty-state incremental reuse,
-and peekaboo batching. Achieves ~50 ms/step on PTB (2.5x faster than standard
-TransducedLM), completing all 45 steps. The previous TD violation (crash at
-step 10) was fixed by including the FST state in position descriptors for
-truncated NFA elements.
-
 ### Medium: No Batched LM Inference ([#7](https://github.com/timvieira/transduction/issues/7))
 
 `TransducedLM` processes one sequence at a time. The LM state advance
@@ -240,23 +225,21 @@ All public API modules now have type annotations: `base.py`, `fst.py`,
 | Component | Files | Lines | Notes |
 |-----------|-------|-------|-------|
 | Core (FST/FSA/base) | 4 | ~1,920 | Stable, well-tested (precover.py split out) |
-| Algorithms | 18 | ~5,400 | +position_set_peekaboo, general_token_decompose, symbolic_precover, pynini_ops, factored_decompose, token_decompose |
+| Algorithms | 15 | ~4,600 | +symbolic_precover, pynini_ops, factored_decompose |
 | LM integration | 7 | ~2,200 | +PyniniTransducedLM |
-| Rust backend | 11 | ~6,200 | +rho.rs, token_decompose.rs |
+| Rust backend | 9 | ~5,000 | +rho.rs |
 | Applications | 3 | ~580 | BPE, PTB, WikiText |
 | Utilities | 6 | ~3,320 | viz, examples, lazy, util, rust_bridge, enumeration |
-| **Total Python** | **38** | **~13,400** | |
-| Tests | 18 | ~7,200 | 1097 tests |
+| **Total Python** | **35** | **~12,200** | |
+| Tests | 17 | ~6,800 | 1037 tests |
 
 ### Technical Debt
 
 | Item | Severity | Location | Effort |
 |------|----------|----------|--------|
-| ~~TD algorithms lack Rust/incremental/dirty-state~~ | ~~High~~ | ~~`position_set_peekaboo.py`~~ | ~~Resolved~~ |
 | DirtyPeekaboo non-monotonic targets ([#5](https://github.com/timvieira/transduction/issues/5)) | Medium | `rust_bridge.py`, `peekaboo.rs` | Medium |
 | No batched LM calls ([#7](https://github.com/timvieira/transduction/issues/7)) | Medium | `lm/transduced.py` | Medium |
 | FusedTransducedLM logp disagreement (max 2.03 on PTB) | Medium | `lm/fused_transduced.py` | Medium |
-| ~~TransducedLM+PosSet never benchmarked end-to-end~~ | ~~Medium~~ | | ~~Resolved: ~50 ms/step~~ |
 | StateLM KV cache with DynamicCache ([#1](https://github.com/timvieira/transduction/issues/1)) | Low | `lm/statelm.py` | Small |
 | ~~K/max_expansions coupling undocumented~~ | ~~Low~~ | ~~`lm/transduced.py`~~ | ~~Resolved~~ |
 | ~~No type annotations~~ | ~~Medium~~ | ~~Public API modules~~ | ~~Resolved~~ |
@@ -303,10 +286,10 @@ All public API modules now have type annotations: `base.py`, `fst.py`,
 
 | Dimension | Grade | Key Finding |
 |-----------|-------|-------------|
-| **Algorithms** | A+ | 17+ implementations across 5 strategy families; position-set compression (331x on PTB); rho-arc factoring; pynini reference backend |
-| **Performance** | A | 25x Rust acceleration, 0.1ms per-step dirty-state; position-set 331x on PTB; Rust now default backend |
+| **Algorithms** | A+ | 15+ implementations across 4 strategy families; rho-arc factoring; pynini reference backend |
+| **Performance** | A | 25x Rust acceleration, 0.1ms per-step dirty-state; Rust now default backend |
 | **Architecture** | A- | Clean layering, no circular deps, optional Rust, self-contained LM module |
-| **Testing** | A+ | 1097 tests across 18 files, 0 skipped; 5 new test suites for recent features; carry-forward regression tests |
+| **Testing** | A+ | 1037 tests across 17 files; carry-forward regression tests |
 | **End-to-End Product** | A- | Particle-based beam-sum inference; quotient exact marginalization; rich notebook display |
 | **API/Packaging** | A- | Exports correct; Rust default; `_repr_html_`; all impls support `>>`; end-to-end example |
 | **Documentation** | A- | Module, class, and method docstrings across public API; tutorial notebook with rich display |
@@ -315,12 +298,9 @@ All public API modules now have type annotations: `base.py`, `fst.py`,
 `TransducedLM` with particle-based approximate inference — are done. The LM
 integration layer now uses clean log-space types (`LogVector` for mutable
 accumulation, `LogDistr` for immutable distributions) replacing the ad-hoc
-`LogpNext` class and `defaultdict` pattern. Recent additions significantly
-expand the optimization toolkit: position-set peekaboo (174x compression:
-37,803→217 DFA states for PTB, ~50 ms/step), GeneralTokenDecompose (331x
-speedup on PTB), rho-arc compression
-(SymbolicLazyDeterminize + Rust RhoDfa), and pynini-backed reference
-operations. Test coverage stands at 1141 tests across 18 files, 31 skipped. Documentation is comprehensive: every public module has a module
+`LogpNext` class and `defaultdict` pattern. Recent additions include rho-arc
+compression (SymbolicLazyDeterminize + Rust RhoDfa) and pynini-backed reference
+operations. Test coverage stands at 1037 tests across 17 files. Documentation is comprehensive: every public module has a module
 docstring, all key classes and methods are documented (including the Rust
 bridge and abstract interfaces), the K/max_expansions coupling is documented
 in the API, and a tutorial notebook (`examples/tutorial.ipynb`) walks through

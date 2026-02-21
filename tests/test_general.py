@@ -23,14 +23,12 @@ from transduction.peekaboo_dirty import DirtyPeekaboo
 try:
     from transduction.rust_bridge import (
         RustDecomp, RustDirtyState, RustDirtyPeekaboo,
-        RustPositionSetPeekabooState,
     )
     HAS_RUST = True
 except ImportError:
     HAS_RUST = False
 
 from transduction.pynini_ops import PyniniNonrecursiveDecomp
-from transduction.position_set_peekaboo import PositionSetPeekabooState
 
 
 def run_test(cls, fst, target, depth, verbosity=0):
@@ -53,22 +51,7 @@ def run_test(cls, fst, target, depth, verbosity=0):
             if q.states or r.states:
                 recurse(target + (y,), depth - 1, have[y])
 
-    _td_classes = {PositionSetPeekabooState}
-    if HAS_RUST:
-        _td_classes.add(RustPositionSetPeekabooState)
-
-    try:
-        recurse(target, depth, cls(fst, target))
-    except ValueError:
-        # Position-set classes raise ValueError on non-TD FSTs
-        if cls in _td_classes:
-            pytest.skip("FST is not token-decomposable")
-        raise
-    except AssertionError:
-        # Partial TD check may miss some non-TD FSTs; Q/R mismatch is expected
-        if cls in _td_classes:
-            pytest.skip("FST is not token-decomposable (undetected)")
-        raise
+    recurse(target, depth, cls(fst, target))
 
 
 def assert_equal_decomp_map(have, want):
@@ -95,15 +78,9 @@ if HAS_RUST:
     IMPLEMENTATIONS.append(
         pytest.param(RustDirtyPeekaboo, id="rust_dirty_peekaboo"),
     )
-    IMPLEMENTATIONS.append(
-        pytest.param(RustPositionSetPeekabooState, id="rust_position_set_peekaboo"),
-    )
 
 IMPLEMENTATIONS.append(
     pytest.param(PyniniNonrecursiveDecomp, id="pynini_nonrecursive"),
-)
-IMPLEMENTATIONS.append(
-    pytest.param(PositionSetPeekabooState, id="position_set_peekaboo"),
 )
 
 
@@ -243,8 +220,6 @@ def test_rshift_chain(impl):
         assert via_rshift.quotient.equal(via_dn.quotient)
         assert via_rshift.remainder.equal(via_dn.remainder)
     except (ValueError, AssertionError):
-        if impl is PositionSetPeekabooState:
-            pytest.skip("FST is not token-decomposable")
         raise
 
 

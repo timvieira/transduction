@@ -44,25 +44,6 @@
 - [ ] Rename `stop` → `accepting` in FSA/FST classes ("final" and "stop" suggest
   you can't continue past the state, which is misleading; "accepting" is standard)
 
-### Position-set peekaboo: remove after check-in
-
-- [ ] Remove position-set peekaboo code. It's not pulling its weight:
-  - Python PositionSet times out on PTB (decomposition at length 10, TransducedLM at initial())
-  - 0.223 nat logp disagreement on BPE (not floating-point noise)
-  - 130x slower on BPE with zero compression benefit (BPE is not TD)
-  - Only works well as RustPositionSetPeekabooState on PTB, where it gets 2.5x
-    end-to-end — but FusedTransducedLM already gets 2.0x with no special cases
-  - Narrow applicability: only fully token-decomposable FSTs
-  - Files to remove:
-    - `transduction/position_set_peekaboo.py`
-    - `transduction/general_token_decompose.py`
-    - `crates/transduction-core/src/position_set_peekaboo.rs`
-    - `crates/transduction-core/src/token_decompose.rs`
-    - `tests/test_position_set_peekaboo.py`
-    - `reports/general_token_decompose_report.md`
-    - `reports/token_decomposability.py`
-    - Related rust_bridge.py bindings, CLAUDE.md entries, benchmark references
-
 ### lm/statelm.py
 
 - [ ] Handle tokenizers with multiple byte representations for the same token
