@@ -43,12 +43,6 @@ All implementations now support the `>>` operator: incremental algorithms provid
 optimized `__rshift__`; non-incremental implementations inherit `DecompositionResult.__rshift__`
 which constructs a fresh decomposition for the extended target.
 
-### Other Algorithms
-
-| Algorithm | Language | File | Incremental | Notes |
-|-----------|----------|------|:-----------:|-------|
-| `FactoredDecomp` | Python | `factored_decompose.py` | ✓ | Position-based universality caching; no measured speedup |
-
 ### Rho-Arc Compression Algorithms
 
 Orthogonal to position-set (not TD-specific):

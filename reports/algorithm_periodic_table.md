@@ -22,7 +22,6 @@
 | `RustDirtyState` | ✓ | | ✓ | N | ✓ | ✓ | ✓ | ✓ | rust ext |
 | `RustDirtyPeekaboo` | ✓ | ✓ | ✓ | N+K | ✓ | ✓ | ✓ | ✓ | rust ext |
 | `RustLazyPeekabooDFA` | ✓ | ✓ | ✓ | N+K | ✓ | ✓ | ✓ | ✓ | rust ext; lazy DFA for TransducedLM |
-| `FactoredDecomp` | ✓ | | ✓ | N | ✓ | ✓ | ✓ | | |
 | **Rho-arc compression** | | | | | | | | | |
 | `SymbolicLazyDeterminize` | | | | N | ✓ | | ✓ | | |
 | `RustRhoDfa` | | | | N | ✓ | | ✓ | ✓ | rust ext |

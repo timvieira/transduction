@@ -4,8 +4,6 @@ Benchmark: decomposition algorithms on BPE and PTB FSTs.
 Tests on real tokenizer FSTs with byte-sequence targets at various lengths.
 Compares:
   - NonrecursiveDFADecomp (fresh build per target)
-  - FactoredDecomp (fresh build per target)
-  - FactoredDecomp incremental (>> operator, sequential extension)
   - PyniniNonrecursiveDecomp (pynini composition backend)
   - RustDecomp (Rust-accelerated decomposition)
 """
@@ -23,7 +21,6 @@ from collections import deque
 from transduction.fst import FST
 from transduction.fsa import EPSILON
 from transduction.dfa_decomp_nonrecursive import NonrecursiveDFADecomp
-from transduction.factored_decompose import FactoredDecomp
 from transduction.pynini_ops import PyniniNonrecursiveDecomp, PyniniPrecover
 from transduction.precover_nfa import PrecoverNFA
 
@@ -91,46 +88,6 @@ def time_nonrecursive_fresh(fst, targets):
             d = NonrecursiveDFADecomp(fst, target)
             _ = d.quotient
             _ = d.remainder
-        elapsed, ok = timed_call(run)
-        total += elapsed
-        if ok:
-            count += 1
-        else:
-            timeouts += 1
-    return total, count, timeouts
-
-
-def time_factored_fresh(fst, targets):
-    """Time FactoredDecomp (fresh, non-incremental) on targets."""
-    total = 0.0
-    count = 0
-    timeouts = 0
-    for target in targets:
-        def run():
-            d = FactoredDecomp(fst, target)
-            _ = d.quotient
-            _ = d.remainder
-        elapsed, ok = timed_call(run)
-        total += elapsed
-        if ok:
-            count += 1
-        else:
-            timeouts += 1
-    return total, count, timeouts
-
-
-def time_factored_incremental(fst, targets):
-    """Time FactoredDecomp using >> for incremental extension."""
-    total = 0.0
-    count = 0
-    timeouts = 0
-    for target in targets:
-        def run():
-            state = FactoredDecomp(fst, ())
-            for b in target:
-                state = state >> b
-            _ = state.quotient
-            _ = state.remainder
         elapsed, ok = timed_call(run)
         total += elapsed
         if ok:
@@ -289,11 +246,9 @@ def benchmark_fst(name, fst, targets_by_length):
            f"{'Standard':>14s}  {'Pynini':>14s}  ")
     if HAS_RUST:
         hdr += f"{'Rust':>14s}  "
-    hdr += (f"{'Fac(fresh)':>14s}  {'Fac(>>)':>14s}  "
-            f"{'Pyn/Std':>8s} ")
+    hdr += f"{'Pyn/Std':>8s} "
     if HAS_RUST:
         hdr += f"{'Pyn/Rust':>9s} "
-    hdr += f"{'Fac/Std':>8s} {'>>/Std':>8s}"
     print(hdr)
     print(f"  {'-'*len(hdr)}")
 
@@ -315,28 +270,18 @@ def benchmark_fst(name, fst, targets_by_length):
             sys.stdout.write(f"{fmt_time(t_rust, n_rust, len(targets), to_rust):>14s}  ")
             sys.stdout.flush()
 
-        t_fac, n_fac, to_fac = time_factored_fresh(fst, targets)
-        sys.stdout.write(f"{fmt_time(t_fac, n_fac, len(targets), to_fac):>14s}  ")
-        sys.stdout.flush()
-
-        t_inc, n_inc, to_inc = time_factored_incremental(fst, targets)
-
         pyn_vs_std = t_std / t_pyn if t_pyn > 0 else float('inf')
-        fac_vs_std = t_std / t_fac if t_fac > 0 else float('inf')
-        inc_vs_std = t_std / t_inc if t_inc > 0 else float('inf')
 
-        line = f"{fmt_time(t_inc, n_inc, len(targets), to_inc):>14s}  "
-        line += f"{pyn_vs_std:>7.2f}x "
+        line = f"{pyn_vs_std:>7.2f}x "
         if HAS_RUST:
             pyn_vs_rust = t_rust / t_pyn if t_pyn > 0 else float('inf')
             line += f"{pyn_vs_rust:>8.2f}x "
-        line += f"{fac_vs_std:>7.2f}x {inc_vs_std:>7.2f}x"
         print(line)
 
         row = {
             'length': length, 'n_targets': len(targets),
-            't_std': t_std, 't_pyn': t_pyn, 't_fac': t_fac, 't_inc': t_inc,
-            'pyn_vs_std': pyn_vs_std, 'fac_vs_std': fac_vs_std, 'inc_vs_std': inc_vs_std,
+            't_std': t_std, 't_pyn': t_pyn,
+            'pyn_vs_std': pyn_vs_std,
         }
         if HAS_RUST:
             row['t_rust'] = t_rust
@@ -422,8 +367,6 @@ def main():
         for key, label in [
             ('pyn_vs_std', 'Pynini'),
             ('pyn_vs_rust', 'Pynini vs Rust'),
-            ('fac_vs_std', 'Factored (fresh)'),
-            ('inc_vs_std', 'Factored (incremental >>)'),
         ]:
             vals = [r[key] for r in results if key in r and 0 < r[key] < float('inf')]
             if vals:

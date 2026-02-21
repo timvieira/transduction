@@ -225,7 +225,7 @@ All public API modules now have type annotations: `base.py`, `fst.py`,
 | Component | Files | Lines | Notes |
 |-----------|-------|-------|-------|
 | Core (FST/FSA/base) | 4 | ~1,920 | Stable, well-tested (precover.py split out) |
-| Algorithms | 15 | ~4,600 | +symbolic_precover, pynini_ops, factored_decompose |
+| Algorithms | 14 | ~4,200 | +symbolic_precover, pynini_ops |
 | LM integration | 7 | ~2,200 | +PyniniTransducedLM |
 | Rust backend | 9 | ~5,000 | +rho.rs |
 | Applications | 3 | ~580 | BPE, PTB, WikiText |

@@ -28,7 +28,6 @@ Do not auto-commit after finishing work.
 - `transduction/enumeration.py` — LM-weighted path enumeration (prioritized_enumeration, importance_sampling)
 - `transduction/symbolic_precover.py` — `SymbolicLazyDeterminize`, `ExpandRho` (rho-arc DFA compression for PrecoverNFA)
 - `transduction/pynini_ops.py` — Pynini/OpenFST-backed reference P(y)/Q(y)/R(y) via composition and projection
-- `transduction/factored_decompose.py` — Factored DFA state representation with position-based universality caching
 - `transduction/lazy.py` — Lazy automaton framework (LazyDeterminize, EpsilonRemove)
 - `transduction/applications/bpe.py` — BPE WFST builder (`bpe_wfst`)
 - `transduction/applications/ptb.py` — PTB tokenizer FST built with pynini
