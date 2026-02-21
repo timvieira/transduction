@@ -42,19 +42,57 @@ incremental computation as each new target symbol arrives.
 
 ---
 
+## Scale Limitations (read this first)
+
+> **All benchmarks below are on toy-scale inputs. None of them demonstrate
+> that the system works at production scale.**
+
+| Dimension | What we benchmarked | What production requires | Gap |
+|-----------|--------------------|--------------------------|----|
+| BPE vocabulary | **43 tokens** (subsampled from 7 training sentences) | **50,257 tokens** (full GPT-2) | **1,168x** larger vocab |
+| BPE FST size | 140 states, ~180 arcs | Unknown (never built) | Unknown |
+| LM | 3-gram CharNgramLM (lookup table, O(1), CPU) | GPT-2 124M params (~10-100 ms/call, GPU) | LM cost ~0 in all benchmarks |
+| Test input | 1 sentence, 44-45 symbols | Unbounded documents | No variance, no long-context |
+| PTB decomp prefix | Tested to length 10 | Arbitrarily long | Scaling unknown |
+
+**What this means:** The BPE numbers (0.3 ms/step) tell you nothing about
+production performance — the FST is 1,000x smaller than real BPE. The PTB
+numbers (66-129 ms/step) measure only decomposition cost because the LM is
+free — with a real neural LM, LM forward passes would dominate and these
+decomposition times become a lower bound, not an estimate. **Phase 1 goal
+(GPT-2 + full BPE at interactive speed) is completely untested.**
+
+---
+
 ## Honest Assessment
 
 *Update this section on each dashboard iteration.*
 
 ### Where we are
 
-The core system works. `TransducedLM` and `FusedTransducedLM` both run all 45
-PTB steps and all 44 BPE steps, producing correct logp values (max disagreement
-0.000287 nats — floating-point noise). FusedTransducedLM is 2x faster on PTB
-(66 vs 129 ms/step). BPE is already fast enough to be irrelevant as a benchmark
-target (0.3 ms/step). The algorithmic foundation — Peekaboo decomposition,
-dirty-state persistence, Rust acceleration — is solid and well-tested (1037
-tests).
+The core algorithms work on toy inputs. `TransducedLM` and
+`FusedTransducedLM` both complete 45 PTB steps and 44 BPE steps on a single
+test sentence with a trivial LM, producing correct logp values (max
+disagreement 0.000287 nats). FusedTransducedLM is 2x faster on PTB (66 vs 129
+ms/step). The algorithmic foundation — Peekaboo decomposition, dirty-state
+persistence, Rust acceleration — is well-tested (1037 unit tests).
+
+**However:** the BPE benchmark is meaningless as a proxy for real-world
+performance because the FST is 1,000x smaller than production. The PTB
+benchmark is more realistic (296 states, 23K arcs, 257 symbols) but still uses
+a trivial LM and a single short test sentence.
+
+### What we don't know
+
+- Whether the decomposition algorithms scale to full GPT-2 BPE (50K tokens).
+  The powerset DFA could blow up exponentially with vocabulary size.
+- Whether the 66 ms/step PTB number holds up with a real neural LM, where
+  each beam expansion costs ~10-100 ms instead of ~0 ms.
+- Whether performance degrades on longer sequences (we've only tested 45
+  symbols).
+- Whether K=20 beam is sufficient for acceptable approximation quality with
+  real LMs (we only validated agreement between our own methods, not against
+  ground truth with a neural LM).
 
 ### Where the potential is
 
@@ -76,24 +114,31 @@ TransducedLM's two-phase approach.
 The PROJECT_ASSESSMENT defines Phase 1 as: "TransducedLM with GPT-2 + BPE FST
 runs at interactive speed."
 
-- **BPE + CharNgramLM: done.** 0.3–0.5 ms/step. Not a meaningful benchmark
-  anymore.
+- **BPE + CharNgramLM: done, but irrelevant.** 0.3–0.5 ms/step on a 43-token
+  FST. This does not predict performance on a 50,257-token FST.
 - **PTB + CharNgramLM: done.** 66 ms/step (Fused), which is ~15 steps/second.
-  Usable for research, not yet interactive for real-time generation.
+  Measures decomposition cost only (LM cost ~0). Unknown with a real LM.
+- **Full-scale BPE: not attempted.** We have never constructed or benchmarked
+  a full GPT-2 BPE FST.
 - **GPU LM integration: not started.** `StateLM` wraps HuggingFace models but
   processes one expansion at a time. No batching, no GPU utilization
   optimization. This is the actual Phase 1 deliverable and we haven't
   measured it yet.
 
-**Honest bottom line:** The decomposition layer is overoptimized relative to
-the LM layer. We have 15+ decomposition algorithms, 3 Rust backends — but the LM forward pass (which we haven't
-optimized at all) will dominate wall-clock time with real models. The next
-high-impact work is: (1) profile TransducedLM with GPT-2 to measure the
-actual LM/decomp split, (2) batch LM calls.
+**Honest bottom line:** We have a well-tested decomposition layer that works on
+toy inputs. We have no evidence it scales to production. The LM layer (which
+will dominate wall-clock time with real models) hasn't been optimized at all.
+The next steps are: (1) build and benchmark a full-vocabulary BPE FST, (2)
+profile TransducedLM with GPT-2 to measure the actual LM/decomp split, (3)
+batch LM calls.
 
 ---
 
 ## Visual Summary
+
+> **Figures below reflect toy-scale benchmarks.** BPE speedups are on a
+> 43-token FST (0.09% of real GPT-2). All times use CharNgramLM (LM cost ~0).
+> See [Scale Limitations](#scale-limitations-read-this-first) for details.
 
 ![Speedup Summary](figures/speedup_summary.png)
 
@@ -132,7 +177,12 @@ bugs.
 *Measures how fast each backend can compute Q(y) and R(y) for a given target
 prefix — pure decomposition, no LM scoring. Timed as best-of-3 runs.*
 
-| Method | BPE | PTB | Speedup vs Standard | Notes |
+> **Scale context:** BPE column uses a **43-token subsampled** FST (140 states,
+> ~180 arcs) — full GPT-2 BPE has 50,257 tokens. These BPE numbers do not
+> predict full-scale performance. PTB column uses the real PTB FST (296 states,
+> 23K arcs, 257 symbols) but only tests prefix lengths up to 10.
+
+| Method | BPE (43 tokens) | PTB (257 symbols) | Speedup vs Standard | Notes |
 |--------|-----|-----|---------------------|-------|
 | Standard (Python) | **OK** 3–7 ms | **OK** 0.7–3.8 s | 1x | `NonrecursiveDFADecomp`; powerset + universality |
 | Pynini | **OK** 0.1–0.2 ms | n/a | 41x (BPE) | `PyniniNonrecursiveDecomp`; OpenFST composition |
@@ -147,11 +197,15 @@ Source: [`reports/run_benchmarks.py:98–162`](run_benchmarks.py) (Section 1: PT
 
 *Measures end-to-end decoding: at each step, compute $P(y_n \mid y_1 \ldots y_{n-1})$ and
 advance the LM state. This includes decomposition, LM scoring of particles
-(beam search), and carry-forward of particles to the next step. "ms/step" is
-wall-clock time per target symbol. All use CharNgramLM (CPU-only, O(1) per
-query) — with a real neural LM, the LM forward pass would dominate.*
+(beam search), and carry-forward of particles to the next step.*
 
-| Variant | BPE Status | BPE ms/step | PTB Status | PTB ms/step | Notes |
+> **Scale context:** All times below use **CharNgramLM** — a CPU lookup table
+> where each LM call costs ~0 ms. These numbers measure **decomposition
+> overhead only**, not end-to-end cost with a real LM. With GPT-2 (~10-100
+> ms/forward pass), LM calls would dominate and total time would be much higher.
+> BPE column uses the 43-token toy FST, not full GPT-2 vocabulary.
+
+| Variant | BPE (43-tok) Status | BPE ms/step | PTB Status | PTB ms/step | Notes |
 |---------|------------|-------------|------------|-------------|-------|
 | TransducedLM | **OK** | 0.5 | **OK** | 129 | Rust peekaboo decomp + beam search |
 | FusedTransducedLM | **OK** | 0.3 | **OK** | 66 | Single-pass interleaved; 2.0x faster on PTB |
@@ -169,7 +223,13 @@ Source: [`reports/run_benchmarks.py:164–344`](run_benchmarks.py) (Sections 2�
 *Static properties of the two benchmark FSTs. These FSTs map source sequences
 (token IDs for BPE, bytes for PTB) to target sequences (bytes).*
 
-| Property | BPE (subsampled) | PTB |
+> **BPE is a toy FST.** It contains only 43 tokens extracted from 7 short
+> training sentences (each repeated 3x). Full GPT-2 BPE has **50,257 tokens**
+> — the benchmark FST covers **0.09%** of the real vocabulary. A full-vocabulary
+> BPE FST has never been constructed or tested. PTB is closer to realistic (it
+> uses the complete byte alphabet) but is a single fixed transducer.
+
+| Property | BPE (43 tokens / 50,257 full) | PTB |
 |----------|------------------|-----|
 | States | 140 | 296 |
 | Input symbols (\|A\|) | 44 | 257 |
@@ -177,7 +237,8 @@ Source: [`reports/run_benchmarks.py:164–344`](run_benchmarks.py) (Sections 2�
 | Arcs | ~180 | 23,723 |
 | Topology | Star (token → byte chain → start) | CDRewrite rules + identity transducer |
 | Build time | <0.001 s | 36.4 s |
-| Vocab used | 43 tokens (from training data) | 257 byte symbols |
+| Vocab actually used | 43 tokens (from 7 training sentences) | 257 byte symbols |
+| Full-scale vocab | 50,257 tokens (GPT-2) — **never tested** | 257 (complete) |
 
 ---
 
@@ -185,13 +246,20 @@ Source: [`reports/run_benchmarks.py:164–344`](run_benchmarks.py) (Sections 2�
 
 ### Decomposition Backends on BPE
 
+> **These results are on a 43-token toy FST (0.09% of GPT-2's vocabulary).**
+> The star topology of this tiny FST keeps the powerset DFA trivially small at
+> all prefix lengths. A full 50K-token BPE FST would have ~1000x more arcs and
+> could produce exponentially larger powerset DFAs. **Do not extrapolate these
+> sub-millisecond times to production.**
+
 *For each target prefix length, we call the decomposition backend 3 times and
 report the fastest run. This isolates the Q/R computation cost — longer
 prefixes mean larger PrecoverNFA DFAs to determinize. The Standard backend
-shows ~constant cost (powerset DFA stays small for BPE's star topology); Pynini
-uses OpenFST's C++ composition which is very fast for small FSTs.*
+shows ~constant cost (powerset DFA stays small for this tiny BPE FST's star
+topology); Pynini uses OpenFST's C++ composition which is fast for small FSTs.*
 
-Target prefix length → best-of-3 time (ms). BPE FST: 140 states, 43 tokens.
+Target prefix length → best-of-3 time (ms). **Toy** BPE FST: 140 states, 43
+tokens (full GPT-2 = 50,257 tokens).
 
 ![BPE Backends](figures/bpe_backends.png)
 
@@ -214,12 +282,19 @@ Source: `notes/bpe-lm-benchmark.ipynb` cell `r1ontowex3b`
 
 ### Decomposition Backends on PTB
 
+> **Only tested to prefix length 10.** The Standard backend already shows a 5x
+> jump from length 8 to length 10 (711 ms → 3,827 ms), suggesting superlinear
+> growth. We don't know how these times scale to realistic document lengths
+> (hundreds or thousands of symbols). The Rust backend appears more stable but
+> has the same limited test range.
+
 *Same measurement as BPE above but on the PTB FST, which is much harder: 257
 input symbols and 23K arcs (vs 44 symbols and ~180 arcs for BPE). The
 Standard backend takes 0.7–3.8 seconds per decomposition because the powerset
 DFA blows up.*
 
-Target prefix length → best-of-3 time (ms). PTB FST: 296 states, 257 input symbols.
+Target prefix length → best-of-3 time (ms). PTB FST: 296 states, 257 input
+symbols. **Only tested to length 10 — scaling beyond this is unknown.**
 
 ![PTB Backends](figures/ptb_backends.png)
 
@@ -236,6 +311,13 @@ Source: `reports/run_benchmarks.py`, `notes/ptb-lm-benchmark.ipynb` cell `ptb-de
 
 ### TransducedLM Variants on PTB
 
+> **LM cost is ~0 in this benchmark.** CharNgramLM is a lookup table — each
+> `state >> x` call is O(1). With GPT-2 (~10-100 ms per forward pass on GPU),
+> the K=20 beam would require up to 20 LM calls per step, potentially adding
+> 200-2000 ms/step on top of the decomposition cost shown here. These times are
+> a **lower bound** on real end-to-end cost, not an estimate. Also: single test
+> sentence, no variance across inputs.
+
 *End-to-end decoding of a 45-symbol target string through the PTB FST. At each
 step, the TransducedLM variant computes the conditional distribution $P(y_n \mid y_1 \ldots y_{n-1})$
 over next target symbols by running beam search over source-side particles,
@@ -243,8 +325,9 @@ then advances to the next step. "Total" is wall-clock for all completed steps;
 "Avg/step" is the mean. The beam (K=20) controls approximation quality —
 more particles = better approximation but slower.*
 
-Config: K=20, max_expansions=200, 3-gram CharNgramLM, 60 s timeout/step.
-Target: "The quick brown fox jumps over the lazy dog." (45 symbols).
+Config: K=20, max_expansions=200, **3-gram CharNgramLM (O(1) per call)**, 60 s
+timeout/step. Single test sentence: "The quick brown fox jumps over the lazy
+dog." (45 symbols).
 
 ![PTB TransducedLM Comparison](figures/ptb_transduced_lm.png)
 
@@ -258,13 +341,19 @@ Source: `reports/run_benchmarks.py`
 
 ### TransducedLM Variants on BPE
 
-*Same end-to-end measurement as PTB above but on the simpler BPE FST. BPE's
-star topology makes decomposition trivial — the benchmark is dominated by
-Python overhead, not algorithmic cost. This is no longer a meaningful
-performance target.*
+> **This benchmark is not meaningful.** It combines a 43-token toy FST (0.09%
+> of real GPT-2 vocab) with a free LM (CharNgramLM, O(1)). The 0.3 ms/step
+> result reflects neither real decomposition cost (FST too small) nor real LM
+> cost (LM too cheap). **Do not cite these numbers as evidence the system handles
+> BPE at scale.**
 
-Config: K=10, max_expansions=200, 3-gram CharNgramLM, 30 s timeout/step.
-Target: "The quick brown fox jumps over the lazy dog." (44 symbols).
+*Same end-to-end measurement as PTB above but on the toy BPE FST. BPE's
+star topology makes decomposition trivial at this scale — the benchmark is
+dominated by Python overhead, not algorithmic cost.*
+
+Config: K=10, max_expansions=200, **3-gram CharNgramLM (O(1) per call)**, 30 s
+timeout/step. Single test sentence: "The quick brown fox jumps over the lazy
+dog." (44 symbols). **FST: 43 tokens (full GPT-2 = 50,257).**
 
 ![BPE TransducedLM Comparison](figures/bpe_transduced_lm.png)
 
@@ -286,6 +375,12 @@ $\log p_A(y_i \mid y_1 \ldots y_{i-1})$ vs $\log p_B(y_i \mid y_1 \ldots y_{i-1}
 absolute difference across all steps. Values < 0.001 are floating-point
 noise; larger values indicate bugs (e.g., the 2.03 FusedTransducedLM bug
 that was fixed).*
+
+> **Scope:** This validates internal consistency (our methods agree with each
+> other), not absolute correctness against a ground-truth neural LM. Both
+> methods use the same CharNgramLM and the same toy BPE / single-sentence PTB
+> inputs. Agreement here means the algorithms are equivalent, not that they
+> produce correct results at scale.
 
 Source: [`reports/run_benchmarks.py:239–251`](run_benchmarks.py) (BPE logp), [`reports/run_benchmarks.py:329–340`](run_benchmarks.py) (PTB logp)
 
@@ -317,25 +412,25 @@ TransducedLM and FusedTransducedLM agree perfectly on BPE after the fix.
 
 ### TransducedLM (Rust peekaboo)
 
-- **Status:** OK on both PTB and BPE
+- **Status:** OK on both PTB and BPE (toy scale — see Scale Limitations)
 - **Architecture:** Two-phase — PeekabooState BFS decomposition (Rust), then
   beam-weighted search over Q/R
-- **PTB performance:** 129 ms/step avg (45/45 steps, 5.80s total)
-- **BPE performance:** 0.5 ms/step avg (44/44 steps)
-- **Blockers:** None
+- **PTB performance:** 129 ms/step avg (45/45 steps, 5.80s total) — decomp cost only, CharNgramLM
+- **BPE performance:** 0.5 ms/step avg (44/44 steps) — 43-token toy FST, not representative
+- **Untested:** Full GPT-2 BPE (50K tokens), real neural LM, long sequences
 
 ### FusedTransducedLM
 
-- **Status:** OK on both PTB and BPE
+- **Status:** OK on both PTB and BPE (toy scale — see Scale Limitations)
 - **Architecture:** Single-pass — interleaves decomposition and LM search in
   one priority queue, no separate BFS phase
-- **PTB performance:** 66 ms/step avg (45/45 steps, 2.95s total, 2.0x faster than TransducedLM)
-- **BPE performance:** 0.3 ms/step avg (44/44 steps)
+- **PTB performance:** 66 ms/step avg (45/45 steps, 2.95s total) — decomp cost only, CharNgramLM
+- **BPE performance:** 0.3 ms/step avg (44/44 steps) — 43-token toy FST, not representative
 - **Bugfix applied:** RhoExpander drain in `_FusedSearch.search()` — previously
   skipped scoring remaining RhoExpander children when budget exhausted, causing
   up to 2.03 nats logp error vs TransducedLM. Now drains fully, matching
   TransducedLM's behavior (max diff 0.000287).
-- **Blockers:** None
+- **Untested:** Full GPT-2 BPE (50K tokens), real neural LM, long sequences
 
 ### PyniniTransducedLM
 
@@ -403,6 +498,7 @@ PYTHONUNBUFFERED=1 python reports/run_benchmarks.py
 
 | Date | Change |
 |------|--------|
+| 2026-02-20 | Add scale limitations section and per-table/figure context warnings |
 | 2026-02-20 | Remove position-set peekaboo code (not pulling its weight; see TODO.md) |
 | 2026-02-20 | Update benchmarks: TransducedLM 129 ms/step, FusedLM 66 ms/step (PTB) |
 | 2026-02-20 | Fix FusedTransducedLM RhoExpander drain bug; logp diff 2.03→0.000287 |
