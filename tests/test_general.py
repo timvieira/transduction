@@ -19,6 +19,8 @@ from transduction.dfa_decomp_incremental_truncated import TruncatedIncrementalDF
 from transduction.peekaboo_nonrecursive import Peekaboo as PeekabooNonrecursive
 from transduction.peekaboo_incremental import PeekabooState
 from transduction.peekaboo_dirty import DirtyPeekaboo
+from transduction.trie_dispatch import TrieDispatchDFADecomp
+import os
 
 try:
     from transduction.rust_bridge import (
@@ -63,6 +65,7 @@ def assert_equal_decomp_map(have, want):
 IMPLEMENTATIONS = [
     pytest.param(TruncatedIncrementalDFADecomp, id="truncated_incremental_dfa_decomp"),
     pytest.param(NonrecursiveDFADecomp, id="nonrecursive_dfa_decomp"),
+    pytest.param(TrieDispatchDFADecomp, id="trie_dispatch_nonrecursive"),
     pytest.param(PeekabooState, id="peekaboo_incremental"),
     pytest.param(PeekabooNonrecursive, id="peekaboo_nonrecursive"),
     pytest.param(DirtyPeekaboo, id="dirty_peekaboo"),
@@ -87,6 +90,26 @@ IMPLEMENTATIONS.append(
 @pytest.fixture(params=IMPLEMENTATIONS)
 def impl(request):
     return request.param
+
+
+@pytest.fixture(autouse=True)
+def trie_dispatch_stats(request, impl):
+    if impl is TrieDispatchDFADecomp and os.environ.get("TRIE_DISPATCH_STATS"):
+        from transduction.trie_dispatch import reset_stats, set_tag, get_stats, get_tag_stats
+        reset_stats()
+        set_tag(request.node.name)
+        yield
+        stats = get_stats()
+        tag_stats = get_tag_stats(request.node.name)
+        total_states = stats["trie_states"] + stats["fallback_states"]
+        total_arcs = stats["trie_arcs"] + stats["fallback_arcs"]
+        print(f"\n[trie_dispatch stats] {request.node.name}")
+        print(f"  trie_states: {tag_stats['trie_states']} / {total_states}")
+        print(f"  fallback_states: {tag_stats['fallback_states']} / {total_states}")
+        print(f"  trie_arcs: {tag_stats['trie_arcs']} / {total_arcs}")
+        print(f"  fallback_arcs: {tag_stats['fallback_arcs']} / {total_arcs}")
+    else:
+        yield
 
 
 def test_abc(impl):
