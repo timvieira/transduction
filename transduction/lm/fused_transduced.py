@@ -304,8 +304,7 @@ class FusedTransducedLM(LM[Token]):
 
     def __init__(self, inner_lm: LM, fst: FST[Any, Any],
                  max_steps: int = 1000, max_beam: int = 100,
-                 eos: Token = '<EOS>') -> None:  # type: ignore[assignment]
-        import transduction_core
+                 eos: Token = '<EOS>', helper: str = "rust") -> None:  # type: ignore[assignment]
 
         self.inner_lm = inner_lm
         self.fst = fst
@@ -313,12 +312,32 @@ class FusedTransducedLM(LM[Token]):
         self.max_beam = max_beam
         self.eos = eos
 
-        # Build Rust FST and helper
-        rust_fst, sym_map, state_map = to_rust_fst(fst)
-        self._rust_helper = transduction_core.RustLazyPeekabooDFA(rust_fst)
-        self._sym_map: dict[Token, int] = {k: v for k, v in sym_map.items()}
-        self._inv_sym_map: dict[int, Token] = {v: k for k, v in sym_map.items()}
-        self._state_map = state_map
+        if helper == "rust":
+            import transduction_core
+            rust_fst, sym_map, state_map = to_rust_fst(fst)
+            self._rust_helper = transduction_core.RustLazyPeekabooDFA(rust_fst)
+            self._sym_map = {k: v for k, v in sym_map.items()}
+            self._inv_sym_map = {v: k for k, v in sym_map.items()}
+            self._state_map = state_map
+            self._helper_mode = "rust"
+        elif helper == "python":
+            from transduction.trie_dispatch import PythonLazyPeekabooDFAHelper
+            helper_obj = PythonLazyPeekabooDFAHelper(fst)
+            self._rust_helper = helper_obj
+            self._sym_map = {k: v for k, v in helper_obj._sym_map.items()}
+            self._inv_sym_map = {v: k for k, v in helper_obj._sym_map.items()}
+            self._state_map = None
+            self._helper_mode = "python"
+        elif helper == "token":
+            from transduction.token_decompose import TokenPeekabooHelper
+            helper_obj = TokenPeekabooHelper(fst)
+            self._rust_helper = helper_obj
+            self._sym_map = {k: v for k, v in helper_obj._sym_map.items()}
+            self._inv_sym_map = {v: k for k, v in helper_obj._sym_map.items()}
+            self._state_map = None
+            self._helper_mode = "token"
+        else:
+            raise ValueError("helper must be 'rust', 'python', or 'token'")
 
     def decode_dfa_state(self, state_id: int,
                          target: Str[Token]) -> frozenset[Any]:
@@ -327,6 +346,8 @@ class FusedTransducedLM(LM[Token]):
         Returns frozenset of (fst_state, buffer_tuple, truncated) matching
         the Python PeekabooLookaheadNFA representation.
         """
+        if self._helper_mode != "rust":
+            raise RuntimeError("decode_dfa_state is only available with helper='rust'")
         if not hasattr(self, '_inv_maps'):
             idx_to_sym_raw = self._rust_helper.idx_to_sym_map()
             inv_sym = self._inv_sym_map
