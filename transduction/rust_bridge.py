@@ -120,6 +120,37 @@ class RustDecomp(DecompositionResult):
         self.remainder = to_python_fsa(result.remainder, sym_map)
 
 
+class RustTokenDecomp(DecompositionResult):
+    """Token-level decomposition using the Rust backend (BPE-like FSTs only).
+
+    Uses position-set bitsets for O(N) DFA states instead of the generic
+    O(|fst_states| * N) approach.  Requires ``all_input_universal``.
+    """
+
+    def __init__(self, fst, target, minimize=False):
+        import transduction_core
+
+        self.fst = fst
+        self.target = tuple(target)
+        self.source_alphabet = fst.A - {EPSILON}
+        self.target_alphabet = fst.B - {EPSILON}
+
+        oov = set(target) - self.target_alphabet
+        if oov:
+            raise ValueError(f"Out of vocabulary target symbols: {oov}")
+
+        rust_fst, sym_map, _state_map = to_rust_fst(fst)
+
+        target_u32 = [sym_map(y) for y in target]
+
+        result = transduction_core.rust_decompose_token_level(
+            rust_fst, target_u32, minimize=minimize,
+        )
+
+        self.quotient = to_python_fsa(result.quotient, sym_map)
+        self.remainder = to_python_fsa(result.remainder, sym_map)
+
+
 class RustDirtyState(IncrementalDecomposition):
     """Rust-backed dirty-state incremental decomposition.
 

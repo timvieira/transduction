@@ -218,6 +218,15 @@ pub fn rust_decompose(py: Python<'_>, fst: &RustFst, target: Vec<u32>, minimize:
     wrap_decomp_result(py, result, minimize)
 }
 
+/// Token-level decomposition for BPE-like FSTs where all_input_universal holds.
+/// Uses position-set bitsets instead of the full NFA state space.
+#[pyfunction]
+#[pyo3(signature = (fst, target, minimize=false))]
+pub fn rust_decompose_token_level(py: Python<'_>, fst: &RustFst, target: Vec<u32>, minimize: bool) -> PyResult<DecompResult> {
+    let result = crate::token_decompose::decompose_token_level(&fst.inner, &target);
+    wrap_decomp_result(py, result, minimize)
+}
+
 // ---------------------------------------------------------------------------
 // Dirty-state incremental decomposition
 // ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ pub mod decompose;
 pub mod peekaboo;
 pub mod minimize;
 pub mod incremental;
+pub mod token_decompose;
 pub mod py;
 
 use pyo3::prelude::*;
@@ -25,5 +26,6 @@ fn transduction_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<py::RustLazyPeekabooDFA>()?;
     m.add_class::<py::PeekabooClassifyResult>()?;
     m.add_function(wrap_pyfunction!(py::rust_decompose, m)?)?;
+    m.add_function(wrap_pyfunction!(py::rust_decompose_token_level, m)?)?;
     Ok(())
 }
