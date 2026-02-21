@@ -76,46 +76,6 @@ class Particle:
         return f'Particle(w={self.log_weight:.3f}, {self.source_path})'
 
 
-class _RhoExpander:
-    """Lazy enumerator for rho-class children at a complete DFA state.
-
-    Instead of eagerly pushing O(|V|) children into the heap, this holds a
-    sorted list of (weight, symbol) pairs and yields one child at a time when
-    popped.  Only the top item's weight is visible to the heap, so the
-    expander is ordered correctly among regular Particles.
-    """
-    __slots__ = ('rho_dest', 'lm_state', 'source_path',
-                 '_sorted', '_index')
-
-    def __init__(self, rho_dest: State, lm_state: LMState,
-                 source_path: Str[Token],
-                 sorted_children: list[tuple[float, Token]]) -> None:
-        self.rho_dest = rho_dest
-        self.lm_state = lm_state
-        self.source_path = source_path
-        self._sorted = sorted_children   # [(weight, symbol), ...] desc
-        self._index = 0
-
-    @property
-    def log_weight(self) -> float:
-        return self._sorted[self._index][0]
-
-    def __lt__(self, other: _RhoExpander | Particle) -> bool:
-        # max-heap: higher weight = higher priority (matches Particle)
-        return self.log_weight > other.log_weight
-
-    @property
-    def exhausted(self) -> bool:
-        return self._index >= len(self._sorted)
-
-    def pop_next(self) -> Particle:
-        """Materialize the next highest-weight child Particle."""
-        w, x = self._sorted[self._index]
-        self._index += 1
-        return Particle(self.rho_dest, self.lm_state >> x, w,
-                        self.source_path + (x,))
-
-
 # ---------------------------------------------------------------------------
 # Selection
 # ---------------------------------------------------------------------------
@@ -322,13 +282,7 @@ class TransducedState(LMState[Token]):
         while queue and expansions < self.tlm.max_expansions:
             expansions += 1
 
-            item = heapq.heappop(queue)
-            if isinstance(item, _RhoExpander):
-                particle = item.pop_next()
-                if not item.exhausted:
-                    heapq.heappush(queue, item)
-            else:
-                particle = item
+            particle = heapq.heappop(queue)
 
             q_syms, r_syms = _score(particle)
             _carry_forward(particle, q_syms, r_syms)
@@ -338,54 +292,21 @@ class TransducedState(LMState[Token]):
                 continue
 
             # Non-Q: expand by source symbols.
-            # Use rho-aware expansion when available to reduce per-particle
-            # cost at complete DFA states (O(D) explicit + O(|V|) rho class
-            # with a single shared classify() call for the rho destination).
             lm_logp = particle.lm_state.logp_next
-            if self.tlm.use_rho and hasattr(dfa, 'rho_arcs'):
-                has_rho, rho_dest, explicit_arcs, rho_symbols = dfa.rho_arcs(particle.dfa_state)
-                for x, next_dfa_state in explicit_arcs:
-                    child_w = particle.log_weight + lm_logp[x]
-                    if child_w > -np.inf:
-                        heapq.heappush(queue, Particle(
-                            next_dfa_state,
-                            particle.lm_state >> x,
-                            child_w,
-                            particle.source_path + (x,),
-                        ))
-                if has_rho and rho_dest is not None:
-                    rho_children = []
-                    for x in rho_symbols:
-                        child_w = particle.log_weight + lm_logp[x]
-                        if child_w > -np.inf:
-                            rho_children.append((child_w, x))
-                    if rho_children:
-                        rho_children.sort(reverse=True)
-                        heapq.heappush(queue, _RhoExpander(
-                            rho_dest, particle.lm_state,
-                            particle.source_path, rho_children))
-            else:
-                for x, next_dfa_state in dfa.arcs(particle.dfa_state):
-                    child_w = particle.log_weight + lm_logp[x]
-                    if child_w > -np.inf:
-                        heapq.heappush(queue, Particle(
-                            next_dfa_state,
-                            particle.lm_state >> x,
-                            child_w,
-                            particle.source_path + (x,),
-                        ))
+            for x, next_dfa_state in dfa.arcs(particle.dfa_state):
+                child_w = particle.log_weight + lm_logp[x]
+                if child_w > -np.inf:
+                    heapq.heappush(queue, Particle(
+                        next_dfa_state,
+                        particle.lm_state >> x,
+                        child_w,
+                        particle.source_path + (x,),
+                    ))
 
         # Budget exhausted — score and carry forward remaining items
-        # without expanding.  Drain _RhoExpanders fully so all rho
-        # children contribute to the logp_next distribution.
+        # without expanding.
         while queue:
-            item = heapq.heappop(queue)
-            if isinstance(item, _RhoExpander):
-                particle = item.pop_next()
-                if not item.exhausted:
-                    heapq.heappush(queue, item)
-            else:
-                particle = item
+            particle = heapq.heappop(queue)
             q_syms, r_syms = _score(particle)
             _carry_forward(particle, q_syms, r_syms)
 
@@ -474,14 +395,12 @@ class TransducedLM(LM[Token]):
     def __init__(self, inner_lm: LM, fst: FST[Any, Any], K: int,
                  max_expansions: int = 1000, eos: Token = '<EOS>',  # type: ignore[assignment]
                  decomp_state_cls: type | None = None,
-                 univ_cls: type = _DefaultUniv,
-                 use_rho: bool = True) -> None:
+                 univ_cls: type = _DefaultUniv) -> None:
         self.inner_lm = inner_lm
         self.fst = fst
         self.max_expansions = max_expansions
         self.K = K
         self.eos = eos
-        self.use_rho = use_rho
         self._decomp_state_cls = decomp_state_cls or _DefaultDecompState
         self._univ = univ_cls(fst)
 

@@ -26,7 +26,6 @@ Do not auto-commit after finishing work.
 - `transduction/prioritized_lazy_incremental.py` — PrioritizedLazyIncremental (finite-language, heuristic BFS)
 - `transduction/viz.py` — Visualization/display utilities for automata (used in notebooks)
 - `transduction/enumeration.py` — LM-weighted path enumeration (prioritized_enumeration, importance_sampling)
-- `transduction/symbolic_precover.py` — `SymbolicLazyDeterminize`, `ExpandRho` (rho-arc DFA compression for PrecoverNFA)
 - `transduction/pynini_ops.py` — Pynini/OpenFST-backed reference P(y)/Q(y)/R(y) via composition and projection
 - `transduction/lazy.py` — Lazy automaton framework (LazyDeterminize, EpsilonRemove)
 - `transduction/applications/bpe.py` — BPE WFST builder (`bpe_wfst`)
@@ -64,8 +63,7 @@ Self-contained language model interface for use with enumeration/sampling:
 - `precover.rs` — PrecoverNFA with eps closure caching (Rc<Vec<u64>> avoids cloning)
 - `powerset.rs` — PowersetArena (hash-consing DFA states; single-element fast path for 99% of BPE cases)
 - `minimize.rs` — DFA minimization
-- `rho.rs` — Rho-arc factored determinization (`RhoDfaResult`; exposed as `RustRhoDfa`)
-- `py.rs` — PyO3 bindings (RustFst, RustFsa, DecompResult, PeekabooDecompResult, RustRhoDfa)
+- `py.rs` — PyO3 bindings (RustFst, RustFsa, DecompResult, PeekabooDecompResult)
 
 ## Dependencies
 
@@ -102,7 +100,6 @@ Eliminated deps (previously external, now inlined):
 - `test_pynini_ops.py`: 115 passed
 - `test_transduced.py`: 106 passed
 - `test_lazy.py`: 100 passed
-- `test_symbolic_precover.py`: 84 passed
 - `test_fst.py`: 56 passed
 - `test_enumeration.py`: 55 passed
 - `test_push_labels.py`: 35 passed
@@ -110,11 +107,10 @@ Eliminated deps (previously external, now inlined):
 - `test_is_functional.py`: 26 passed
 - `test_lazy_peekaboo_dfa.py`: 23 passed
 - `test_ngram.py`: 22 passed
-- `test_rho_fused.py`: 15 passed
 - `test_ptb_nltk.py`: 4 passed
 - `test_make_total.py`: 3 passed
 - `test_statelm_kv_cache.py`: 3 passed
-- **Total: 1037 tests across 17 files**
+- **Total: 938 tests across 15 files**
 - `test_general.py` tests the **general-case** algorithms (handle infinite quotients/remainders):
   NonrecursiveDFADecomp, TruncatedIncrementalDFADecomp, PeekabooState, PeekabooNonrecursive,
   DirtyPeekaboo, RustDecomp, RustDirtyState, RustDirtyPeekaboo.

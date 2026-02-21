@@ -43,15 +43,6 @@ All implementations now support the `>>` operator: incremental algorithms provid
 optimized `__rshift__`; non-incremental implementations inherit `DecompositionResult.__rshift__`
 which constructs a fresh decomposition for the extended target.
 
-### Rho-Arc Compression Algorithms
-
-Orthogonal to position-set (not TD-specific):
-
-| Algorithm | Language | File | Notes |
-|-----------|----------|------|-------|
-| `SymbolicLazyDeterminize` | Python | `symbolic_precover.py` | Rho-arc DFA compression for PrecoverNFA |
-| `RustRhoDfa` | Rust | `rho.rs` | Rust rho-arc factored determinization |
-
 ### Pynini-Backed Reference Implementations
 
 These use OpenFST/pynini WFST operations for composition-based P(y)/Q(y)/R(y).
@@ -240,8 +231,6 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 
 6. **UniversalityFilter cascade** — AUI fast path $\to$ witness check $\to$ monotonicity caches $\to$ BFS fallback.
 
-7. **Rho-arc factoring** — `SymbolicLazyDeterminize`/`RustRhoDfa`: detect complete DFA states and replace the most-common destination with a single rho arc, reducing arc count.
-
 ---
 
 ## Test Status
@@ -251,7 +240,6 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 - **`test_pynini_ops.py`**: 115 passed
 - **`test_transduced.py`**: 106 passed
 - **`test_lazy.py`**: 100 passed
-- **`test_symbolic_precover.py`**: 84 passed
 - **`test_fst.py`**: 56 passed
 - **`test_enumeration.py`**: 55 passed
 - **`test_push_labels.py`**: 35 passed
@@ -259,11 +247,10 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 - **`test_is_functional.py`**: 26 passed
 - **`test_lazy_peekaboo_dfa.py`**: 23 passed
 - **`test_ngram.py`**: 22 passed
-- **`test_rho_fused.py`**: 15 passed
 - **`test_ptb_nltk.py`**: 4 passed
 - **`test_make_total.py`**: 3 passed
 - **`test_statelm_kv_cache.py`**: 3 passed
-- **Total**: 1037 tests across 17 test files
+- **Total**: 938 tests across 15 test files
 
 ---
 

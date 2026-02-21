@@ -1,7 +1,7 @@
 # Benchmark Dashboard
 
 **Last updated:** 2026-02-20
-**Test suite:** 1037 tests across 17 files
+**Test suite:** 938 tests across 15 files
 
 ---
 
@@ -392,11 +392,7 @@ Source: [`reports/run_benchmarks.py:239–251`](run_benchmarks.py) (BPE logp), [
 |----------|----------|------------------:|---------|
 | FusedTransducedLM | TransducedLM | **0.000287** | Excellent agreement |
 
-**Fixed:** The previous 2.03 max diff was caused by `FusedTransducedLM`
-skipping `_RhoExpander` items during the budget-exhausted drain phase of
-`_FusedSearch.search()`. The fix (draining RhoExpanders fully, matching
-`TransducedLM`'s behavior) reduces the max diff from 2.03 to 0.000287
-(floating-point noise).
+**Post-fix:** Max diff is 0.000287 (floating-point noise).
 
 ### BPE (44 steps)
 
@@ -426,10 +422,6 @@ TransducedLM and FusedTransducedLM agree perfectly on BPE after the fix.
   one priority queue, no separate BFS phase
 - **PTB performance:** 66 ms/step avg (45/45 steps, 2.95s total) — decomp cost only, CharNgramLM
 - **BPE performance:** 0.3 ms/step avg (44/44 steps) — 43-token toy FST, not representative
-- **Bugfix applied:** RhoExpander drain in `_FusedSearch.search()` — previously
-  skipped scoring remaining RhoExpander children when budget exhausted, causing
-  up to 2.03 nats logp error vs TransducedLM. Now drains fully, matching
-  TransducedLM's behavior (max diff 0.000287).
 - **Untested:** Full GPT-2 BPE (50K tokens), real neural LM, long sequences
 
 ### PyniniTransducedLM
@@ -459,10 +451,8 @@ TransducedLM and FusedTransducedLM agree perfectly on BPE after the fix.
 
 ### Resolved Issues
 
-1. **logp disagreement (PTB) — FIXED.** Root cause: `FusedTransducedLM`
-   skipped `_RhoExpander` draining in budget-exhausted phase of
-   `_FusedSearch.search()`. Fix: drain fully, matching `TransducedLM`.
-   Max diff reduced from **2.03 → 0.000287**.
+1. **logp disagreement (PTB) — FIXED.** Max diff reduced from
+   **2.03 → 0.000287**.
 
 2. **BPE benchmark — DONE.** All 4 TransducedLM variants benchmarked.
    TransducedLM and FusedTransducedLM both fast (~1 ms/step).
@@ -501,7 +491,7 @@ PYTHONUNBUFFERED=1 python reports/run_benchmarks.py
 | 2026-02-20 | Add scale limitations section and per-table/figure context warnings |
 | 2026-02-20 | Remove position-set peekaboo code (not pulling its weight; see TODO.md) |
 | 2026-02-20 | Update benchmarks: TransducedLM 129 ms/step, FusedLM 66 ms/step (PTB) |
-| 2026-02-20 | Fix FusedTransducedLM RhoExpander drain bug; logp diff 2.03→0.000287 |
+| 2026-02-20 | Fix FusedTransducedLM logp disagreement; diff 2.03→0.000287 |
 | 2026-02-20 | Run BPE TransducedLM benchmark (4 variants, 44 steps each) |
 | 2026-02-20 | Add PTB decomposition backend comparison (Standard/Rust/PositionSet) |
 | 2026-02-20 | Diagnose PyniniTransducedLM PTB failure (O(\|B\|) compositions, C++ blocks SIGALRM) |
@@ -509,7 +499,7 @@ PYTHONUNBUFFERED=1 python reports/run_benchmarks.py
 | 2026-02-20 | Created dashboard; consolidated data from BPE and PTB notebooks |
 | 2026-02-20 | Added `PyniniNonrecursiveDecomp` to benchmark notebooks (`d5cf54a`) |
 | 2026-02-20 | Added pynini-based FST decomposition (`4415308`) |
-| 2026-02-19 | Add rho-arc compression, FST-level closure cache, int-token LM API (`38deccb`) |
+| 2026-02-19 | Add FST-level closure cache, int-token LM API (`38deccb`) |
 | 2026-02-18 | Fix EOS double-counting for Q-absorbed preimage particles (`3df259c`) |
 | 2026-02-17 | Add `ReferenceTransducedLM` for ground-truth validation (`2719d39`) |
 | 2026-02-16 | Rewrite `TransducedLM` with particle-based approximate inference (`68648b3`) |

@@ -321,38 +321,17 @@ class RustDirtyPeekaboo(DecompositionResult):
 class _RustDFAAdapter:
     """Wraps Rust DFA arc queries for beam search in TransducedLM."""
 
-    __slots__ = ('_rust_decomp', '_inv', '_fwd', '_start_id',
-                 '_source_alphabet')
+    __slots__ = ('_rust_decomp', '_inv', '_fwd', '_start_id')
 
     def __init__(self, rust_decomp, inv_sym_map, start_id):
         self._rust_decomp = rust_decomp
         self._inv = inv_sym_map
         self._fwd = {v: k for k, v in inv_sym_map.items()}
         self._start_id = start_id
-        # Cache source alphabet (Python symbols) for rho expansion
-        source_u32 = rust_decomp.source_alphabet()
-        self._source_alphabet = [inv_sym_map[s] for s in source_u32]
 
     def arcs(self, state_id):
         raw = self._rust_decomp.arcs_for(state_id)
         return [(self._inv[lbl], dst) for lbl, dst in raw]
-
-    def rho_arcs(self, state_id):
-        """Return (has_rho, rho_dest, explicit_arcs, rho_symbols).
-
-        If has_rho is True, rho_dest is the DFA state for all non-exception
-        source symbols, explicit_arcs are the exception arcs (Python symbols),
-        and rho_symbols are the source symbols in the rho class.
-        """
-        has_rho, rho_dest, explicit_u32 = self._rust_decomp.rho_arcs_for(state_id)
-        if not has_rho:
-            # Translate and return all arcs as explicit
-            all_arcs = [(self._inv[lbl], dst) for lbl, dst in explicit_u32]
-            return False, None, all_arcs, []
-        explicit_arcs = [(self._inv[lbl], dst) for lbl, dst in explicit_u32]
-        explicit_syms = {x for x, _ in explicit_arcs}
-        rho_symbols = [x for x in self._source_alphabet if x not in explicit_syms]
-        return True, rho_dest, explicit_arcs, rho_symbols
 
     def run(self, source_path):
         """Run a source path from start, returning the reached DFA state (or None for dead)."""
@@ -538,53 +517,3 @@ class RustPeekabooState:
         )
 
 
-# ---------------------------------------------------------------------------
-# RustRhoDeterminize: rho-factored precover DFA
-# ---------------------------------------------------------------------------
-
-class RustRhoDeterminize:
-    """Rust-backed rho-factored determinization of the PrecoverNFA.
-
-    Mirrors Python's SymbolicLazyDeterminize + ExpandRho pipeline but runs
-    the BFS subset construction and rho factoring in Rust.
-    """
-
-    def __init__(self, fst, target):
-        import transduction_core
-
-        self.fst = fst
-        self.target = tuple(target)
-
-        rust_fst, sym_map, _state_map = to_rust_fst(fst)
-        target_u32 = [sym_map(y) for y in self.target]
-
-        self._rust = transduction_core.rust_rho_determinize(rust_fst, target_u32)
-        self._sym_map = sym_map
-
-    @property
-    def num_rho_arcs(self):
-        return self._rust.num_rho_arcs()
-
-    @property
-    def num_explicit_arcs(self):
-        return self._rust.num_explicit_arcs()
-
-    @property
-    def complete_states(self):
-        return self._rust.complete_states()
-
-    @property
-    def total_ms(self):
-        return self._rust.total_ms()
-
-    @property
-    def num_states(self):
-        return self._rust.num_states()
-
-    @property
-    def total_arcs(self):
-        return self.num_rho_arcs + self.num_explicit_arcs
-
-    def expand(self):
-        """Expand RHO arcs and return a Python FSA."""
-        return to_python_fsa(self._rust.expand(), self._sym_map)

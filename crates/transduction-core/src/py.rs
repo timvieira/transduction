@@ -1,6 +1,6 @@
 use pyo3::prelude::*;
 use crate::fst::{Fst, compute_ip_universal_states};
-use crate::{decompose, peekaboo, incremental, minimize, rho};
+use crate::{decompose, peekaboo, incremental, minimize};
 use std::time::Instant;
 
 /// Python-visible FST wrapper. Constructed once from Python arrays, then
@@ -556,44 +556,9 @@ impl RustDirtyPeekabooDecomp {
 
     /// Return the arcs from a DFA state: Vec<(input_label_u32, dest_sid)>.
     /// Called per-particle during beam search.
-    /// RHO arcs are expanded to explicit arcs for backward compatibility.
     fn arcs_for(&self, py: Python<'_>, state_id: u32) -> Vec<(u32, u32)> {
         let _ = py;
-        if self.persistent.state_has_rho(state_id) {
-            let (_, rho_dest, explicit) = self.persistent.rho_arcs(state_id);
-            let mut result = explicit;
-            if let Some(rd) = rho_dest {
-                let explicit_syms: rustc_hash::FxHashSet<u32> = result.iter()
-                    .map(|&(lbl, _)| lbl)
-                    .collect();
-                for &sym in self.persistent.source_alphabet() {
-                    if !explicit_syms.contains(&sym) {
-                        result.push((sym, rd));
-                    }
-                }
-            }
-            result
-        } else {
-            self.persistent.arcs_from(state_id).to_vec()
-        }
-    }
-
-    /// Return rho-arc information for a DFA state.
-    /// Returns (has_rho, rho_dest, explicit_exception_arcs).
-    fn rho_arcs_for(&self, py: Python<'_>, state_id: u32) -> (bool, Option<u32>, Vec<(u32, u32)>) {
-        let _ = py;
-        self.persistent.rho_arcs(state_id)
-    }
-
-    /// Return the source alphabet (input symbols of the FST).
-    fn source_alphabet(&self, py: Python<'_>) -> Vec<u32> {
-        let _ = py;
-        self.persistent.source_alphabet().to_vec()
-    }
-
-    /// Return the RHO sentinel label value.
-    fn rho_label(&self) -> u32 {
-        rho::RHO
+        self.persistent.arcs_from(state_id).to_vec()
     }
 
     /// Generation counter — incremented on every full_reset().
@@ -817,10 +782,9 @@ impl RustLazyPeekabooDFA {
 
     /// Lazily compute and return arcs from a DFA state.
     /// Returns Vec<(input_label_u32, dest_sid)>.
-    /// RHO arcs are expanded to explicit arcs for backward compatibility.
     fn arcs(&mut self, py: Python<'_>, sid: u32) -> Vec<(u32, u32)> {
         let inner = &self.fst.borrow(py).inner;
-        self.lazy_dfa.as_mut().expect("call new_step first").get_arcs_expanded(inner, sid)
+        self.lazy_dfa.as_mut().expect("call new_step first").get_arcs(inner, sid)
     }
 
     /// Run a source path from start, returning the reached DFA state or None.
@@ -877,106 +841,6 @@ impl RustLazyPeekabooDFA {
         self.idx_to_sym.clone()
     }
 
-    /// Return rho-arc information for a DFA state.
-    /// Returns (has_rho, rho_dest, explicit_exception_arcs).
-    /// - has_rho: whether this is a complete state with rho compression
-    /// - rho_dest: the destination for all non-exception symbols (None if !has_rho)
-    /// - explicit_exception_arcs: Vec<(input_label_u32, dest_sid)> for exception symbols
-    fn rho_arcs(&mut self, py: Python<'_>, sid: u32) -> (bool, Option<u32>, Vec<(u32, u32)>) {
-        let inner = &self.fst.borrow(py).inner;
-        let dfa = self.lazy_dfa.as_mut().expect("call new_step first");
-        dfa.ensure_arcs(inner, sid);
-        let has_rho = dfa.has_rho(sid);
-        if !has_rho {
-            // Not a rho state — return all arcs as explicit
-            return (false, None, dfa.get_arcs(inner, sid));
-        }
-        let rho_dest = dfa.rho_dest(sid);
-        let explicit = dfa.explicit_arcs(sid);
-        (true, rho_dest, explicit)
-    }
-
-    /// Return the source alphabet (input symbols of the FST).
-    fn source_alphabet(&self, py: Python<'_>) -> Vec<u32> {
-        self.fst.borrow(py).inner.source_alphabet.clone()
-    }
-
-    /// Return the RHO sentinel label value.
-    fn rho_label(&self) -> u32 {
-        rho::RHO
-    }
 }
 
-// ---------------------------------------------------------------------------
-// Rho-arc compressed DFA
-// ---------------------------------------------------------------------------
-
-/// Python-visible rho-factored DFA result.
-#[pyclass]
-pub struct RustRhoDfa {
-    inner: rho::RhoDfaResult,
-    source_alphabet: Vec<u32>,
-}
-
-#[pymethods]
-impl RustRhoDfa {
-    fn num_states(&self) -> u32 {
-        self.inner.num_states
-    }
-
-    fn start_states(&self) -> Vec<u32> {
-        self.inner.start.clone()
-    }
-
-    fn final_states(&self) -> Vec<u32> {
-        self.inner.stop.clone()
-    }
-
-    fn arcs(&self) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
-        (self.inner.arc_src.clone(), self.inner.arc_lbl.clone(), self.inner.arc_dst.clone())
-    }
-
-    fn num_rho_arcs(&self) -> u32 {
-        self.inner.num_rho_arcs
-    }
-
-    fn num_explicit_arcs(&self) -> u32 {
-        self.inner.num_explicit_arcs
-    }
-
-    fn complete_states(&self) -> u32 {
-        self.inner.complete_states
-    }
-
-    fn rho_label(&self) -> u32 {
-        rho::RHO
-    }
-
-    fn total_ms(&self) -> f64 {
-        self.inner.total_ms
-    }
-
-    /// Expand RHO arcs into explicit arcs, returning a RustFsa.
-    fn expand(&self, py: Python<'_>) -> PyResult<Py<RustFsa>> {
-        let expanded = rho::expand_rho(&self.inner, &self.source_alphabet);
-        Py::new(py, RustFsa {
-            num_states: expanded.num_states,
-            start: expanded.start,
-            stop: expanded.stop,
-            src: expanded.arc_src,
-            lbl: expanded.arc_lbl,
-            dst: expanded.arc_dst,
-        })
-    }
-}
-
-/// Perform rho-factored determinization of the PrecoverNFA.
-#[pyfunction]
-pub fn rust_rho_determinize(fst: &RustFst, target: Vec<u32>) -> RustRhoDfa {
-    let result = rho::rho_determinize(&fst.inner, &target);
-    RustRhoDfa {
-        inner: result,
-        source_alphabet: fst.inner.source_alphabet.clone(),
-    }
-}
 
