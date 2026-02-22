@@ -21,10 +21,12 @@
 | `RustDecomp` | | | | N | ✓ | ✓ | ✓ | ✓ | rust ext |
 | `RustDirtyState` | ✓ | | ✓ | N | ✓ | ✓ | ✓ | ✓ | rust ext |
 | `RustDirtyPeekaboo` | ✓ | ✓ | ✓ | N+K | ✓ | ✓ | ✓ | ✓ | rust ext |
-| `RustLazyPeekabooDFA` | ✓ | ✓ | ✓ | N+K | ✓ | ✓ | ✓ | ✓ | rust ext; lazy DFA for TransducedLM |
-| **Rho-arc compression** | | | | | | | | | |
-| `SymbolicLazyDeterminize` | | | | N | ✓ | | ✓ | | |
-| `RustRhoDfa` | | | | N | ✓ | | ✓ | ✓ | rust ext |
+| `RustLazyPeekabooDFA` | ✓ | ✓ | ✓ | N+K | ✓ | ✓ | ✓ | ✓ | rust ext; lazy DFA for FusedTransducedLM |
+| **Token-level / Lazy** | | | | | | | | | |
+| `LazyPrecoverDFA` | | | | N | ✓ | ✓ | ✓ | ✓† | on-demand DFA, int packing, hash-consing |
+| `TokenDecompose` | | | | N | ✓ | ✓ | ✓ | ✓ | O(N) position-set states; BPE-like only |
+| `TokenPeekabooHelper` | ✓ | ✓ | | N+K | ✓ | ✓ | ✓ | ✓ | FusedLM `helper="token"`; BPE+PTB |
+| `TrieDispatchDFADecomp` | | | | N | ✓ | ✓ | ✓ | | trie-based dispatch |
 | **Pynini reference** | | | | | | | | | |
 | `PyniniNonrecursiveDecomp` | | | | N | ✓ | pynini | ✓ | | pynini dep |
 
@@ -85,7 +87,7 @@ The decomposition algorithms above compute *structural* Q/R decompositions. The 
 3. After the expansion budget (`max_expansions`) is exhausted, remaining queued particles are scored without expansion.
 4. Carry-forward passes particles at Q/R/resume-frontier states to the next step; top-K pruning bounds the beam.
 
-**`FusedTransducedLM`** (`lm/fused_transduced.py`) — Same particle-beam search as `TransducedLM`, but the decomposition DFA is not pre-computed. Instead, a Rust `RustLazyPeekabooDFA` builds the powerset DFA lazily during search — only states reachable via high-probability source paths are materialized. This avoids the upfront cost of full decomposition at each step. Carry-forward uses sentinel states (dfa_state=None) that are resolved via source-path replay in the next step.
+**`FusedTransducedLM`** (`lm/fused_transduced.py`) — Same particle-beam search as `TransducedLM`, but the decomposition DFA is not pre-computed. Instead, a lazy helper builds the powerset DFA during search — only states reachable via high-probability source paths are materialized. The `helper=` parameter selects the backend: `"rust"` (default, `RustLazyPeekabooDFA`), `"python"` (`PythonLazyPeekabooDFAHelper`), or `"token"` (`TokenPeekabooHelper`, position-set-quotiented for BPE-like FSTs). Carry-forward uses sentinel states (dfa_state=None) that are resolved via source-path replay in the next step. logp agreement with TransducedLM: max |diff| = 0.000287 (PTB), 0.000000 (BPE).
 
 **`ReferenceTransducedLM`** (`lm/reference_transduced.py`) — Ground-truth implementation for validation. Uses the `Precover` decomposition to enumerate the Q and R languages exactly, then sums inner LM probabilities over all source strings. Only terminates when Q and R are finite (finite-relation FSTs). Not suitable for production use — exponential in the size of the Q/R languages.
 

@@ -1,7 +1,7 @@
 # Benchmark Dashboard
 
-**Last updated:** 2026-02-20
-**Test suite:** 938 tests across 15 files
+**Last updated:** 2026-02-21
+**Test suite:** 1191 tests across 16 files (1189 passed, 2 xfailed)
 
 ---
 
@@ -39,6 +39,12 @@ incremental computation as each new target symbol arrives.
 4. **Fused search** (`FusedTransducedLM`) — interleaves decomposition and LM
    beam search in a single priority queue, avoiding materializing Q/R as
    explicit FSAs.
+5. **Token-level decomposition** — for BPE-like hub-topology FSTs, DFA states
+   collapse to position sets {0..N}, yielding O(N) states instead of
+   O(|FST|×N). Includes `TokenPeekabooHelper` for `FusedTransducedLM`.
+6. **Lazy precover DFA** — on-demand DFA construction with integer packing,
+   hash-consing, and epsilon-closure caching. Python port achieves Rust-level
+   performance without the Rust dependency.
 
 ---
 
@@ -76,7 +82,19 @@ The core algorithms work on toy inputs. `TransducedLM` and
 test sentence with a trivial LM, producing correct logp values (max
 disagreement 0.000287 nats). FusedTransducedLM is 2x faster on PTB (66 vs 129
 ms/step). The algorithmic foundation — Peekaboo decomposition, dirty-state
-persistence, Rust acceleration — is well-tested (1037 unit tests).
+persistence, Rust acceleration — is well-tested (1191 unit tests across 16
+files).
+
+Recent additions significantly expand the optimization toolkit:
+- **Lazy precover DFA** (Python + Rust): on-demand DFA construction with
+  integer packing, hash-consing, and epsilon-closure caching
+- **Token-level decomposition** (Python + Rust): position-set DFA states yield
+  O(N) states for BPE-like FSTs, with `TokenPeekabooHelper` as a pluggable
+  `FusedTransducedLM` backend
+- **TrieDispatchDFADecomp**: trie-based dispatch for decomposition
+- **Bug fix (#9)**: PeekabooState now correctly computes Q/R on BPE-style
+  epsilon-output chains (all depths' start states collected during backward
+  reachability)
 
 **However:** the toy BPE benchmark is meaningless as a proxy for real-world
 performance because the FST is ~1,000x smaller than production. The 1,000-token
@@ -105,11 +123,23 @@ multiple `lm_state >> x` expansions into a single GPU forward pass is the
 most impactful optimization for production use, and we haven't started it.
 
 **FusedTransducedLM is the quiet winner.** It's already 2x faster than
-TransducedLM on PTB with zero correctness issues (post-fix). It doesn't need
-position-set compression or any new Rust code — it just interleaves
-decomposition and LM search more efficiently. If batched LM calls are added,
-Fused's architecture (single priority queue) may be easier to batch than
-TransducedLM's two-phase approach.
+TransducedLM on PTB with zero correctness issues (post-fix). The new
+`helper=` parameter enables pluggable backends — `"rust"` (default),
+`"python"`, or `"token"` (position-set-quotiented). If batched LM calls are
+added, Fused's architecture (single priority queue) may be easier to batch
+than TransducedLM's two-phase approach.
+
+**Token-level decomposition is the scaling play.** For BPE-like FSTs, DFA
+states collapse from O(|FST|×N) to O(N) positions. The `TokenPeekabooHelper`
+is already wired into `FusedTransducedLM` via `helper="token"`. This
+drastically reduces the state space as vocabulary size grows — potentially the
+key to making full-GPT-2 BPE tractable. However, this optimization only
+applies to FSTs with hub topology (like BPE); PTB doesn't benefit.
+
+**Lazy precover DFA closes the Python/Rust gap.** The Python
+`LazyPrecoverDFA` with integer packing and hash-consing approaches Rust
+performance without requiring the Rust toolchain. This matters for
+portability and for users who can't build the Rust extension.
 
 ### How close we are to first-round goals
 
@@ -127,12 +157,13 @@ runs at interactive speed."
   optimization. This is the actual Phase 1 deliverable and we haven't
   measured it yet.
 
-**Honest bottom line:** We have a well-tested decomposition layer that works on
-toy inputs. We have no evidence it scales to production. The LM layer (which
-will dominate wall-clock time with real models) hasn't been optimized at all.
-The next steps are: (1) build and benchmark a full-vocabulary BPE FST, (2)
-profile TransducedLM with GPT-2 to measure the actual LM/decomp split, (3)
-batch LM calls.
+**Honest bottom line:** We have a well-tested decomposition layer (1191 tests)
+that works on toy inputs with several promising scaling optimizations (token
+decomposition, lazy DFA, trie dispatch). We have no evidence it scales to
+production. The LM layer (which will dominate wall-clock time with real models)
+hasn't been optimized at all. The next steps are: (1) build and benchmark a
+full-vocabulary BPE FST with `TokenPeekabooHelper`, (2) profile TransducedLM
+with GPT-2 to measure the actual LM/decomp split, (3) batch LM calls.
 
 ---
 
@@ -499,6 +530,11 @@ TransducedLM and FusedTransducedLM agree perfectly on BPE after the fix.
    O(|B|) pynini compositions per step; C++ blocks SIGALRM. Works on
    BPE (|B|=34) but infeasible on PTB (|B|=255).
 
+5. **PeekabooState Q/R bug on epsilon-output chains — FIXED (#9).**
+   Backward reachability filtering now collects start states from all
+   depths in the parent chain, not just the root. Fixes incorrect Q/R
+   on BPE-style FSTs where early depths have only truncated states.
+
 ---
 
 ## Regenerating Plots
@@ -523,6 +559,14 @@ PYTHONUNBUFFERED=1 python reports/run_benchmarks.py
 
 | Date | Change |
 |------|--------|
+| 2026-02-21 | Refresh all reports and dashboard; update test counts (938 → 1191), LOC, module lists |
+| 2026-02-21 | Add lazy precover DFA (Python + Rust): integer packing, hash-consing, eps-closure caching |
+| 2026-02-21 | Add token-level decomposition (Python + Rust): position-set DFA states, TokenPeekabooHelper |
+| 2026-02-21 | Add FusedTransducedLM `helper=` parameter for pluggable decomposition backends |
+| 2026-02-21 | Fix PeekabooState incorrect Q/R on BPE-style epsilon-output chains (#9) |
+| 2026-02-21 | Move benchmarks from `benchmark/` to `notes/` |
+| 2026-02-21 | Add TrieDispatchDFADecomp (trie-based decomposition dispatch) |
+| 2026-02-21 | Add 9 new parametrized test cases (eps chains, cycles, multichar output, OOV symbols) |
 | 2026-02-21 | Add BPE scaling experiment (VOCAB_SIZE=1000) results and scaling plots |
 | 2026-02-20 | Add scale limitations section and per-table/figure context warnings |
 | 2026-02-20 | Remove position-set peekaboo code (not pulling its weight; see TODO.md) |

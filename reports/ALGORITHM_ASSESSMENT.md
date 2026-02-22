@@ -52,6 +52,17 @@ These use OpenFST/pynini WFST operations for composition-based P(y)/Q(y)/R(y).
 | `pynini_ops` | Python | `pynini_ops.py` | Precover, quotient, remainder via pynini composition/projection |
 | `PyniniTransducedLM` | Python | `lm/pynini_transduced.py` | Pynini-backed transduced LM with particle inference |
 
+### Token-Level and Lazy Decomposition
+
+These optimize decomposition for specific FST topologies or via on-demand construction.
+
+| Algorithm | Language | File | Notes |
+|-----------|----------|------|-------|
+| `LazyPrecoverDFA` | Python+Rust | `lazy_precover_dfa.py`, `lazy_precover.rs` | On-demand DFA with integer packing, hash-consing, eps-closure caching |
+| `TokenDecompose` | Python+Rust | `token_decompose.py`, `token_decompose.rs` | Position-set DFA states O(N) for BPE-like FSTs |
+| `TokenPeekabooHelper` | Python+Rust | `token_decompose.py`, `token_peekaboo.rs` | FusedTransducedLM backend via `helper="token"` |
+| `TrieDispatchDFADecomp` | Python | `trie_dispatch.py` | Trie-based dispatch for decomposition |
+
 ### Finite-Only Decomposition Algorithms
 
 These algorithms lack target-buffer truncation and may diverge on FSTs with infinite
@@ -82,7 +93,8 @@ quotients. Tested separately in `test_finite.py`.
 | `TransducedLM` | `lm/transduced.py` | Pushforward of an inner LM through an FST (beam-sum inference; defaults to Rust backend) |
 | `FusedTransducedLM` | `lm/fused_transduced.py` | Single-pass interleaved decomposition + LM search |
 | `RustPeekabooState` | `rust_bridge.py` | Rust-backed incremental peekaboo state (default for TransducedLM) |
-| `RustLazyPeekabooDFA` | `rust_bridge.py` | Rust-backed lazy DFA interface for TransducedLM beam search |
+| `RustLazyPeekabooDFA` | `rust_bridge.py` | Rust-backed lazy DFA interface for FusedTransducedLM beam search |
+| `TokenPeekabooHelper` | `token_decompose.py` | Position-set-quotiented backend for FusedTransducedLM (`helper="token"`) |
 | `ReferenceTransducedLM` | `lm/reference_transduced.py` | Ground-truth transduced LM via Precover (finite-relation FSTs only) |
 | `PyniniTransducedLM` | `lm/pynini_transduced.py` | Pynini-backed transduced LM with particle-based inference |
 
@@ -150,9 +162,10 @@ print(state.logp_next['e'])  # log P(next='e' | target='h')
 169 ms/step average (45 steps, K=20, max_expansions=200, CharNgramLM).
 
 **`FusedTransducedLM`** interleaves decomposition and LM search in a single pass
-(2.4x faster than `TransducedLM` on PTB at 71 ms/step), but has a known logp
-disagreement (max |diff| = 2.03 on PTB) that needs investigation before
-production use.
+(2.0x faster than `TransducedLM` on PTB at 66 ms/step) with excellent logp
+agreement (max |diff| = 0.000287). The `helper=` parameter enables pluggable
+backends: `"rust"` (default), `"python"`, or `"token"` (position-set-quotiented
+for BPE-like FSTs).
 
 **`ReferenceTransducedLM`** computes exact transduced probabilities by enumerating
 Q/R languages via Precover. Only works on finite-relation FSTs. Used for
@@ -180,14 +193,28 @@ For **pynini-backed reference** (41x on BPE vs Python), use `PyniniNonrecursiveD
 truncation and may diverge on FSTs with infinite quotients. They are retained for finite-language
 FSTs.
 
+### Resolved Questions
+
+1. ~~**FusedTransducedLM logp disagreement**~~ — **FIXED.** Max |logp| diff
+   reduced from 2.03 to 0.000287 (floating-point noise). Both PTB and BPE
+   show excellent agreement between FusedTransducedLM and TransducedLM.
+
+2. ~~**BPE TransducedLM benchmark**~~ — **DONE.** All variants benchmarked on
+   43-token toy FST and 1,000-token scaling run. FusedTransducedLM is 6.8x
+   faster at 1k vocab.
+
 ### Open Questions
 
-1. **FusedTransducedLM logp disagreement**: Max |logp| diff of 2.03 on PTB vs
-   TransducedLM. Need `ReferenceTransducedLM` ground-truth comparison (requires
-   finite-relation test FST) to determine which is more accurate.
+1. **Full-scale BPE feasibility**: Will `TokenPeekabooHelper` (O(N) position-set
+   DFA states) make full GPT-2 BPE (50,257 tokens) tractable? The position-set
+   compression is the key scaling hypothesis but hasn't been tested beyond 1k
+   tokens.
 
-2. **BPE TransducedLM benchmark**: The BPE notebook cells have no saved outputs.
-   Unknown whether BPE behaves differently from PTB at the LM integration layer.
+2. **Real LM profiling**: What is the decomposition vs LM-forward-pass cost
+   split with a real neural LM? All benchmarks use CharNgramLM (O(1) per call).
+
+3. **Batched LM inference**: How much speedup can batched `lm_state >> x`
+   calls provide on GPU? This is the single most impactful unstarted optimization.
 
 ---
 
@@ -231,11 +258,15 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 
 6. **UniversalityFilter cascade** — AUI fast path $\to$ witness check $\to$ monotonicity caches $\to$ BFS fallback.
 
+7. **Token-level decomposition** — For BPE-like hub-topology FSTs, DFA states collapse to position sets {0..N}, yielding O(N) states instead of O(|FST|×N). Combined with `TokenPeekabooHelper`, this is the key scaling hypothesis for full-vocabulary BPE.
+
+8. **Lazy precover DFA** — On-demand DFA construction with integer packing (`fst_state * stride + buf_pos` → single int), hash-consing (PowersetArena), and productivity-filtered epsilon-closure caching. Python implementation approaches Rust-level performance.
+
 ---
 
 ## Test Status
 
-- **`test_general.py`**: 380 passed
+- **`test_general.py`**: 470 passed (10 implementations × 47 test cases)
 - **`test_finite.py`**: 119 passed
 - **`test_pynini_ops.py`**: 115 passed
 - **`test_transduced.py`**: 106 passed
@@ -244,13 +275,14 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 - **`test_enumeration.py`**: 55 passed
 - **`test_push_labels.py`**: 35 passed
 - **`test_fsa.py`**: 28 passed
+- **`test_lazy_precover_dfa.py`**: 26 passed
 - **`test_is_functional.py`**: 26 passed
 - **`test_lazy_peekaboo_dfa.py`**: 23 passed
 - **`test_ngram.py`**: 22 passed
 - **`test_ptb_nltk.py`**: 4 passed
 - **`test_make_total.py`**: 3 passed
 - **`test_statelm_kv_cache.py`**: 3 passed
-- **Total**: 938 tests across 15 test files
+- **Total**: 1191 tests across 16 files (1189 passed, 2 xfailed)
 
 ---
 
