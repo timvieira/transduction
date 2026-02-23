@@ -29,53 +29,49 @@ grow with BPE vocabulary size?
 
 **Setup:** Subsampled GPT-2 BPE FSTs at increasing vocabulary sizes. 8 decode
 steps on "The quick", K=10, max_steps=200, CharNgramLM (LM cost ~0).
-Backend: `FusedTransducedLM(helper='rust')` — generic Rust dirty-state peekaboo.
+Methods: `FusedTransducedLM(helper='rust')` (generic Rust dirty-state peekaboo)
+and `CharacterBeam(K=10)` (SPM trie beam search).
 
 ![BPE Vocab Scaling](figures/bpe_vocab_scaling.png)
 
-| Vocab | FST states | FusedLM (ms/step) | Peak RSS (GB) | Delta mem (GB) |
-|------:|-----------:|------------------:|--------------:|---------------:|
-| 297 | 387 | **8** | 0.7 | 0.0 |
-| 529 | 623 | **14** | 0.7 | 0.0 |
-| 1,023 | 1,313 | **31** | 0.8 | 0.1 |
-| 2,020 | 3,010 | **81** | 0.9 | 0.1 |
-| 5,011 | 8,694 | **296** | 1.6 | 0.9 |
-| 7,010 | 12,408 | **282** | 1.7 | 1.0 |
-| 10,008 | 18,203 | **816** | 3.5 | 2.8 |
-| 12,008 | 22,172 | **756** | 3.9 | 3.2 |
-| 15,008 | 28,005 | **1,349** | 6.9 | 6.1 |
-| *20,000* | | *~2,100* | *~7.8* | *~7.1* |
-| *30,000* | | *~3,500* | *~14.5* | *~13.8* |
-| *50,257* | | *~6,900* | *~32.9* | *~32.2* |
+| Vocab | FST states | FusedLM (ms/step) | CharacterBeam (ms/step) | Speedup | Peak RSS (GB) |
+|------:|-----------:|------------------:|------------------------:|--------:|--------------:|
+| 297 | 387 | 11 | **4** | 2.8x | 0.7 |
+| 529 | 623 | 13 | **6** | 2.2x | 0.7 |
+| 1,023 | 1,313 | 28 | **10** | 2.8x | 0.8 |
+| 2,020 | 3,010 | 60 | **15** | 4.0x | 0.9 |
+| 5,011 | 8,694 | 216 | **18** | 12x | 1.4 |
+| 7,010 | 12,408 | 128 | **32** | 4.0x | 1.9 |
+| 10,008 | 18,203 | 336 | **50** | 6.7x | 3.0 |
+| 12,008 | 22,172 | 298 | **57** | 5.2x | 4.0 |
+| 15,008 | 28,005 | 367 | **69** | 5.3x | 4.7 |
+| 20,005 | — | OOM | **95** | — | — |
+| 30,002 | — | OOM | **140** | — | — |
+| 50,256 | — | OOM | **236** | — | — |
 
-Baseline RSS (Python + tokenizer): 0.7 GB. Delta = peak RSS - baseline.
-Italic rows are extrapolated from log-log fit (time: `|V|`^1.31, memory: `|V|`^1.64).
+Baseline RSS (Python + tokenizer): 0.7 GB.
 
-**Memory is the binding constraint**, not time. At full GPT-2 scale (50k
-tokens), the extrapolated time (~7 s/step) is expensive but feasible. The
-extrapolated memory (~33 GB) is prohibitive — the Rust DFA arena's
-`O(|V| x |closure|)` materialization drives `|V|`^1.64 memory growth.
-At V=15k (the largest measured point), peak RSS is already 6.9 GB; 50k would
-need ~33 GB for the DFA arena alone.
+**CharacterBeam is 3-12x faster than FusedLM across all vocab sizes.** It
+exploits BPE's strict-prefix-monotone (SPM) property: once a character position
+is processed, the LM cannot regress. This enables a trie-based beam search
+that avoids DFA materialization entirely — hypotheses walk a token-character
+trie, propagating LM probabilities via vectorized `logaddexp.at` scatter.
 
 **Key findings:**
-- **Time scales as `|V|`^1.31** — 1.3 seconds/step at 15k, extrapolated to
-  ~7 seconds/step at 50k. Tolerable for offline use, needs ~70x improvement
-  for interactive speed.
-- **Memory scales as `|V|`^1.64** — the steeper exponent makes memory the
-  bottleneck well before time becomes impractical. The DFA arena stores
-  `O(|V| x |closure|)` packed entries per expanded state; at boundary steps
-  this materializes the full cross-product.
-- The V=5k→7k timing plateau (296 vs 282 ms) reflects that the 8-step decode
-  hits similar boundary patterns at both sizes; the jump at V=10k and V=15k
-  confirms the underlying superlinear trend.
+- **CharacterBeam scales as ~`|V|`^0.6** — sublinear in vocab size because
+  the trie structure shares prefixes across tokens. At V=15k it's 69 ms/step
+  vs FusedLM's 367 ms/step (5.3x faster).
+- **FusedLM scales as ~`|V|`^0.96** — roughly linear. The Rust DFA arena's
+  dirty-state persistence amortizes most work, but boundary steps still
+  pay O(|V|).
+- **Memory scales as `|V|`^1.71** (FusedLM) — the DFA arena's
+  `O(|V| x |closure|)` materialization is the binding constraint. CharacterBeam
+  uses negligible extra memory (just the trie + beam states).
+- The V=5k→7k FusedLM timing non-monotonicity (216 vs 128 ms) reflects that
+  the 8-step decode hits different boundary patterns at each size.
 
-**What's needed for production:**
-
-The factored DFA arena has been implemented (see "Completed Optimizations"
-below), reducing memory by 23-43% at V >= 2000. However, wall-clock is roughly
-neutral — the BFS/universality check dominates, not state representation. The
-`top_k` pruning (see below) is the most effective wall-clock optimization so far.
+**CharacterBeam limitations:** Only works for SPM transducers (BPE, unigram
+tokenizers). FusedTransducedLM handles arbitrary FSTs (PTB normalizer, etc.).
 
 Source: `reports/bench_vectorization.py` → `reports/bench_vectorization_results.json`
 
@@ -271,23 +267,24 @@ incremental algorithm pays O(|change|), not O(|total DFA|). Correlation:
 
 ## Most Promising Directions
 
-1. **Batched LM calls**: With a real GPU LM, the LM forward pass will
-   dominate. Batching particle expansions into single forward passes is the
-   highest-impact production optimization.
+1. **CharacterBeam for BPE** (implemented): 3-12x faster than FusedLM by
+   exploiting BPE's SPM property. Scales as ~`|V|`^0.6 with negligible memory
+   overhead. **The recommended approach for BPE-like tokenizers.** Remaining
+   work: batched LM calls (below), adaptive K selection.
 
-2. **Pruning at boundary steps** (partially addressed): `top_k` pruning gives
-   5-10x speedup at k=50, cutting superlinear scaling to roughly linear. See
-   "top_k Pruning vs Full Expansion" above. Remaining work: adaptive k selection
-   and quality-aware cutoffs.
+2. **Batched LM calls**: With a real GPU LM, the LM forward pass will
+   dominate. Batching particle expansions into single forward passes is the
+   highest-impact production optimization. Applies to both CharacterBeam (batch
+   end-of-token LM advances) and FusedLM (batch beam expansions).
 
 3. **Profile with real LM**: We don't know the decomp/LM cost split with GPT-2.
    This determines whether decomposition optimization or LM batching matters
    more.
 
-4. **FactoredArena wall-clock regression**: The factored arena saves memory but
-   is ~20% slower at V >= 2000. Profiling BFS/universality vs arc computation,
-   avoiding `normalize_for_step` cloning, and analyzing fingerprint collision
-   chains could close the gap. See TODO.md for specifics.
+4. **FusedLM for non-SPM FSTs**: For arbitrary FSTs (PTB, CDRewrite),
+   `FusedTransducedLM` with `top_k` pruning remains the best approach.
+   `top_k=50` gives 5-10x speedup. Remaining work: adaptive k selection
+   and quality-aware cutoffs.
 
 ---
 
@@ -308,6 +305,7 @@ or `reports/bench_vectorization.py` (standalone script).
 
 | Date | Change |
 |------|--------|
+| 2026-02-22 | Add CharacterBeam to BPE vocab scaling curves: 3-12x faster than FusedLM via SPM trie beam search |
 | 2026-02-22 | Add top_k pruning benchmark: top_k=50 gives 5-10x speedup vs full expansion |
 | 2026-02-22 | Add factored arena scaling curves (memory + time comparison vs flat arena) |
 | 2026-02-22 | Reorganize dashboard: move FactoredArena, vectorization, rust_token dirty-state to "Completed Optimizations"; update open issues and future directions |

@@ -112,10 +112,17 @@ ax1.set_ylim(3, 50000)
 
 # Right panel: memory (delta above baseline)
 ax2.plot(vs_ok, delta_mb, 's-', color=C_FUSED_MEM, linewidth=2.5,
-         markersize=8, label='Measured (peak RSS - baseline)', zorder=5)
+         markersize=8, label='FusedLM (peak RSS - baseline)', zorder=5)
 if len(extrap_vs) > 0:
     ax2.plot(extrap_vs, extrap_dm, 'x--', color=C_EXTRAPOLATE, linewidth=1.5,
              markersize=10, label=f'Extrapolation (|V|$^{{{mem_slope:.2f}}}$)', zorder=2)
+
+# CharacterBeam memory (tracemalloc peak allocation)
+cb_mem_vs = [r['vocab_size'] for r in rows if r.get('CharacterBeam_peak_mb') is not None]
+cb_mem_mb = [r['CharacterBeam_peak_mb'] for r in rows if r.get('CharacterBeam_peak_mb') is not None]
+if cb_mem_vs:
+    ax2.plot(cb_mem_vs, cb_mem_mb, 'D-', color=C_CHARBEAM, linewidth=2,
+             markersize=7, label='CharacterBeam (tracemalloc)', zorder=5)
 mem_limit_mb = bench_data['config']['memory_limit_gb'] * 1024
 ax2.axhline(mem_limit_mb - baseline_rss, color='orange', linestyle=':', alpha=0.6, linewidth=1.5)
 ax2.text(250, (mem_limit_mb - baseline_rss) * 1.1,
