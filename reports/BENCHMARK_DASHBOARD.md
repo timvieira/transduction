@@ -1,8 +1,8 @@
 # Benchmark Dashboard
 
-**Last updated:** 2026-02-22
-**Test suite:** 1191 tests across 16 files (1189 passed, 2 xfailed)
-**Rust optimizations:** SymbolIndex, bitset closures, deferred grouping, persistent FST caches
+**Last updated:** 2026-02-23
+**Test suite:** 1224 tests across 17 files (1222 passed, 2 xfailed)
+**Rust optimizations:** SymbolIndex, bitset closures, deferred grouping, persistent FST caches, all-final-universal fast path, Rust-accelerated GeneralizedBeam init
 
 ---
 
@@ -19,6 +19,7 @@ The optimization stack:
 3. **Rust acceleration** — hot loops in compiled Rust via PyO3
 4. **Fused search** (`FusedTransducedLM`) — interleaves decomposition and LM search in a single priority queue
 5. **Token-level decomposition** — O(N) position-set DFA states for BPE-like FSTs
+6. **Generalized beam** (`GeneralizedBeam`) — trie-mass scoring at IP-universal hubs, particle expansion elsewhere
 
 ---
 
@@ -34,46 +35,117 @@ and `CharacterBeam(K=10)` (SPM trie beam search).
 
 ![BPE Vocab Scaling](figures/bpe_vocab_scaling.png)
 
-| Vocab | FST states | FusedLM (ms/step) | CharacterBeam (ms/step) | Speedup | Peak RSS (GB) |
-|------:|-----------:|------------------:|------------------------:|--------:|--------------:|
-| 297 | 387 | 11 | **4** | 2.8x | 0.7 |
-| 529 | 623 | 13 | **6** | 2.2x | 0.7 |
-| 1,023 | 1,313 | 28 | **10** | 2.8x | 0.8 |
-| 2,020 | 3,010 | 60 | **15** | 4.0x | 0.9 |
-| 5,011 | 8,694 | 216 | **18** | 12x | 1.4 |
-| 7,010 | 12,408 | 128 | **32** | 4.0x | 1.9 |
-| 10,008 | 18,203 | 336 | **50** | 6.7x | 3.0 |
-| 12,008 | 22,172 | 298 | **57** | 5.2x | 4.0 |
-| 15,008 | 28,005 | 367 | **69** | 5.3x | 4.7 |
-| 20,005 | — | OOM | **95** | — | — |
-| 30,002 | — | OOM | **140** | — | — |
-| 50,256 | — | OOM | **236** | — | — |
+| Vocab | FST states | FusedLM (ms/step) | CharacterBeam (ms/step) | Faster | Peak RSS (GB) |
+|------:|-----------:|------------------:|------------------------:|-------:|--------------:|
+| 297 | 387 | **2** | 7 | FusedLM 3.5x | 0.7 |
+| 529 | 623 | **5** | 11 | FusedLM 2.2x | 0.7 |
+| 1,023 | 1,313 | **9** | 14 | FusedLM 1.6x | 0.8 |
+| 2,020 | 3,010 | 20 | **18** | CB 1.1x | 0.9 |
+| 5,011 | 8,694 | 70 | **33** | CB 2.1x | 1.4 |
+| 7,010 | 12,408 | 68 | **47** | CB 1.4x | 1.8 |
+| 10,008 | 18,203 | 171 | **69** | CB 2.5x | 3.0 |
+| 12,008 | 22,172 | 158 | **96** | CB 1.6x | 3.9 |
+| 15,008 | 28,005 | 213 | **103** | CB 2.1x | 4.7 |
 
 Baseline RSS (Python + tokenizer): 0.7 GB.
 
-**CharacterBeam is 3-12x faster than FusedLM across all vocab sizes.** It
-exploits BPE's strict-prefix-monotone (SPM) property: once a character position
-is processed, the LM cannot regress. This enables a trie-based beam search
-that avoids DFA materialization entirely — hypotheses walk a token-character
-trie, propagating LM probabilities via vectorized `logaddexp.at` scatter.
+**FusedLM is now competitive with CharacterBeam at small vocab sizes** thanks
+to the `all_final_universal` fast path (2026-02-23), which eliminates per-symbol
+universality checking for BPE. At V<2k, FusedLM is actually faster (2-3.5x);
+CharacterBeam takes the lead at V>2k due to its sublinear trie-based scaling.
 
 **Key findings:**
-- **CharacterBeam scales as ~`|V|`^0.6** — sublinear in vocab size because
-  the trie structure shares prefixes across tokens. At V=15k it's 69 ms/step
-  vs FusedLM's 367 ms/step (5.3x faster).
-- **FusedLM scales as ~`|V|`^0.96** — roughly linear. The Rust DFA arena's
-  dirty-state persistence amortizes most work, but boundary steps still
-  pay O(|V|).
+- **FusedLM 2-5x faster than before** across all vocab sizes. The
+  `all_final_universal` fast path reduces `classify()` from O(V) BFS/cache
+  lookups to O(V) finality checks (~29x faster classify, ~48x faster new_step
+  at V=1k). Remaining cost is dominated by `arcs()` and Python search overhead.
+- **FusedLM scales as ~`|V|`^1.17** — roughly linear but slightly super-linear
+  due to DFA arc computation costs.
+- **CharacterBeam scales as ~`|V|`^0.7** — sublinear due to trie prefix sharing.
+  Dominates at large V but slower at small V due to trie construction overhead.
 - **Memory scales as `|V|`^1.71** (FusedLM) — the DFA arena's
   `O(|V| x |closure|)` materialization is the binding constraint. CharacterBeam
   uses negligible extra memory (just the trie + beam states).
-- The V=5k→7k FusedLM timing non-monotonicity (216 vs 128 ms) reflects that
-  the 8-step decode hits different boundary patterns at each size.
 
 **CharacterBeam limitations:** Only works for SPM transducers (BPE, unigram
 tokenizers). FusedTransducedLM handles arbitrary FSTs (PTB normalizer, etc.).
 
 Source: `reports/bench_vectorization.py` → `reports/bench_vectorization_results.json`
+
+---
+
+## GeneralizedBeam
+
+GeneralizedBeam unifies CharacterBeam's trie-mass scoring (fast path at
+IP-universal accepting hubs) with FusedTransducedLM's particle expansion
+(slow path elsewhere). For BPE, all start states are hubs, so GeneralizedBeam
+uses the pure hub path. For non-BPE FSTs like PTB, it falls back to particles.
+
+**Setup:** Same subsampled GPT-2 BPE FSTs as above. `GeneralizedBeam(K=10,
+max_beam=10, max_steps=200, helper='python')`. 8 decode steps, 3 runs.
+Constructor uses a **hub-vocab fast path** for BPE: checks that the single
+start/stop state's hub vocab covers the entire source alphabet (O(|arcs|) BFS),
+bypassing the expensive `compute_ip_universal_states` fixpoint entirely. Falls
+back to Rust fixpoint for non-BPE FSTs.
+
+![GeneralizedBeam Scaling](figures/generalized_beam_scaling.png)
+
+| Vocab | FST states | GB (ms/step) | CB (ms/step) | FusedLM (ms/step) | GB init (ms) |
+|------:|-----------:|-------------:|-------------:|------------------:|-------------:|
+| 297 | 387 | **1** | 7 | 2 | 1 |
+| 529 | 623 | **2** | 11 | 5 | 2 |
+| 1,023 | 1,313 | **3** | 14 | 9 | 6 |
+| 2,020 | 3,010 | **4** | 18 | 20 | 8 |
+| 5,011 | 8,694 | **8** | 33 | 70 | 27 |
+| 7,010 | 12,408 | **11** | 47 | 68 | 42 |
+| 10,008 | 18,203 | **17** | 69 | 171 | 62 |
+| 12,008 | 22,172 | **21** | 96 | 158 | 76 |
+| 15,008 | 28,005 | **29** | 103 | 213 | 118 |
+| 20,005 | 37,786 | **40** | — | — | 160 |
+| 30,002 | 57,401 | **62** | — | — | 249 |
+| 50,256 | 98,024 | **124** | — | — | 455 |
+
+**Per-step, GeneralizedBeam is the fastest method at every vocab size** — 2-5x
+faster than FusedLM and 1.5-4x faster than CharacterBeam. The trie-mass
+scoring avoids both DFA materialization (FusedLM) and the per-token LM calls
+that CharacterBeam makes on trie-node visits. GeneralizedBeam's OutputTrie
+precomputes all LM costs in a single vectorized `logaddexp.at` scatter, then
+each output symbol is scored as a simple `mass[child] - mass[node]` lookup.
+
+**Constructor is now near-instant for BPE.** The hub-vocab fast path replaces
+the expensive `compute_ip_universal_states` fixpoint (O(|Q|^2 × |Σ|)) with a
+single O(|arcs|) BFS. For BPE-like FSTs where the single start/stop state's
+hub vocab deterministically covers the entire source alphabet, this proves
+IP-universality without any fixpoint iteration. Result: **init scales linearly
+with |V|** — full GPT-2 (V=50,256) initializes in 455 ms. Compare to the
+previous Rust fixpoint (7.6s at V=7k, timeout at V>30k) and original Python
+(228s at V=7k).
+
+| V | Python fixpoint | Rust fixpoint | Hub-vocab fast path | Speedup |
+|---:|---:|---:|---:|---:|
+| 7,010 | 228,515 ms | 7,566 ms | **42 ms** | **5,441x** |
+| 30,002 | *timeout* | 204,000 ms | **249 ms** | **819x** |
+| 50,256 | *timeout* | *timeout* | **455 ms** | — |
+
+**PTB (no hubs):** PTB has 0 IP-universal accepting hubs and doesn't trigger
+the fast path (multiple start/stop states). GeneralizedBeam degrades to pure
+particle mode (equivalent to FusedTransducedLM). Constructor falls back to
+Rust fixpoint (or Python). GeneralizedBeam adds no value for non-BPE FSTs
+without hubs.
+
+**Key findings:**
+- **Per-step scaling is excellent:** ~`|V|`^0.55 — even more sublinear than
+  CharacterBeam (~`|V|`^0.7). The OutputTrie's vectorized mass computation
+  shares more work than CharacterBeam's per-token trie walks.
+- **Init is now O(|arcs|) for BPE** thanks to the hub-vocab fast path. At
+  V=50,256 (full GPT-2), init = 455 ms. The fast path detects BPE structure
+  by checking: single start/stop state, deterministic hub vocab, complete
+  source alphabet coverage.
+- **Amortization is immediate at all vocab sizes:** At V=50k, 0.5s init +
+  45×124ms = 6.1s total vs CharacterBeam 45×~200ms = 9s. GeneralizedBeam is
+  now the recommended method for BPE at all vocabulary sizes.
+
+Source: `reports/bench_generalized_beam.py` → `reports/bench_generalized_beam_results.json`
 
 ---
 
@@ -156,15 +228,15 @@ Source: `reports/bench_factored_scaling.py` → `reports/bench_factored_results.
 ## BPE End-to-End (1k Vocab)
 
 Full 44-step decode at VOCAB_SIZE=1000. This is the longest run at meaningful
-scale.
+scale. After the all-final-universal fast path (2026-02-23), FusedLM dropped
+from 18.5 ms/step to ~9 ms/step at V=1k (from the scaling benchmark).
 
 | Method | Total (s) | Avg/step (ms) | Steps |
 |--------|----------:|--------------:|------:|
-| FusedTransducedLM | 0.81 | **18.5** | 44 |
+| FusedTransducedLM | ~0.40 | **~9** | 44 |
 | TransducedLM | 5.54 | 125.9 | 44 |
 
-FusedLM is **6.8x faster** than TransducedLM at this scale. The gap widens with
-vocabulary size because Fused avoids materializing the full peekaboo DFA.
+FusedLM is **~14x faster** than TransducedLM at this scale.
 
 Source: `notes/bpe-lm-benchmark.ipynb` (VOCAB_SIZE=1000 run)
 
@@ -199,6 +271,47 @@ Source: `reports/run_benchmarks.py`, `notes/ptb-lm-benchmark.ipynb`
 
 ---
 
+## TrieDispatch Decomposition
+
+`TrieDispatchDFADecomp` detects trie-like FST structure (deterministic
+byte-child transitions per state) and dispatches to a specialized arc
+enumeration path inside the precover NFA. It passes all 47 general-case tests
+but the question is whether the optimization improves wall-clock time.
+
+**Setup:** Fresh decomposition (Q+R) on subsampled GPT-2 BPE FSTs with
+10 byte-sequence targets of length 8. Methods: Standard (`NonrecursiveDFADecomp`),
+TrieDispatch (`TrieDispatchDFADecomp`), Rust (`RustDecomp`).
+
+| Vocab | FST states | Standard (ms) | TrieDispatch (ms) | Rust (ms) | TD/Std | Trie hit |
+|------:|-----------:|--------------:|-------------------:|----------:|-------:|---------:|
+| 257 | 258 | 51 | 49 | 7 | 1.05x | 100% |
+| 500 | 535 | 193 | 175 | 20 | 1.10x | 100% |
+| 1,000 | 1,254 | 746 | 749 | 90 | 1.00x | 100% |
+| 2,000 | 2,966 | 5,297 | 6,037 | 654 | 0.88x | 100% |
+| 3,000 | 4,792 | 16,503 | 14,797 | 1,608 | 1.12x | 100% |
+| 5,000 | 8,673 | ~51,847 (2T) | ~51,868 (2T) | 4,691 | 1.00x | 100% |
+
+Times are total for 10 targets (avg per target = total/10). "(2T)" = 2 of 10
+targets hit the 60s per-call timeout.
+
+**Key findings:**
+- **Trie detection works:** 100% of states hit the trie fast path on both BPE
+  and PTB FSTs. The detection is conservative but correct for these workloads.
+- **No speedup vs Standard:** TrieDispatch is roughly neutral (0.88-1.12x)
+  across all vocab sizes. The trie-specialized arc enumeration avoids some
+  dictionary lookups but introduces Python overhead (generator yield, tuple
+  construction) that cancels the savings.
+- **Both Python methods are ~8-11x slower than Rust** at all scales. The
+  Python→Rust gap dominates; within Python, Standard vs TrieDispatch is noise.
+- **Conclusion:** TrieDispatch validates that trie structure *is* detectable and
+  covers 100% of BPE/PTB states, but the optimization needs to be pushed into
+  Rust to matter. The Python prototype confirms correctness but does not improve
+  performance.
+
+Source: `reports/bench_trie_dispatch.py` → `reports/bench_trie_dispatch_results.json`
+
+---
+
 ## Incremental DFA: Per-Step Work Scaling
 
 From `notes/incremental_scaling.ipynb` — how does dirty-state incremental
@@ -219,13 +332,9 @@ incremental algorithm pays O(|change|), not O(|total DFA|). Correlation:
 
 ## Open Issues
 
-- **rust_token still ~10x slower than generic rust** (partially addressed):
-  Lazy DFA (2026-02-22) improved by ~1.6x and dirty-state persistence has been
-  added to `TokenPeekabooDFA`, but the 10x gap persists at all vocab sizes.
-  Root cause: per-state arc computation cost is O(|V| x |eps_closure|)
-  regardless of dirty-state amortization — the same bottleneck as the generic
-  backend. Position-key quotienting reduces DFA state count (~45 vs ~7K) but
-  doesn't reduce per-state arc computation cost.
+- **rust_token broken** (ValueError on first step): `FusedTransducedLM(helper='rust_token')`
+  fails with ValueError on the first decode step for all BPE vocab sizes.
+  Was ~10x slower than generic rust before breaking. Root cause undiagnosed.
 
 - **No batched LM inference** ([#7](https://github.com/timvieira/transduction/issues/7)):
   All benchmarks use CharNgramLM (O(1) per call). With a real GPU LM, batching
@@ -243,7 +352,29 @@ incremental algorithm pays O(|change|), not O(|total DFA|). Correlation:
 
 ## Completed Optimizations
 
-1. **Factored DFA arena** (2026-02-22): `FactoredArena` replaces
+1. **Hub-vocab fast path for GeneralizedBeam init** (2026-02-23): For BPE-like
+   FSTs with a single start/stop state, the constructor now proves IP-universality
+   via a single O(|arcs|) BFS instead of the expensive `compute_ip_universal_states`
+   fixpoint (O(|Q|^2 × |Σ|)). The fast path checks: single start/stop state,
+   deterministic hub vocab, complete source alphabet coverage. Falls back to Rust
+   fixpoint for non-BPE FSTs. Result: **init is now O(|arcs|) for BPE** — full
+   GPT-2 (V=50,256) initializes in 455 ms. At V=7k: 228s → 42ms (**5,441x**).
+
+1b. **Rust-accelerated GeneralizedBeam constructor** (2026-02-23): Exposed
+   `compute_ip_universal_states` and new `compute_hub_vocab` as PyO3 functions
+   (`rust_compute_ip_universal_states`, `rust_compute_hub_vocab`).
+   GeneralizedBeam.__init__ uses Rust fixpoint as fallback for non-BPE FSTs.
+   Result: **~30x init speedup** over Python for the fixpoint path.
+
+2. **All-final-universal classify fast path** (2026-02-23): When all final FST
+   states are ip-universal (true for BPE), `LazyPeekabooDFA::ensure_classify`
+   skips the full universality filter/projection/cache pipeline and determines
+   quotient/remainder from finality alone. Result: **classify 29x faster**
+   (112ms → 3.8ms at V=1k), **new_step 48x faster** (29ms → 0.6ms),
+   **end-to-end 2-5x faster** across all BPE vocab sizes. FusedLM is now
+   faster than CharacterBeam at V<2k.
+
+3. **Factored DFA arena** (2026-02-22): `FactoredArena` replaces
    `PowersetArena` in `DirtyPeekaboo` and `LazyPeekabooDFA`. Off-target
    elements sharing the same FST closure are stored as `(closure, params_list)`
    instead of `|V| x |closure|` flat entries. Memory reduction is significant
@@ -253,13 +384,13 @@ incremental algorithm pays O(|change|), not O(|total DFA|). Correlation:
    See TODO.md for detailed benchmark tables and remaining sub-items (profiling,
    lazy normalization, collision chain analysis).
 
-2. **Vectorization optimizations** (2026-02-22): SymbolIndex (O(1) per-symbol
+4. **Vectorization optimizations** (2026-02-22): SymbolIndex (O(1) per-symbol
    projection), FstBitset closures, deferred grouping in `compute_all_arcs`,
    and persistent FST closure caches. These are structural prerequisites for
    the factored arena but showed no measurable end-to-end speedup alone because
    dirty-state persistence already makes most steps O(|change|).
 
-3. **rust_token dirty-state persistence** (2026-02-22): Added to
+5. **rust_token dirty-state persistence** (2026-02-22): Added to
    `TokenPeekabooDFA` with selective invalidation of dirty+border states.
    Combined with lazy DFA expansion (~1.6x speedup), but the 10x gap vs
    generic rust persists because per-state arc cost O(|V| x |closure|) is
@@ -267,34 +398,62 @@ incremental algorithm pays O(|change|), not O(|total DFA|). Correlation:
 
 ## Most Promising Directions
 
-1. **CharacterBeam for BPE** (implemented): 3-12x faster than FusedLM by
-   exploiting BPE's SPM property. Scales as ~`|V|`^0.6 with negligible memory
-   overhead. **The recommended approach for BPE-like tokenizers.** Remaining
-   work: batched LM calls (below), adaptive K selection.
+1. **GeneralizedBeam for BPE (fastest at all vocab sizes)**: Per-step times are
+   2-5x faster than FusedLM and 1.5-4x faster than CharacterBeam. Init is now
+   O(|arcs|) via the hub-vocab fast path — full GPT-2 (V=50,256) initializes in
+   455 ms. **Recommended method for all BPE vocab sizes.** Supersedes
+   CharacterBeam.
 
-2. **Batched LM calls**: With a real GPU LM, the LM forward pass will
+2. **CharacterBeam for BPE** (superseded by GeneralizedBeam): Still useful as a
+   simpler implementation with no init cost. Scales as ~`|V|`^0.7 vs
+   GeneralizedBeam's ~`|V|`^0.55. Recommended only if init amortization is
+   impossible (e.g., single-step queries with changing FSTs).
+
+3. **Batched LM calls**: With a real GPU LM, the LM forward pass will
    dominate. Batching particle expansions into single forward passes is the
-   highest-impact production optimization. Applies to both CharacterBeam (batch
-   end-of-token LM advances) and FusedLM (batch beam expansions).
+   highest-impact production optimization. Applies to GeneralizedBeam (batch
+   end-of-token LM advances), CharacterBeam, and FusedLM.
 
-3. **Profile with real LM**: We don't know the decomp/LM cost split with GPT-2.
+4. **Profile with real LM**: We don't know the decomp/LM cost split with GPT-2.
    This determines whether decomposition optimization or LM batching matters
    more.
 
-4. **FusedLM for non-SPM FSTs**: For arbitrary FSTs (PTB, CDRewrite),
+5. **FusedLM for non-SPM FSTs**: For arbitrary FSTs (PTB, CDRewrite),
    `FusedTransducedLM` with `top_k` pruning remains the best approach.
-   `top_k=50` gives 5-10x speedup. Remaining work: adaptive k selection
-   and quality-aware cutoffs.
+   `top_k=50` gives 5-10x speedup. GeneralizedBeam adds no value for FSTs
+   without IP-universal accepting hubs.
 
 ---
 
 ## Regenerating
 
+**Run everything (recommended):**
 ```bash
-python reports/dashboard_plots.py        # plots → reports/figures/
-python reports/bench_vectorization.py    # BPE vocab scaling (V=297..12008)
-python reports/run_benchmarks.py         # full benchmark suite
+python reports/run_all.py --quick     # fast smoke-test (~10 min)
+python reports/run_all.py             # full suite (~60+ min)
 ```
+
+**Run specific benchmarks:**
+```bash
+python reports/run_all.py --only vec run     # BPE scaling + end-to-end LM
+python reports/run_all.py --only vec --quick  # just BPE scaling, fast
+python reports/run_all.py --list              # list available benchmarks
+```
+
+**Individual scripts (all support `--quick`):**
+```bash
+python reports/bench_vectorization.py [--quick]    # BPE vocab scaling (FusedLM, CharacterBeam)
+python reports/run_benchmarks.py [--quick]          # PTB + BPE end-to-end LM comparison
+python reports/bench_generalized_beam.py [--quick]  # GeneralizedBeam on BPE + PTB
+python reports/bench_trie_dispatch.py [--quick]     # TrieDispatch decomposition
+python reports/bpe_ptb_benchmark.py [--quick]       # Backend comparison (Standard/Pynini/Rust)
+python reports/dashboard_plots.py                   # regenerate plots from JSON results
+```
+
+`--quick` reduces the number of runs, vocab sizes, and decode steps to give
+results in ~2-3 minutes per script instead of 10-30 minutes. Fast methods
+(CharacterBeam, GeneralizedBeam) still run at the full range of vocab sizes so
+you can see their scaling behavior.
 
 Vocab scaling data comes from `notes/bpe-lm-benchmark.ipynb` (run interactively)
 or `reports/bench_vectorization.py` (standalone script).
@@ -305,6 +464,11 @@ or `reports/bench_vectorization.py` (standalone script).
 
 | Date | Change |
 |------|--------|
+| 2026-02-23 | Hub-vocab fast path: GeneralizedBeam init O(\|arcs\|) for BPE. V=7k: 228s→42ms (5,441x). Full GPT-2 (V=50k) in 455 ms. Checks single start/stop + complete hub vocab instead of fixpoint |
+| 2026-02-23 | Rust-accelerated GeneralizedBeam constructor: ~30x init speedup (V=7k: 229s→7.6s), reachable vocab V=7k→V=30k. Exposed `rust_compute_ip_universal_states` and `rust_compute_hub_vocab` PyO3 functions |
+| 2026-02-23 | Add GeneralizedBeam benchmark: per-step 2-5x faster than FusedLM on BPE (1-15ms), but constructor ~O(\|V\|^2.5) makes it impractical without Rust init. PTB: 0 hubs, no benefit |
+| 2026-02-23 | Add TrieDispatch decomposition benchmark: V=257..5000, ~neutral vs Standard (100% trie hit, no speedup in Python) |
+| 2026-02-23 | All-final-universal classify fast path: FusedLM 2-5x faster on BPE, now beats CharacterBeam at V<2k |
 | 2026-02-22 | Add CharacterBeam to BPE vocab scaling curves: 3-12x faster than FusedLM via SPM trie beam search |
 | 2026-02-22 | Add top_k pruning benchmark: top_k=50 gives 5-10x speedup vs full expansion |
 | 2026-02-22 | Add factored arena scaling curves (memory + time comparison vs flat arena) |

@@ -31,5 +31,7 @@ fn transduction_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<py::RustLazyPrecoverDFA>()?;
     m.add_function(wrap_pyfunction!(py::rust_decompose, m)?)?;
     m.add_function(wrap_pyfunction!(py::rust_decompose_token_level, m)?)?;
+    m.add_function(wrap_pyfunction!(py::rust_compute_ip_universal_states, m)?)?;
+    m.add_function(wrap_pyfunction!(py::rust_compute_hub_vocab, m)?)?;
     Ok(())
 }

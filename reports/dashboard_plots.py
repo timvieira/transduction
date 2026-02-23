@@ -315,4 +315,108 @@ else:
     print(f'\n  No factored arena data found at {FACTORED_FILE} — skipping Plot 4')
 
 
+# ── Plot 5: GeneralizedBeam init time — Python / Rust fixpoint / fast path ──
+
+GB_FILE = os.path.join(os.path.dirname(__file__), 'bench_generalized_beam_results.json')
+C_GB_FAST = '#2ECC71'   # green (hub-vocab fast path)
+C_GB_RUST = '#F39C12'   # orange (Rust fixpoint)
+C_GB_OLD = '#E74C3C'    # red (old Python fixpoint)
+C_GB_STEP = '#3498DB'   # blue (per-step)
+
+# Old (Python fixpoint) init times — from the pre-Rust benchmark run
+GB_OLD_PYTHON_INIT = {
+    297: 221, 529: 687, 1023: 3010, 2020: 14956,
+    5011: 118000, 7010: 228515,
+}
+
+# Rust fixpoint init times — from the intermediate Rust-only benchmark run
+GB_RUST_FIXPOINT_INIT = {
+    297: 56, 529: 189, 1023: 749, 2020: 3647,
+    5011: 31518, 7010: 77367,
+}
+
+if os.path.exists(GB_FILE):
+    with open(GB_FILE) as f:
+        gb_data = json.load(f)
+
+    gb_rows = gb_data['bpe_rows']
+    gb_vs = [r['vocab_size'] for r in gb_rows if r.get('GeneralizedBeam_init_ms') is not None]
+    gb_init = [r['GeneralizedBeam_init_ms'] for r in gb_rows if r.get('GeneralizedBeam_init_ms') is not None]
+    gb_step = [r['GeneralizedBeam_avg_ms'] for r in gb_rows if r.get('GeneralizedBeam_avg_ms') is not None]
+
+    old_py_vs = sorted(GB_OLD_PYTHON_INIT.keys())
+    old_py_init = [GB_OLD_PYTHON_INIT[v] for v in old_py_vs]
+
+    rust_fp_vs = sorted(GB_RUST_FIXPOINT_INIT.keys())
+    rust_fp_init = [GB_RUST_FIXPOINT_INIT[v] for v in rust_fp_vs]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
+
+    # Left panel: init time comparison (3 series)
+    ax1.plot(old_py_vs, old_py_init, 's-', color=C_GB_OLD, linewidth=2,
+             markersize=7, label='Python fixpoint', zorder=3)
+    ax1.plot(rust_fp_vs, rust_fp_init, '^-', color=C_GB_RUST, linewidth=2,
+             markersize=7, label='Rust fixpoint', zorder=4)
+    ax1.plot(gb_vs, gb_init, 'o-', color=C_GB_FAST, linewidth=2.5,
+             markersize=8, label='Hub-vocab fast path', zorder=5)
+
+    # Annotate speedup at V=7010
+    if 7010 in GB_OLD_PYTHON_INIT:
+        new_7k = next((r['GeneralizedBeam_init_ms'] for r in gb_rows
+                        if r['vocab_size'] == 7010 and r.get('GeneralizedBeam_init_ms')), None)
+        if new_7k:
+            speedup = GB_OLD_PYTHON_INIT[7010] / new_7k
+            ax1.annotate(f'{speedup:,.0f}x', xy=(7010, new_7k),
+                         xytext=(7010 * 2.5, new_7k * 5),
+                         fontsize=11, fontweight='bold', color=C_GB_FAST,
+                         arrowprops=dict(arrowstyle='->', color=C_GB_FAST, lw=1.5))
+
+    ax1.axvline(50257, color='red', linestyle=':', alpha=0.6, linewidth=1.5)
+    ax1.text(50257, max(old_py_init) * 0.5, 'GPT-2\n50,257', ha='right',
+             fontsize=8, color='red', alpha=0.8)
+    ax1.set_xscale('log')
+    ax1.set_yscale('log')
+    ax1.set_xlabel('Vocabulary size |V|')
+    ax1.set_ylabel('Constructor init time (ms)')
+    ax1.set_title('Init time: 3 implementations')
+    ax1.legend(fontsize=8)
+    ax1.grid(True, alpha=0.3, which='both')
+    ax1.set_xlim(200, 100000)
+
+    # Right panel: per-step time
+    ax2.plot(gb_vs[:len(gb_step)], gb_step, 'D-', color=C_GB_STEP, linewidth=2.5,
+             markersize=8, label='GeneralizedBeam', zorder=5)
+
+    # Add CharacterBeam and FusedLM for comparison if available
+    for key in method_keys:
+        vs_m, ms_m = method_data[key]
+        style = method_styles.get(key, ('o-', C_EXTRAPOLATE, 1.5, 6, key))
+        ax2.plot(vs_m, ms_m, style[0], color=style[1], linewidth=1.5,
+                 markersize=5, label=style[4], alpha=0.7, zorder=3)
+
+    ax2.set_xscale('log')
+    ax2.set_yscale('log')
+    ax2.set_xlabel('Vocabulary size |V|')
+    ax2.set_ylabel('Avg time per step (ms)')
+    ax2.set_title('Per-step time comparison')
+    ax2.legend(fontsize=8)
+    ax2.grid(True, alpha=0.3, which='both')
+    ax2.set_xlim(200, 100000)
+
+    fig.suptitle('GeneralizedBeam: Hub-Vocab Fast Path + Per-Step Scaling',
+                 fontsize=11, y=1.02)
+    fig.tight_layout()
+    save(fig, 'generalized_beam_scaling.png')
+
+    print(f'\n  GeneralizedBeam init speedups (vs Python fixpoint):')
+    for v in old_py_vs:
+        new_ms = next((r['GeneralizedBeam_init_ms'] for r in gb_rows
+                        if r['vocab_size'] == v and r.get('GeneralizedBeam_init_ms')), None)
+        if new_ms:
+            print(f'    V={v:>6d}: {GB_OLD_PYTHON_INIT[v]:>7d} ms -> {new_ms:>7d} ms  ({GB_OLD_PYTHON_INIT[v]/new_ms:,.0f}x)')
+
+else:
+    print(f'\n  No GeneralizedBeam data found at {GB_FILE} — skipping Plot 5')
+
+
 print('\nAll plots generated.')

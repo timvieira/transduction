@@ -227,6 +227,20 @@ pub fn rust_decompose_token_level(py: Python<'_>, fst: &RustFst, target: Vec<u32
     wrap_decomp_result(py, result, minimize)
 }
 
+/// Expose compute_ip_universal_states to Python.
+/// Returns Vec<bool> indexed by state ID.
+#[pyfunction]
+pub fn rust_compute_ip_universal_states(fst: &RustFst) -> Vec<bool> {
+    compute_ip_universal_states(&fst.inner)
+}
+
+/// Expose compute_hub_vocab to Python.
+/// Returns list of (source_sym, output_seq, dest_state) or None.
+#[pyfunction]
+pub fn rust_compute_hub_vocab(fst: &RustFst, hub: u32) -> Option<Vec<(u32, Vec<u32>, u32)>> {
+    crate::fst::compute_hub_vocab(&fst.inner, hub)
+}
+
 // ---------------------------------------------------------------------------
 // Dirty-state incremental decomposition
 // ---------------------------------------------------------------------------
@@ -717,6 +731,7 @@ pub struct RustLazyPeekabooDFA {
     sym_to_idx: rustc_hash::FxHashMap<u32, u16>,
     idx_to_sym: Vec<u32>,
     ip_universal_states: Vec<bool>,
+    all_final_universal: bool,
     num_source_symbols: usize,
     use_factored: bool,
     lazy_dfa: Option<peekaboo::LazyPeekabooDFA>,
@@ -731,7 +746,7 @@ impl RustLazyPeekabooDFA {
         use crate::fst::EPSILON;
 
         // Scope the borrow so `fst` can be moved into the struct afterward
-        let (sym_to_idx, idx_to_sym, ip_universal_states, num_source_symbols) = {
+        let (sym_to_idx, idx_to_sym, ip_universal_states, all_final_universal, num_source_symbols) = {
             let inner = &fst.borrow(py).inner;
 
             let mut output_alphabet: Vec<u32> = Vec::new();
@@ -754,9 +769,12 @@ impl RustLazyPeekabooDFA {
             }
 
             let ip_universal_states = compute_ip_universal_states(inner);
+            let all_final_universal = (0..inner.num_states as usize)
+                .filter(|&q| inner.is_final[q])
+                .all(|q| ip_universal_states[q]);
             let num_source_symbols = inner.source_alphabet.len();
 
-            (sym_to_idx, idx_to_sym, ip_universal_states, num_source_symbols)
+            (sym_to_idx, idx_to_sym, ip_universal_states, all_final_universal, num_source_symbols)
         };
 
         RustLazyPeekabooDFA {
@@ -764,6 +782,7 @@ impl RustLazyPeekabooDFA {
             sym_to_idx,
             idx_to_sym,
             ip_universal_states,
+            all_final_universal,
             num_source_symbols,
             use_factored,
             lazy_dfa: None,
@@ -779,6 +798,7 @@ impl RustLazyPeekabooDFA {
                 self.sym_to_idx.clone(),
                 self.idx_to_sym.clone(),
                 self.ip_universal_states.clone(),
+                self.all_final_universal,
                 self.num_source_symbols,
                 self.use_factored,
             ));

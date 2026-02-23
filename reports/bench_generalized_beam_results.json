@@ -1,0 +1,172 @@
+{
+  "description": "GeneralizedBeam benchmark (BPE vocab scaling + PTB)",
+  "config": {
+    "n_runs": 3,
+    "n_target_bytes": 8,
+    "scale_timeout_s": 300,
+    "text": "The quick brown fox",
+    "memory_limit_gb": 12
+  },
+  "baseline_rss_mb": 744,
+  "bpe_rows": [
+    {
+      "vocab_size": 297,
+      "fst_states": 387,
+      "n_target_bytes": 8,
+      "GeneralizedBeam_avg_ms": 1,
+      "GeneralizedBeam_runs_ms": [
+        1,
+        1,
+        1
+      ],
+      "GeneralizedBeam_init_ms": 1,
+      "peak_rss_mb": 744
+    },
+    {
+      "vocab_size": 529,
+      "fst_states": 623,
+      "n_target_bytes": 8,
+      "GeneralizedBeam_avg_ms": 2,
+      "GeneralizedBeam_runs_ms": [
+        2,
+        2,
+        2
+      ],
+      "GeneralizedBeam_init_ms": 2,
+      "peak_rss_mb": 745
+    },
+    {
+      "vocab_size": 1023,
+      "fst_states": 1313,
+      "n_target_bytes": 8,
+      "GeneralizedBeam_avg_ms": 3,
+      "GeneralizedBeam_runs_ms": [
+        3,
+        3,
+        3
+      ],
+      "GeneralizedBeam_init_ms": 6,
+      "peak_rss_mb": 750
+    },
+    {
+      "vocab_size": 2020,
+      "fst_states": 3010,
+      "n_target_bytes": 8,
+      "GeneralizedBeam_avg_ms": 4,
+      "GeneralizedBeam_runs_ms": [
+        4,
+        4,
+        4
+      ],
+      "GeneralizedBeam_init_ms": 8,
+      "peak_rss_mb": 769
+    },
+    {
+      "vocab_size": 5011,
+      "fst_states": 8694,
+      "n_target_bytes": 8,
+      "GeneralizedBeam_avg_ms": 8,
+      "GeneralizedBeam_runs_ms": [
+        8,
+        8,
+        8
+      ],
+      "GeneralizedBeam_init_ms": 27,
+      "peak_rss_mb": 818
+    },
+    {
+      "vocab_size": 7010,
+      "fst_states": 12408,
+      "n_target_bytes": 8,
+      "GeneralizedBeam_avg_ms": 11,
+      "GeneralizedBeam_runs_ms": [
+        11,
+        12,
+        11
+      ],
+      "GeneralizedBeam_init_ms": 42,
+      "peak_rss_mb": 885
+    },
+    {
+      "vocab_size": 10008,
+      "fst_states": 18203,
+      "n_target_bytes": 8,
+      "GeneralizedBeam_avg_ms": 17,
+      "GeneralizedBeam_runs_ms": [
+        16,
+        17,
+        17
+      ],
+      "GeneralizedBeam_init_ms": 62,
+      "peak_rss_mb": 943
+    },
+    {
+      "vocab_size": 12008,
+      "fst_states": 22172,
+      "n_target_bytes": 8,
+      "GeneralizedBeam_avg_ms": 21,
+      "GeneralizedBeam_runs_ms": [
+        21,
+        21,
+        23
+      ],
+      "GeneralizedBeam_init_ms": 76,
+      "peak_rss_mb": 1024
+    },
+    {
+      "vocab_size": 15008,
+      "fst_states": 28005,
+      "n_target_bytes": 8,
+      "GeneralizedBeam_avg_ms": 29,
+      "GeneralizedBeam_runs_ms": [
+        30,
+        29,
+        29
+      ],
+      "GeneralizedBeam_init_ms": 118,
+      "peak_rss_mb": 1101
+    },
+    {
+      "vocab_size": 20005,
+      "fst_states": 37786,
+      "n_target_bytes": 8,
+      "GeneralizedBeam_avg_ms": 40,
+      "GeneralizedBeam_runs_ms": [
+        40,
+        39,
+        40
+      ],
+      "GeneralizedBeam_init_ms": 160,
+      "peak_rss_mb": 1174
+    },
+    {
+      "vocab_size": 30002,
+      "fst_states": 57401,
+      "n_target_bytes": 8,
+      "GeneralizedBeam_avg_ms": 62,
+      "GeneralizedBeam_runs_ms": [
+        62,
+        64,
+        62
+      ],
+      "GeneralizedBeam_init_ms": 249,
+      "peak_rss_mb": 1397
+    },
+    {
+      "vocab_size": 50256,
+      "fst_states": 98024,
+      "n_target_bytes": 8,
+      "GeneralizedBeam_avg_ms": 124,
+      "GeneralizedBeam_runs_ms": [
+        121,
+        124,
+        130
+      ],
+      "GeneralizedBeam_init_ms": 455,
+      "peak_rss_mb": 1906
+    }
+  ],
+  "ptb": {
+    "error": "no steps completed"
+  }
+}

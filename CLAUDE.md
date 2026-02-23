@@ -56,6 +56,7 @@ Self-contained language model interface for use with enumeration/sampling:
 - `transduction/lm/fused_transduced.py` — `FusedTransducedLM`, `FusedTransducedState` (single-pass interleaved decomposition + LM search; `helper=` for pluggable backends: `"rust"`, `"python"`, `"token"`)
 - `transduction/lm/reference_transduced.py` — `ReferenceTransducedLM` (ground-truth transduced LM via Precover; enumerates Q/R languages exactly; finite-relation FSTs only)
 - `transduction/lm/character_beam.py` — `CharacterBeam`, `TokenCharacterTrie`, `TrieState`, `CharacterBeamState` (character-level beam search exploiting SPM property; fast for BPE; optional `numba` JIT for trie mass updates)
+- `transduction/lm/generalized_beam.py` — `GeneralizedBeam`, `GeneralizedBeamState`, `OutputTrie`, `HubHyp` (hybrid trie-mass / particle beam search; trie-mass at IP-universal accepting hubs, particle expansion elsewhere; unifies CharacterBeam and FusedTransducedLM)
 - `transduction/lm/pynini_transduced.py` — `PyniniTransducedLM` (pynini-backed transduced LM with particle-based inference)
 
 ### Rust Acceleration (`crates/transduction-core/`)
@@ -117,8 +118,9 @@ Eliminated deps (previously external, now inlined):
 - `test_ngram.py`: 22 passed
 - `test_ptb_nltk.py`: 4 passed
 - `test_make_total.py`: 3 passed
+- `test_generalized_beam.py`: 33 passed
 - `test_statelm_kv_cache.py`: 3 passed
-- **Total: 1191 tests across 16 files (1189 passed, 2 xfailed)**
+- **Total: 1224 tests across 17 files (1222 passed, 2 xfailed)**
 - `test_general.py` tests the **general-case** algorithms (handle infinite quotients/remainders):
   NonrecursiveDFADecomp, TruncatedIncrementalDFADecomp, TrieDispatchDFADecomp,
   PeekabooState, PeekabooNonrecursive, DirtyPeekaboo, RustDecomp, RustDirtyState,

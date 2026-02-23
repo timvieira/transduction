@@ -172,6 +172,53 @@ pub fn compute_ip_universal_states(fst: &Fst) -> Vec<bool> {
     candidates
 }
 
+/// BFS from hub following epsilon-input arcs, collecting source arcs.
+/// Returns list of (source_symbol, output_sequence, dest_state) or None
+/// if the hub's vocab is non-deterministic.
+pub fn compute_hub_vocab(fst: &Fst, hub: u32) -> Option<Vec<(u32, Vec<u32>, u32)>> {
+    let mut visited = FxHashSet::default();
+    let mut queue = VecDeque::new();
+    queue.push_back((hub, Vec::new()));
+    visited.insert(hub);
+
+    let mut seen: FxHashMap<u32, (Vec<u32>, u32)> = FxHashMap::default();
+    let mut entries: Vec<(u32, Vec<u32>, u32)> = Vec::new();
+
+    while let Some((state, output_so_far)) = queue.pop_front() {
+        // Follow epsilon-input arcs (accumulate output)
+        for ea in fst.eps_input_arcs(state) {
+            let mut out_ext = output_so_far.clone();
+            if ea.output != EPSILON {
+                out_ext.push(ea.output);
+            }
+            if visited.insert(ea.dest) {
+                queue.push_back((ea.dest, out_ext));
+            }
+        }
+
+        // Non-epsilon source arcs: complete a "token"
+        for arc in fst.arcs_from(state) {
+            if arc.input == EPSILON { continue; }
+
+            let mut out_ext = output_so_far.clone();
+            if arc.output != EPSILON {
+                out_ext.push(arc.output);
+            }
+
+            if let Some((prev_out, prev_dest)) = seen.get(&arc.input) {
+                if *prev_out != out_ext || *prev_dest != arc.dest {
+                    return None;  // Non-deterministic
+                }
+            } else {
+                seen.insert(arc.input, (out_ext.clone(), arc.dest));
+                entries.push((arc.input, out_ext, arc.dest));
+            }
+        }
+    }
+
+    Some(entries)
+}
+
 impl Fst {
     /// Build an FST from parallel arc arrays.
     pub fn new(
@@ -388,6 +435,76 @@ mod tests {
 
         // state 1 has no arcs
         assert_eq!(fst.arcs_by_output(1, 10).len(), 0);
+    }
+
+    #[test]
+    fn test_compute_hub_vocab_simple() {
+        // Copy FST: state 0 is final+start, arcs (0)-a:x->(0), (0)-b:y->(0)
+        let fst = Fst::new(
+            1,
+            vec![0],
+            &[0],
+            &[0, 0],
+            &[0, 1],       // input: a=0, b=1
+            &[2, 3],       // output: x=2, y=3
+            &[0, 0],       // all to state 0
+            vec![0, 1],
+        );
+
+        let entries = compute_hub_vocab(&fst, 0);
+        assert!(entries.is_some());
+        let entries = entries.unwrap();
+        assert_eq!(entries.len(), 2);
+        // Each entry should have a single output symbol
+        for (_, out, dest) in &entries {
+            assert_eq!(out.len(), 1);
+            assert_eq!(*dest, 0);
+        }
+    }
+
+    #[test]
+    fn test_compute_hub_vocab_nondet() {
+        // Non-deterministic: same input symbol maps to different outputs
+        // (0)-a:x->(0), (0)-a:y->(0)
+        let fst = Fst::new(
+            1,
+            vec![0],
+            &[0],
+            &[0, 0],
+            &[0, 0],       // same input symbol
+            &[2, 3],       // different outputs
+            &[0, 0],
+            vec![0],
+        );
+
+        let entries = compute_hub_vocab(&fst, 0);
+        assert!(entries.is_none());
+    }
+
+    #[test]
+    fn test_compute_hub_vocab_with_eps_path() {
+        // Hub 0 with epsilon arc to state 1, state 1 has source arcs
+        // (0)-eps:x->(1), (1)-a:y->(0)
+        let fst = Fst::new(
+            2,
+            vec![0],
+            &[0],
+            &[0, 1],
+            &[EPSILON, 0],   // input: eps, a=0
+            &[2, 3],         // output: x=2, y=3
+            &[1, 0],         // dest: 1, 0
+            vec![0],
+        );
+
+        let entries = compute_hub_vocab(&fst, 0);
+        assert!(entries.is_some());
+        let entries = entries.unwrap();
+        assert_eq!(entries.len(), 1);
+        // The entry for 'a' should have output [x, y] (eps arc output + source arc output)
+        let (inp, out, dest) = &entries[0];
+        assert_eq!(*inp, 0);
+        assert_eq!(*out, vec![2, 3]);
+        assert_eq!(*dest, 0);
     }
 
     #[test]
