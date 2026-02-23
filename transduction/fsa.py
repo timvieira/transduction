@@ -731,11 +731,23 @@ class FSA(Generic[A]):
             m.add_stop(xs)
         return m
 
+    def _eps_closure(self, states: set[State]) -> set[State]:
+        """Expand *states* by following all epsilon transitions."""
+        stack = list(states)
+        closure = set(states)
+        while stack:
+            s = stack.pop()
+            for t in self.edges[s][EPSILON]:
+                if t not in closure:
+                    closure.add(t)
+                    stack.append(t)
+        return closure
+
     def run(self, xs: Iterable[A]) -> set[State]:
         """Run string ``xs`` from start states, returning the set of reached states."""
-        states = set(self.start)
+        states = self._eps_closure(set(self.start))
         for x in xs:
-            states = {t for s in states for t in self.edges[s][x]}
+            states = self._eps_closure({t for s in states for t in self.edges[s][x]})
             if not states:
                 break
         return states

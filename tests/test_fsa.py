@@ -249,6 +249,71 @@ def test_int_run_and_contains() -> None:
     assert reached & m.stop
 
 
+# --- Epsilon handling in run/contains ---
+
+def test_run_with_eps_from_start() -> None:
+    """Epsilon arc from start state should be followed before reading input."""
+    m: FSA[int] = FSA()
+    m.add_start(0)
+    m._add_eps(0, 1)       # eps: 0 -> 1
+    m.add(1, 42, 2)
+    m.add_stop(2)
+    # The string (42,) is accepted only if we follow the eps from 0 to 1
+    assert (42,) in m
+    assert m.run([42]) == {2}
+
+
+def test_run_with_eps_after_symbol() -> None:
+    """Epsilon arcs after a symbol transition should be followed."""
+    m: FSA[int] = FSA()
+    m.add_start(0)
+    m.add(0, 1, 1)
+    m._add_eps(1, 2)       # eps: 1 -> 2
+    m.add(2, 2, 3)
+    m.add_stop(3)
+    # (1, 2) is accepted only if eps 1->2 is followed between symbols
+    assert (1, 2) in m
+    assert m.run([1, 2]) == {3}
+
+
+def test_run_with_eps_chain() -> None:
+    """Multiple chained epsilon arcs should all be followed."""
+    m: FSA[int] = FSA()
+    m.add_start(0)
+    m._add_eps(0, 1)
+    m._add_eps(1, 2)
+    m._add_eps(2, 3)
+    m.add(3, 7, 4)
+    m.add_stop(4)
+    assert (7,) in m
+    assert m.run([7]) == {4}
+
+
+def test_run_with_eps_to_accept() -> None:
+    """Epsilon arc leading to an accept state should make the string accepted."""
+    m: FSA[int] = FSA()
+    m.add_start(0)
+    m.add(0, 5, 1)
+    m._add_eps(1, 2)       # eps: 1 -> 2 (accept)
+    m.add_stop(2)
+    assert (5,) in m
+    # state 2 should be reachable even though we only consumed one symbol
+    assert 2 in m.run([5])
+
+
+def test_run_no_eps_no_regression() -> None:
+    """Epsilon-free FSA should still work correctly (regression guard)."""
+    m: FSA[int] = FSA()
+    m.add_start(0)
+    m.add(0, 1, 1)
+    m.add(1, 2, 2)
+    m.add_stop(2)
+    assert (1, 2) in m
+    assert (1,) not in m
+    assert (2,) not in m
+    assert () not in m
+
+
 # --- Cross-type: map_labels ---
 
 def test_map_labels_int_to_str() -> None:
