@@ -369,19 +369,62 @@ impl<'a> PeekabooNFAMapped<'a> {
                 return Vec::new();
             }
             assert!(eff_extra == NO_EXTRA);
-            for arc in self.fst.arcs_from(i) {
-                let x = arc.input;
-                let y = arc.output;
-                let j = arc.dest;
+            // Epsilon-output arcs: buffer unchanged
+            for arc in self.fst.arcs_by_output(i, EPSILON) {
+                result.push((arc.input, pack_peekaboo(arc.dest, eff_n, NO_EXTRA, false)));
+            }
+            // Target-matching output arcs: buffer advances
+            let target_sym = self.full_target[eff_n as usize];
+            for arc in self.fst.arcs_by_output(i, target_sym) {
+                result.push((arc.input, pack_peekaboo(arc.dest, eff_n + 1, NO_EXTRA, false)));
+            }
+        }
 
-                if y == EPSILON {
-                    // Epsilon output: buffer unchanged.
-                    result.push((x, pack_peekaboo(j, eff_n, NO_EXTRA, false)));
-                } else if y == self.full_target[eff_n as usize] {
-                    // Output matches next target symbol: extend buffer.
-                    result.push((x, pack_peekaboo(j, eff_n + 1, NO_EXTRA, false)));
+        result
+    }
+
+    /// Epsilon-input successors from a packed NFA state.
+    /// Uses the FST's eps_input_arcs side table instead of full arcs() + filter.
+    fn eps_arcs(&self, packed: u64) -> Vec<u64> {
+        let (i, buf_len, extra_sym, truncated) = unpack_peekaboo(packed);
+        let step_n = self.step_n;
+
+        let (eff_n, eff_extra, is_valid) = self.effective_state(buf_len, extra_sym, truncated);
+        if !is_valid {
+            return Vec::new();
+        }
+
+        let mut result = Vec::new();
+
+        if eff_n >= step_n {
+            // Boundary phase: all epsilon-input arcs
+            for ea in self.fst.eps_input_arcs(i) {
+                let y = ea.output;
+                let j = ea.dest;
+                if y == EPSILON || truncated {
+                    result.push(pack_peekaboo(j, buf_len, extra_sym, truncated));
+                } else if eff_extra == NO_EXTRA && eff_n == step_n {
+                    if let Some(&y_idx) = self.sym_to_idx.get(&y) {
+                        result.push(pack_peekaboo(j, step_n + 1, y_idx, false));
+                    }
+                } else {
+                    result.push(pack_peekaboo(j, buf_len, extra_sym, true));
                 }
-                // else: output doesn't match → dead end.
+            }
+        } else {
+            // Growing phase
+            if truncated {
+                return Vec::new();
+            }
+            assert!(eff_extra == NO_EXTRA);
+            // Epsilon-output arcs: buffer unchanged
+            for ea in self.fst.eps_input_arcs_by_output(i, EPSILON) {
+                result.push(pack_peekaboo(ea.dest, eff_n, NO_EXTRA, false));
+            }
+            // Target-matching output arcs: buffer advances
+            let target_sym = self.full_target[eff_n as usize];
+            for ea in self.fst.eps_input_arcs_by_output(i, target_sym) {
+                result.push(pack_peekaboo(ea.dest, eff_n + 1, NO_EXTRA, false));
             }
         }
 
@@ -404,8 +447,8 @@ impl<'a> PeekabooNFAMapped<'a> {
         worklist.push_back(state);
 
         while let Some(s) = worklist.pop_front() {
-            for (x, dest) in self.arcs(s) {
-                if x == EPSILON && seen.insert(dest) {
+            for dest in self.eps_arcs(s) {
+                if seen.insert(dest) {
                     all_reachable.push(dest);
                     worklist.push_back(dest);
                 }
@@ -2737,6 +2780,7 @@ pub struct LazyPeekabooDFA {
     sym_to_idx: FxHashMap<u32, u16>,
     idx_to_sym: Vec<u32>,
     ip_universal_states: Vec<bool>,
+    all_final_universal: bool,
     num_source_symbols: usize,
     use_factored: bool,
 
@@ -2772,6 +2816,7 @@ impl LazyPeekabooDFA {
         sym_to_idx: FxHashMap<u32, u16>,
         idx_to_sym: Vec<u32>,
         ip_universal_states: Vec<bool>,
+        all_final_universal: bool,
         num_source_symbols: usize,
         use_factored: bool,
     ) -> Self {
@@ -2779,6 +2824,7 @@ impl LazyPeekabooDFA {
             sym_to_idx,
             idx_to_sym,
             ip_universal_states,
+            all_final_universal,
             num_source_symbols,
             use_factored,
             target: Vec::new(),
@@ -2895,6 +2941,27 @@ impl LazyPeekabooDFA {
         }
         self.ensure_meta(fst, sid);
         self.ensure_capacity(sid_usize + 1);
+
+        // Fast path: when all FST states with non-eps input are ip-universal
+        // (e.g. BPE), universality reduces to finality — no BFS/cache needed.
+        if self.all_final_universal {
+            let relevant = &self.meta[sid_usize].relevant_symbols;
+            let final_syms = &self.meta[sid_usize].final_symbols;
+            let mut quotient_sym: Option<u16> = None;
+            let mut remainder_syms: Vec<u16> = Vec::new();
+            for &y_idx in relevant {
+                if final_syms.contains(&y_idx) {
+                    if quotient_sym.is_none() {
+                        quotient_sym = Some(y_idx);
+                    } else {
+                        remainder_syms.push(y_idx);
+                    }
+                }
+            }
+            self.classify[sid_usize] = ClassifyResult { quotient_sym, remainder_syms };
+            self.classify_computed[sid_usize] = true;
+            return;
+        }
 
         let relevant = self.meta[sid_usize].relevant_symbols.clone();
         let final_syms_set: FxHashSet<u16> =

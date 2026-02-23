@@ -2,15 +2,21 @@
 logp agreement, and PyniniTransducedLM debugging.
 
 Usage:
-    python reports/run_benchmarks.py
+    python reports/run_benchmarks.py          # full (~10 min)
+    python reports/run_benchmarks.py --quick   # fast (~2 min)
 """
 
+import argparse
 import time, gc, json, os, sys
 from math import exp, log
 from collections import defaultdict
 
 from transduction.util import set_memory_limit, Timeout, timelimit
 set_memory_limit(8)
+
+parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+parser.add_argument('--quick', action='store_true', help='Fast run: fewer decode steps and prefix lengths')
+args = parser.parse_args()
 
 import numpy as np
 
@@ -113,7 +119,7 @@ ptb_decomp_methods = [
     ('Rust',     lambda t: RustDecomp(ptb_fst, t)),
 ]
 
-ptb_prefix_lengths = [3, 5, 8, 10]
+ptb_prefix_lengths = [3, 5, 8] if args.quick else [3, 5, 8, 10]
 ptb_decomp_results = {name: [] for name, _ in ptb_decomp_methods}
 
 print(f'\nPTB FST: {len(ptb_fst.states)} states')
@@ -170,7 +176,7 @@ print('='*70)
 from transduction.lm.transduced import TransducedLM
 from transduction.lm.fused_transduced import FusedTransducedLM
 
-MAX_DECODE = 44    # length of target
+MAX_DECODE = 10 if args.quick else 44
 MAX_SEARCH = 200
 MAX_BEAM = 10
 LM_TIMEOUT = 30
@@ -252,7 +258,7 @@ print('\n' + '='*70)
 print('PTB TRANSDUCED LM BENCHMARK (with FusedTransducedLM drain fix)')
 print('='*70)
 
-PTB_MAX_DECODE = 45
+PTB_MAX_DECODE = 10 if args.quick else 45
 PTB_MAX_SEARCH = 200
 PTB_MAX_BEAM = 20
 PTB_LM_TIMEOUT = 60
@@ -334,47 +340,51 @@ print('\n' + '='*70)
 print('PYNINI TRANSDUCED LM DEBUG')
 print('='*70)
 
-try:
-    from transduction.lm.pynini_transduced import PyniniTransducedLM
-    from transduction.pynini_ops import PyniniPrecover
+if args.quick:
+    print('\n  (Skipping Pynini debug in --quick mode)')
+    results['pynini_debug'] = 'skipped_quick_mode'
+else:
+    try:
+        from transduction.lm.pynini_transduced import PyniniTransducedLM
+        from transduction.pynini_ops import PyniniPrecover
 
-    # Test on BPE first (smaller, should work)
-    print('\nPyniniTransducedLM on BPE:')
-    t0 = time.perf_counter()
-    pynini_bpe = PyniniTransducedLM(bpe_inner_lm, bpe_fst, K=10, max_expansions=200)
-    t1 = time.perf_counter()
-    print(f'  Constructor: {(t1-t0)*1000:.0f} ms')
-
-    t0 = time.perf_counter()
-    pstate = pynini_bpe.initial()
-    t1 = time.perf_counter()
-    print(f'  initial(): {(t1-t0)*1000:.0f} ms')
-
-    for i in range(min(5, len(bpe_target_seq))):
-        y = bpe_target_seq[i]
+        # Test on BPE first (smaller, should work)
+        print('\nPyniniTransducedLM on BPE:')
         t0 = time.perf_counter()
-        lp = pstate.logp_next[y]
-        pstate = pstate >> y
+        pynini_bpe = PyniniTransducedLM(bpe_inner_lm, bpe_fst, K=10, max_expansions=200)
         t1 = time.perf_counter()
-        print(f'  step {i+1}: {(t1-t0)*1000:.0f} ms  logp={lp:.4f}')
+        print(f'  Constructor: {(t1-t0)*1000:.0f} ms')
 
-    # Test on PTB — SKIP: C++ code blocks SIGALRM, making step 1 hang
-    # indefinitely. _compute_logp_next builds 257 per-symbol pynini precover
-    # DFAs (one per output symbol). Each involves C++ composition which
-    # blocks signal delivery, so timelimit() cannot interrupt it.
-    print('\nPyniniTransducedLM on PTB:')
-    print(f'  SKIPPED — step 1 requires {len(ptb_fst.B - {EPSILON})} pynini compositions')
-    print(f'  (one per output symbol), each involving C++ code that blocks SIGALRM.')
-    print(f'  Known to hang indefinitely (>10 min with no output).')
-    print(f'  Root cause: PyniniTransducedState._compute_logp_next iterates over')
-    print(f'  all {len(ptb_fst.B - {EPSILON})} target symbols calling pd.precover(extended)')
-    print(f'  which is O(|B| * composition_cost) per step — prohibitive for PTB.')
+        t0 = time.perf_counter()
+        pstate = pynini_bpe.initial()
+        t1 = time.perf_counter()
+        print(f'  initial(): {(t1-t0)*1000:.0f} ms')
 
-    results['pynini_debug'] = 'ptb_skipped_known_hang'
+        for i in range(min(5, len(bpe_target_seq))):
+            y = bpe_target_seq[i]
+            t0 = time.perf_counter()
+            lp = pstate.logp_next[y]
+            pstate = pstate >> y
+            t1 = time.perf_counter()
+            print(f'  step {i+1}: {(t1-t0)*1000:.0f} ms  logp={lp:.4f}')
 
-except ImportError:
-    print('  pynini not available, skipping')
-    results['pynini_debug'] = 'import_error'
+        # Test on PTB — SKIP: C++ code blocks SIGALRM, making step 1 hang
+        # indefinitely. _compute_logp_next builds 257 per-symbol pynini precover
+        # DFAs (one per output symbol). Each involves C++ composition which
+        # blocks signal delivery, so timelimit() cannot interrupt it.
+        print('\nPyniniTransducedLM on PTB:')
+        print(f'  SKIPPED — step 1 requires {len(ptb_fst.B - {EPSILON})} pynini compositions')
+        print(f'  (one per output symbol), each involving C++ code that blocks SIGALRM.')
+        print(f'  Known to hang indefinitely (>10 min with no output).')
+        print(f'  Root cause: PyniniTransducedState._compute_logp_next iterates over')
+        print(f'  all {len(ptb_fst.B - {EPSILON})} target symbols calling pd.precover(extended)')
+        print(f'  which is O(|B| * composition_cost) per step — prohibitive for PTB.')
+
+        results['pynini_debug'] = 'ptb_skipped_known_hang'
+
+    except ImportError:
+        print('  pynini not available, skipping')
+        results['pynini_debug'] = 'import_error'
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Save results

@@ -5,12 +5,15 @@ Writes results to reports/bench_vectorization_results.json for
 consumption by dashboard_plots.py.
 
 Usage:
-    python reports/bench_vectorization.py
+    python reports/bench_vectorization.py          # full (~30 min)
+    python reports/bench_vectorization.py --quick   # fast (~3 min)
 """
 
+import argparse
 import json
 import os
 import resource
+import sys
 import time
 import gc
 
@@ -26,6 +29,10 @@ from transduction.lm.character_beam import CharacterBeam
 from transduction.util import Timeout, timelimit, set_memory_limit
 
 set_memory_limit(12)
+
+parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+parser.add_argument('--quick', action='store_true', help='Fast run: fewer vocab sizes, 1 run, skip quality check')
+args = parser.parse_args()
 
 OUTFILE = os.path.join(os.path.dirname(__file__), 'bench_vectorization_results.json')
 
@@ -79,9 +86,16 @@ NUM_TARGET_BYTES = 8
 print(f"Text: {text_short!r}, Token IDs: {token_ids_short}")
 
 # ---- Vocab sizes to benchmark ----
-VOCAB_SIZES = [257, 500, 1000, 2000, 5000, 7000, 10000, 12000, 15000]
-SCALE_TIMEOUT = 300  # seconds per method per vocab
-N_RUNS = 3  # repeat for stability
+# --quick keeps the full range of sizes (fast methods like CharacterBeam still
+# reach large vocabs) but reduces runs to 1 and shortens per-method timeout.
+if args.quick:
+    VOCAB_SIZES = [257, 1000, 5000, 10000, 15000]
+    SCALE_TIMEOUT = 60
+    N_RUNS = 1
+else:
+    VOCAB_SIZES = [257, 500, 1000, 2000, 5000, 7000, 10000, 12000, 15000]
+    SCALE_TIMEOUT = 300
+    N_RUNS = 3
 
 def make_character_beam(lm, used):
     """Build a CharacterBeam from an LM and a set of token IDs."""
@@ -220,7 +234,12 @@ for row in rows:
     line += f"  {rss:>14}"
     print(line)
 
-# ---- Quality check: logp agreement at V=5000 ----
+# ---- Quality check: logp agreement at V=5000 (skip in --quick mode) ----
+if args.quick:
+    print(f"\n(Skipping quality check in --quick mode)")
+    print(f"\nDone.")
+    sys.exit(0)
+
 print(f"\n{'='*70}")
 print("Quality Check: max |logp_full - logp_topk| at V=5000")
 print(f"{'='*70}\n")

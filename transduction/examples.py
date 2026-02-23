@@ -986,3 +986,128 @@ def parity_copy():
     fst.add_arc("O1", EPSILON, EPSILON, "END")
 
     return fst
+
+
+# ---------------------------------------------------------------------------
+# Multi-hub test FSTs for GeneralizedBeam
+# ---------------------------------------------------------------------------
+
+def two_hub_alternating(alphabet=('a', 'b')):
+    """Two accepting IP-universal hubs that alternate.
+
+    Hub0: source 'a' outputs 'x', goes to Hub1.
+    Hub1: source 'b' outputs 'y', goes to Hub0.
+    Both hubs have arcs for all symbols in the alphabet, making them
+    IP-universal.  Tests hub-to-hub transitions with per-hub tries.
+    """
+    fst = FST()
+    fst.add_start('h0')
+    fst.add_stop('h0')
+    fst.add_stop('h1')
+
+    # Hub0: 'a' -> output 'x', go to h1; other symbols copy, stay at h0
+    fst.add_arc('h0', 'a', 'x', 'h1')
+    for x in alphabet:
+        if x != 'a':
+            fst.add_arc('h0', x, x, 'h0')
+
+    # Hub1: 'b' -> output 'y', go to h0; other symbols copy, stay at h1
+    fst.add_arc('h1', 'b', 'y', 'h0')
+    for x in alphabet:
+        if x != 'b':
+            fst.add_arc('h1', x, x, 'h1')
+
+    return fst
+
+
+def hub_with_escape():
+    """BPE-like hub where one token escapes to a non-deterministic-hub state.
+
+    Hub 'root' (deterministic): source 'a' outputs 'x' and returns to root;
+    source 'b' outputs 'y' and goes to state C.  State C is IP-universal
+    and accepting but has non-deterministic vocab (two eps-connected paths
+    for source 'a' reaching different destinations), so it's not a
+    deterministic hub.  Tests HubHyp -> Particle transition.
+    """
+    fst = FST()
+    fst.add_start('root')
+    fst.add_stop('root')
+
+    # Hub root: BPE-like eps-output then source-consume arcs
+    fst.add_arc('root', EPSILON, 'x', 'A')
+    fst.add_arc('root', EPSILON, 'y', 'B')
+    fst.add_arc('A', 'a', EPSILON, 'root')   # source 'a' outputs 'x', returns
+    fst.add_arc('B', 'b', EPSILON, 'C')      # source 'b' outputs 'y', escapes
+
+    # C: IP-universal and accepting, but non-deterministic hub vocab
+    fst.add_stop('C')
+    fst.add_arc('C', 'a', 'a', 'C')
+    fst.add_arc('C', 'b', 'b', 'C')
+    fst.add_arc('C', EPSILON, EPSILON, 'D')
+    fst.add_arc('D', 'a', 'a', 'E')   # conflict: 'a' from C->C and D->E
+
+    # E: IP-universal and accepting
+    fst.add_stop('E')
+    fst.add_arc('E', 'a', 'a', 'E')
+    fst.add_arc('E', 'b', 'b', 'E')
+
+    return fst
+
+
+def multi_hub_chain(n=3, alphabet=('a', 'b')):
+    """Chain of n IP-universal accepting hubs cycling through.
+
+    Each symbol at hub i goes to hub (i+1) % n with a copy output.
+    Tests multiple hub tries and multi-hop hub transitions.
+    """
+    fst = FST()
+    fst.add_start(0)
+    for i in range(n):
+        fst.add_stop(i)
+        for x in alphabet:
+            fst.add_arc(i, x, x, (i + 1) % n)
+    return fst
+
+
+def partial_hub(alphabet=('a', 'b')):
+    """Hub where one source symbol has non-deterministic output (non-functional FST).
+
+    State 0 is IP-universal and accepting.  'a' deterministically outputs 'x'
+    and loops.  'b' has two arcs: outputs 'y' to state 0 AND outputs 'z' to
+    state 0.  The non-deterministic output for 'b' means _compute_hub_vocab
+    returns None.
+
+    WARNING: This FST is non-functional (same input maps to multiple outputs).
+    Use only for testing _compute_hub_vocab; the decomposition helper may fail.
+    """
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(0)
+
+    fst.add_arc(0, 'a', 'x', 0)
+    fst.add_arc(0, 'b', 'y', 0)
+    fst.add_arc(0, 'b', 'z', 0)
+
+    return fst
+
+
+def no_hub_transducer(alphabet=('a', 'b')):
+    """No state is IP-universal.  Pure particle mode.
+
+    State 0: only 'a' has arcs (partial).
+    State 1: only 'b' has arcs (partial).
+    Tests that GeneralizedBeam degenerates to FusedTransducedLM behavior.
+    """
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(0)
+    fst.add_stop(1)
+
+    fst.add_arc(0, 'a', 'x', 1)
+    fst.add_arc(1, 'b', 'y', 0)
+
+    # Ensure alphabet symbols are registered
+    for x in alphabet:
+        fst.A.add(x)
+
+    return fst

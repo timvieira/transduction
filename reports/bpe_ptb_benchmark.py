@@ -6,14 +6,23 @@ Compares:
   - NonrecursiveDFADecomp (fresh build per target)
   - PyniniNonrecursiveDecomp (pynini composition backend)
   - RustDecomp (Rust-accelerated decomposition)
+
+Usage:
+    python reports/bpe_ptb_benchmark.py          # full (~10 min)
+    python reports/bpe_ptb_benchmark.py --quick   # fast (~2 min)
 """
 
+import argparse
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from transduction.util import set_memory_limit
 set_memory_limit(8)
+
+parser = argparse.ArgumentParser(description=__doc__.strip(), formatter_class=argparse.RawDescriptionHelpFormatter)
+parser.add_argument('--quick', action='store_true', help='Fast run: fewer vocab sizes and target lengths')
+args = parser.parse_args()
 
 import signal
 import time
@@ -300,8 +309,12 @@ def main():
     all_results = {}
 
     # --- BPE benchmarks at various vocab sizes ---
-    bpe_vocab_sizes = [100, 500, 1000]
-    target_lengths = [3, 5, 8, 10, 15]
+    if args.quick:
+        bpe_vocab_sizes = [100, 1000]
+        target_lengths = [3, 8]
+    else:
+        bpe_vocab_sizes = [100, 500, 1000]
+        target_lengths = [3, 5, 8, 10, 15]
 
     for vocab_size in bpe_vocab_sizes:
         print(f"\nBuilding BPE FST (vocab={vocab_size})...", end=" ", flush=True)
@@ -337,7 +350,8 @@ def main():
         print(f"done ({len(ptb_fst.states)} states)")
 
         output_alpha = ptb_fst.B - {EPSILON}
-        targets_by_length = make_byte_targets(TARGET_TEXTS, [3, 5, 8, 10, 15], output_alpha)
+        ptb_lengths = [3, 8] if args.quick else [3, 5, 8, 10, 15]
+        targets_by_length = make_byte_targets(TARGET_TEXTS, ptb_lengths, output_alpha)
         name = "PTB"
         results = benchmark_fst(name, ptb_fst, targets_by_length)
         all_results[name] = results
