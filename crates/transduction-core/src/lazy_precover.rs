@@ -118,6 +118,16 @@ impl LazyPrecoverDFA {
         self.arcs_cache[sid as usize] = Some(result);
     }
 
+    /// Compute the DFA destination for a single input symbol from a state.
+    ///
+    /// If arcs have already been computed for `sid`, this is a simple lookup.
+    /// Otherwise, it lazily computes all arcs (same as `ensure_arcs_for`).
+    pub fn single_arc(&mut self, fst: &Fst, sid: u32, x: u32) -> Option<u32> {
+        self.ensure_arcs_for(fst, sid);
+        let arcs = self.arcs_cache[sid as usize].as_ref().unwrap();
+        arcs.iter().find(|&&(lbl, _)| lbl == x).map(|&(_, dst)| dst)
+    }
+
     /// Traverse a full source path from the start state.
     /// Returns the reached DFA state, or None if any arc is missing.
     pub fn run(&mut self, fst: &Fst, path: &[u32]) -> Option<u32> {

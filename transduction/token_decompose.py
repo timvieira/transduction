@@ -617,6 +617,20 @@ class TokenPeekabooHelper:
                 return None
         return state
 
+    def single_arc(self, sid, x_u32):
+        """Compute the DFA destination for a single input symbol.
+
+        If arcs have already been computed, this is a lookup.
+        Otherwise, lazily expands the state first.
+        Returns the destination state or None.
+        """
+        x = self._inv_sym[x_u32]
+        self._ensure_expanded(sid)
+        for (lbl, dest) in self._lazy_arcs.get(sid, []):
+            if lbl == x:
+                return dest
+        return None
+
     def classify(self, sid):
         cached = self._classify_cache.get(id(sid))
         if cached is not None:

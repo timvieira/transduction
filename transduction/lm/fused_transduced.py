@@ -63,6 +63,7 @@ class _FusedSearch:
         self._max_steps = tlm.max_steps
         self._tlm = tlm
         self._inner_eos = tlm.inner_lm.eos
+        self._top_k = tlm._top_k
 
         # Create fresh Rust lazy DFA for this target prefix
         target_u32 = [tlm._sym_map[y] for y in target]
@@ -177,20 +178,46 @@ class _FusedSearch:
 
         trunc_resume_syms = set()
 
-        for x_u32, dest_sid in helper.arcs(item.dfa_state):
-            x = inv[x_u32]
-            w = float(item.log_weight + lm_logp_next[x])
-            if w > -np.inf:
-                child = Particle(dest_sid, item.lm_state >> x, w,
-                                 item.source_path + (x,))
-                heapq.heappush(self._queue, child)
+        if self._top_k is not None:
+            # Top-k mode: only expand the k highest-probability source symbols.
+            # Uses single_arc() to compute individual DFA transitions without
+            # materializing all |V| arcs — O(k) instead of O(|V|).
+            sym_map = self._tlm._sym_map
+            for x, logp in lm_logp_next.top(self._top_k).items():
+                if x not in sym_map:
+                    continue
+                x_u32 = sym_map[x]
+                dest_sid = helper.single_arc(item.dfa_state, x_u32)
+                if dest_sid is None:
+                    continue
+                w = float(item.log_weight + logp)
+                if w > -np.inf:
+                    child = Particle(dest_sid, item.lm_state >> x, w,
+                                     item.source_path + (x,))
+                    heapq.heappush(self._queue, child)
 
-            # Truncation-boundary carry-forward
-            if not result.has_truncated:
-                dest_result = helper.classify(dest_sid)
-                if dest_result.has_truncated:
-                    for y_u32 in dest_result.trunc_output_syms:
-                        trunc_resume_syms.add(inv[y_u32])
+                # Truncation-boundary carry-forward
+                if not result.has_truncated:
+                    dest_result = helper.classify(dest_sid)
+                    if dest_result.has_truncated:
+                        for y_u32 in dest_result.trunc_output_syms:
+                            trunc_resume_syms.add(inv[y_u32])
+        else:
+            # Full expansion: iterate all arcs (existing behavior).
+            for x_u32, dest_sid in helper.arcs(item.dfa_state):
+                x = inv[x_u32]
+                w = float(item.log_weight + lm_logp_next[x])
+                if w > -np.inf:
+                    child = Particle(dest_sid, item.lm_state >> x, w,
+                                     item.source_path + (x,))
+                    heapq.heappush(self._queue, child)
+
+                # Truncation-boundary carry-forward
+                if not result.has_truncated:
+                    dest_result = helper.classify(dest_sid)
+                    if dest_result.has_truncated:
+                        for y_u32 in dest_result.trunc_output_syms:
+                            trunc_resume_syms.add(inv[y_u32])
 
         for y in trunc_resume_syms:
             self._add_carry_checked(y, item)
@@ -310,18 +337,21 @@ class FusedTransducedLM(LM[Token]):
 
     def __init__(self, inner_lm: LM, fst: FST[Any, Any],
                  max_steps: int = 1000, max_beam: int = 100,
-                 eos: Token = '<EOS>', helper: str = "rust") -> None:  # type: ignore[assignment]
+                 eos: Token = '<EOS>', helper: str = "rust",
+                 top_k: int | None = None,
+                 use_factored: bool = True) -> None:  # type: ignore[assignment]
 
         self.inner_lm = inner_lm
         self.fst = fst
         self.max_steps = max_steps
         self.max_beam = max_beam
         self.eos = eos
+        self._top_k = top_k
 
         if helper == "rust":
             import transduction_core
             rust_fst, sym_map, state_map = to_rust_fst(fst)
-            self._rust_helper = transduction_core.RustLazyPeekabooDFA(rust_fst)
+            self._rust_helper = transduction_core.RustLazyPeekabooDFA(rust_fst, use_factored)
             self._sym_map = {k: v for k, v in sym_map.items()}
             self._inv_sym_map = {v: k for k, v in sym_map.items()}
             self._state_map = state_map
@@ -350,8 +380,16 @@ class FusedTransducedLM(LM[Token]):
             self._inv_sym_map = {v: k for k, v in sym_map.items()}
             self._state_map = state_map
             self._helper_mode = "rust_token"
+        elif helper == "openfst":
+            from transduction.openfst_bridge import OpenFstLazyPeekabooDFA
+            helper_obj = OpenFstLazyPeekabooDFA(fst)
+            self._rust_helper = helper_obj
+            self._sym_map = {k: v for k, v in helper_obj._sym_map.items()}
+            self._inv_sym_map = {v: k for k, v in helper_obj._sym_map.items()}
+            self._state_map = helper_obj._state_map
+            self._helper_mode = "openfst"
         else:
-            raise ValueError("helper must be 'rust', 'python', 'token', or 'rust_token'")
+            raise ValueError("helper must be 'rust', 'python', 'token', 'rust_token', or 'openfst'")
 
     def decode_dfa_state(self, state_id: int,
                          target: Str[Token]) -> frozenset[Any]:

@@ -8,29 +8,29 @@
 //!
 //! Result: ~45 DFA states for BPE vs ~7,000 with the generic approach, while
 //! running at Rust speed (~1ms/step vs ~3s for the pure-Python version).
+//!
+//! **Lazy + dirty-state persistence:** The arena, NFA reps, arcs, and
+//! classification persist across decode steps.  On prefix extension, only
+//! "dirty" states (max_bufpos >= frontier) and their "border" predecessors
+//! are invalidated.  Clean states keep cached arcs/classification, avoiding
+//! the expensive `compute_all_arcs()` call on most states.
 
 use crate::fst::{compute_ip_universal_states, Fst, EPSILON};
 use crate::peekaboo::{
-    pack_peekaboo, unpack_peekaboo, evict_peekaboo_eps_cache,
+    evict_peekaboo_eps_cache, unpack_peekaboo, FactoredArena,
     PeekabooNFAMapped, PeekabooUniversalityFilter, NO_EXTRA,
 };
-use crate::powerset::PowersetArena;
-use crate::token_decompose::{extract_token_bytes, ByteTrie};
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::collections::VecDeque;
 
 // ---------------------------------------------------------------------------
 // Position-key extraction
 // ---------------------------------------------------------------------------
 
-/// Extract position key from a packed NFA state: discard fst_state, keep
-/// (buf_len, extra_sym, truncated) packed into the lower 32 bits.
 #[inline]
 fn pos_key(packed: u64) -> u32 {
     (packed & 0xFFFFFFFF) as u32
 }
 
-/// Extract sorted, deduped position keys from an NFA state set.
 fn extract_pos_keys(nfa_set: &[u64]) -> Vec<u32> {
     let mut keys: Vec<u32> = nfa_set.iter().map(|&p| pos_key(p)).collect();
     keys.sort_unstable();
@@ -38,8 +38,17 @@ fn extract_pos_keys(nfa_set: &[u64]) -> Vec<u32> {
     keys
 }
 
+#[inline]
+fn max_bufpos_from_nfa(nfa_set: &[u64]) -> u16 {
+    nfa_set
+        .iter()
+        .map(|&e| ((e >> 17) & 0x7FFF) as u16)
+        .max()
+        .unwrap_or(0)
+}
+
 // ---------------------------------------------------------------------------
-// Position-key arena (interning Vec<u32> → u32 state IDs)
+// Position-key arena
 // ---------------------------------------------------------------------------
 
 struct PosKeyArena {
@@ -83,7 +92,7 @@ impl PosKeyArena {
 }
 
 // ---------------------------------------------------------------------------
-// Classification result per DFA state
+// Classification result
 // ---------------------------------------------------------------------------
 
 pub(crate) struct TokenClassify {
@@ -95,34 +104,46 @@ pub(crate) struct TokenClassify {
 }
 
 // ---------------------------------------------------------------------------
-// TokenPeekabooDFA — per-FST persistent + per-step eager DFA
+// TokenPeekabooDFA
 // ---------------------------------------------------------------------------
 
 pub struct TokenPeekabooDFA {
-    // Per-FST data (computed once in new())
     sym_to_idx: FxHashMap<u32, u16>,
     idx_to_sym: Vec<u32>,
     ip_universal_states: Vec<bool>,
     all_input_universal: bool,
     num_source_symbols: usize,
 
-    // Per-step data (rebuilt in new_step())
     target: Vec<u32>,
     step_n: u16,
+
+    // Persistent DFA structure
     arena: PosKeyArena,
-    nfa_reps: Vec<Vec<u64>>,              // representative NFA set per DFA state
-    arcs_from: Vec<Vec<(u32, u32)>>,      // [sid] → [(label, dest_sid)]
+    nfa_reps: Vec<Vec<u64>>,
+    arcs_from: Vec<Vec<(u32, u32)>>,
     start_ids: Vec<u32>,
     classify_results: Vec<TokenClassify>,
+    arcs_computed: Vec<bool>,
+    classify_computed: Vec<bool>,
+
+    // Dirty-state tracking
+    max_bufpos: Vec<u16>,
+    reverse_arcs: Vec<Vec<u32>>,
+    prev_target: Vec<u32>,
+    needs_reexpand: Vec<bool>,
+
+    // Per-step caches
+    univ_filters: FxHashMap<u16, PeekabooUniversalityFilter>,
+    univ_arena: FactoredArena,
 
     // Persistent caches
     eps_cache: FxHashMap<u64, (Vec<u64>, u16)>,
+    #[allow(dead_code)]
     fst_univ_cache: FxHashMap<Vec<u32>, bool>,
 }
 
 impl TokenPeekabooDFA {
     pub fn new(fst: &Fst) -> Self {
-        // Build output alphabet and sym_to_idx mapping
         let mut output_alphabet: Vec<u32> = Vec::new();
         {
             let mut seen = FxHashSet::default();
@@ -149,11 +170,8 @@ impl TokenPeekabooDFA {
 
         let ip_universal_states = compute_ip_universal_states(fst);
         let num_source_symbols = fst.source_alphabet.len();
-
-        // Check all_input_universal: every state with non-eps input arcs is ip-universal
-        let all_input_universal = (0..fst.num_states as usize).all(|q| {
-            !fst.has_non_eps_input[q] || ip_universal_states[q]
-        });
+        let all_input_universal = (0..fst.num_states as usize)
+            .all(|q| !fst.has_non_eps_input[q] || ip_universal_states[q]);
 
         TokenPeekabooDFA {
             sym_to_idx,
@@ -168,245 +186,351 @@ impl TokenPeekabooDFA {
             arcs_from: Vec::new(),
             start_ids: Vec::new(),
             classify_results: Vec::new(),
+            arcs_computed: Vec::new(),
+            classify_computed: Vec::new(),
+            max_bufpos: Vec::new(),
+            reverse_arcs: Vec::new(),
+            prev_target: Vec::new(),
+            needs_reexpand: Vec::new(),
+            univ_filters: FxHashMap::default(),
+            univ_arena: FactoredArena::new(),
             eps_cache: FxHashMap::default(),
             fst_univ_cache: FxHashMap::default(),
         }
     }
 
-    /// Reset for a new target prefix.  Builds the entire quotiented DFA eagerly
-    /// (it's small enough — typically ~45 states for BPE).
-    pub fn new_step(&mut self, fst: &Fst, target: Vec<u32>) {
-        let step_n = target.len() as u16;
-        self.target = target;
-        self.step_n = step_n;
+    fn is_prefix_extension(&self, target: &[u32]) -> bool {
+        target.len() > self.prev_target.len()
+            && target[..self.prev_target.len()] == self.prev_target[..]
+    }
 
-        // Reset per-step state
+    fn full_reset(&mut self) {
         self.arena = PosKeyArena::new();
         self.nfa_reps.clear();
         self.arcs_from.clear();
-        self.start_ids.clear();
+        self.arcs_computed.clear();
+        self.classify_computed.clear();
         self.classify_results.clear();
+        self.max_bufpos.clear();
+        self.reverse_arcs.clear();
+        self.needs_reexpand.clear();
         self.eps_cache.clear();
+    }
 
-        // Build NFA
+    fn remove_outgoing_reverse_arcs(&mut self, sid: u32) {
+        let sid_usize = sid as usize;
+        if sid_usize >= self.arcs_from.len() {
+            return;
+        }
+        let arcs = std::mem::take(&mut self.arcs_from[sid_usize]);
+        for &(_lbl, dst) in &arcs {
+            let dst_usize = dst as usize;
+            if dst_usize < self.reverse_arcs.len() {
+                let ra = &mut self.reverse_arcs[dst_usize];
+                if let Some(pos) = ra.iter().position(|&s| s == sid) {
+                    ra.swap_remove(pos);
+                }
+            }
+        }
+    }
+
+    fn selective_invalidate(&mut self, frontier: u16) {
+        let n = self.arena.len();
+        if n == 0 {
+            return;
+        }
+        self.needs_reexpand.resize(n, false);
+
+        let mut dirty_border: Vec<u32> = Vec::new();
+        for sid in 0..n {
+            if sid < self.max_bufpos.len() && self.max_bufpos[sid] >= frontier {
+                self.needs_reexpand[sid] = true;
+                dirty_border.push(sid as u32);
+            }
+        }
+
+        let dirty_count = dirty_border.len();
+        for i in 0..dirty_count {
+            let dirty_sid = dirty_border[i] as usize;
+            if dirty_sid < self.reverse_arcs.len() {
+                for j in 0..self.reverse_arcs[dirty_sid].len() {
+                    let src = self.reverse_arcs[dirty_sid][j] as usize;
+                    if src < n
+                        && !self.needs_reexpand[src]
+                        && self.arcs_computed.get(src).copied().unwrap_or(false)
+                    {
+                        self.needs_reexpand[src] = true;
+                        dirty_border.push(src as u32);
+                    }
+                }
+            }
+        }
+
+        for &sid in &dirty_border {
+            let sid_usize = sid as usize;
+            self.remove_outgoing_reverse_arcs(sid);
+            if sid_usize < self.arcs_computed.len() {
+                self.arcs_computed[sid_usize] = false;
+            }
+            if sid_usize < self.classify_computed.len() {
+                self.classify_computed[sid_usize] = false;
+            }
+            self.needs_reexpand[sid_usize] = false;
+        }
+    }
+
+    pub fn new_step(&mut self, fst: &Fst, target: Vec<u32>) {
+        if target == self.prev_target && !self.prev_target.is_empty() {
+            return;
+        }
+
+        let step_n = target.len() as u16;
+        let is_extension =
+            !self.prev_target.is_empty() && self.is_prefix_extension(&target);
+
+        if is_extension {
+            let frontier = self.prev_target.len() as u16;
+            evict_peekaboo_eps_cache(&mut self.eps_cache, frontier);
+            self.selective_invalidate(frontier);
+        } else if !self.prev_target.is_empty() {
+            self.full_reset();
+        }
+
+        self.target = target;
+        self.step_n = step_n;
+        self.univ_filters.clear();
+        self.univ_arena = FactoredArena::new();
+
         let sym_to_idx = self.sym_to_idx.clone();
         let nfa = PeekabooNFAMapped::new(fst, &self.target, step_n, &sym_to_idx);
-
-        // Compute start state
         let raw_starts = nfa.start_states();
         let init_closed = nfa.eps_closure_set(&raw_starts, &mut self.eps_cache);
-
         let start_keys = extract_pos_keys(&init_closed);
         let start_id = self.arena.intern(start_keys);
-        // Ensure nfa_reps has capacity
-        while self.nfa_reps.len() <= start_id as usize {
-            self.nfa_reps.push(Vec::new());
+        self.ensure_capacity(start_id as usize + 1);
+        if self.nfa_reps[start_id as usize].is_empty() {
+            self.max_bufpos[start_id as usize] = max_bufpos_from_nfa(&init_closed);
+            self.nfa_reps[start_id as usize] = init_closed;
         }
-        self.nfa_reps[start_id as usize] = init_closed;
         self.start_ids = vec![start_id];
+        self.prev_target = self.target.clone();
+    }
 
-        // BFS — single-representative per position-key set.
-        //
-        // Position-key quotienting stores ONE representative NFA set per DFA
-        // state.  Classification (Q/R/preimage) is correct for the
-        // representative.  Arcs are approximate: different representatives
-        // may have different transitions.  Sentinel replay uses run_nfa()
-        // which simulates the NFA directly, avoiding the DFA arc limitation.
-        let mut worklist: VecDeque<u32> = VecDeque::new();
-        let mut visited: FxHashSet<u32> = FxHashSet::default();
-        worklist.push_back(start_id);
-        visited.insert(start_id);
+    fn ensure_capacity(&mut self, needed: usize) {
+        if needed > self.nfa_reps.len() {
+            self.nfa_reps.resize_with(needed, Vec::new);
+            self.arcs_from.resize_with(needed, Vec::new);
+            self.classify_results.resize_with(needed, || TokenClassify {
+                quotient_sym: None,
+                remainder_syms: Vec::new(),
+                is_preimage: false,
+                has_truncated: false,
+                trunc_output_syms: Vec::new(),
+            });
+            self.arcs_computed.resize(needed, false);
+            self.classify_computed.resize(needed, false);
+            self.max_bufpos.resize(needed, 0);
+            self.reverse_arcs.resize_with(needed, Vec::new);
+        }
+    }
 
-        // Universality filters for non-AIU FSTs
-        let mut univ_filters: FxHashMap<u16, PeekabooUniversalityFilter> = FxHashMap::default();
-        // We need a PowersetArena for universality sub-BFS
-        let mut univ_arena = PowersetArena::new();
+    pub fn ensure_classify(&mut self, fst: &Fst, sid: u32) {
+        let sid_usize = sid as usize;
+        if sid_usize < self.classify_computed.len() && self.classify_computed[sid_usize] {
+            return;
+        }
+        self.ensure_capacity(sid_usize + 1);
 
-        while let Some(sid) = worklist.pop_front() {
-            let nfa_set = self.nfa_reps[sid as usize].clone();
+        let nfa_set = self.nfa_reps[sid_usize].clone();
+        let step_n = self.step_n;
 
-            // --- Classify this state ---
-            let mut relevant_symbols: Vec<u16> = Vec::new();
-            let mut final_symbols: FxHashSet<u16> = FxHashSet::default();
-            let mut state_has_truncated = false;
-            let mut state_is_preimage = false;
-            let mut trunc_output_syms: Vec<u16> = Vec::new();
-            let mut seen_relevant: FxHashSet<u16> = FxHashSet::default();
-            let mut seen_trunc: FxHashSet<u16> = FxHashSet::default();
+        let mut relevant_symbols: Vec<u16> = Vec::new();
+        let mut final_symbols: FxHashSet<u16> = FxHashSet::default();
+        let mut state_has_truncated = false;
+        let mut state_is_preimage = false;
+        let mut trunc_output_syms: Vec<u16> = Vec::new();
+        let mut seen_relevant: FxHashSet<u16> = FxHashSet::default();
+        let mut seen_trunc: FxHashSet<u16> = FxHashSet::default();
 
-            // Pre-compute non-canonical preimage extra_sym
-            let non_canonical_extra: Option<u16> = if step_n > 0 {
-                let last_target_sym = self.target[(step_n - 1) as usize];
-                self.sym_to_idx.get(&last_target_sym).copied()
-            } else {
-                None
-            };
+        let non_canonical_extra: Option<u16> = if step_n > 0 {
+            let last_target_sym = self.target[(step_n - 1) as usize];
+            self.sym_to_idx.get(&last_target_sym).copied()
+        } else {
+            None
+        };
 
-            for &packed in &nfa_set {
-                let (fst_state, buf_len, extra_sym, truncated) = unpack_peekaboo(packed);
+        for &packed in &nfa_set {
+            let (fst_state, buf_len, extra_sym, truncated) = unpack_peekaboo(packed);
 
-                // Preimage check
-                if buf_len == step_n && fst.is_final[fst_state as usize] {
-                    if extra_sym == NO_EXTRA {
+            if buf_len == step_n && fst.is_final[fst_state as usize] {
+                if extra_sym == NO_EXTRA {
+                    state_is_preimage = true;
+                } else if let Some(expected) = non_canonical_extra {
+                    if extra_sym == expected {
                         state_is_preimage = true;
-                    } else if let Some(expected) = non_canonical_extra {
-                        if extra_sym == expected {
+                    }
+                }
+            }
+
+            if truncated {
+                state_has_truncated = true;
+                if extra_sym != NO_EXTRA {
+                    let prefix_len = buf_len - 1;
+                    if prefix_len >= step_n && seen_trunc.insert(extra_sym) {
+                        trunc_output_syms.push(extra_sym);
+                    }
+                }
+            }
+
+            if extra_sym != NO_EXTRA {
+                let prefix_len = buf_len - 1;
+                if prefix_len >= step_n {
+                    if seen_relevant.insert(extra_sym) {
+                        relevant_symbols.push(extra_sym);
+                    }
+                    if fst.is_final[fst_state as usize] && buf_len == step_n + 1 {
+                        final_symbols.insert(extra_sym);
+                    }
+                } else if (prefix_len as usize) < self.target.len() {
+                    if let Some(&expected_idx) =
+                        self.sym_to_idx.get(&self.target[prefix_len as usize])
+                    {
+                        if extra_sym == expected_idx
+                            && buf_len == step_n
+                            && fst.is_final[fst_state as usize]
+                        {
                             state_is_preimage = true;
                         }
                     }
                 }
-
-                if truncated {
-                    state_has_truncated = true;
-                    if extra_sym != NO_EXTRA {
-                        let prefix_len = buf_len - 1;
-                        if prefix_len >= step_n && seen_trunc.insert(extra_sym) {
-                            trunc_output_syms.push(extra_sym);
-                        }
-                    }
-                }
-
-                if extra_sym != NO_EXTRA {
-                    let prefix_len = buf_len - 1;
-                    if prefix_len >= step_n {
-                        if seen_relevant.insert(extra_sym) {
-                            relevant_symbols.push(extra_sym);
-                        }
-                        if fst.is_final[fst_state as usize]
-                            && buf_len == step_n + 1
-                        {
-                            final_symbols.insert(extra_sym);
-                        }
-                    } else if (prefix_len as usize) < self.target.len() {
-                        if let Some(&expected_idx) = self.sym_to_idx.get(&self.target[prefix_len as usize]) {
-                            if extra_sym == expected_idx
-                                && buf_len == step_n
-                                && fst.is_final[fst_state as usize]
-                            {
-                                state_is_preimage = true;
-                            }
-                        }
-                    }
-                }
             }
+        }
 
-            // Check universality
-            let mut quotient_sym: Option<u16> = None;
-            let mut remainder_syms: Vec<u16> = Vec::new();
+        let mut quotient_sym: Option<u16> = None;
+        let mut remainder_syms: Vec<u16> = Vec::new();
 
+        if self.all_input_universal {
             for &y_idx in &relevant_symbols {
-                if self.all_input_universal {
-                    // AIU fast path: finality implies universality
-                    if final_symbols.contains(&y_idx) {
-                        if quotient_sym.is_some() {
-                            panic!(
-                                "State is universal for multiple symbols — FST is likely non-functional"
-                            );
-                        }
-                        quotient_sym = Some(y_idx);
-                    }
-                } else {
-                    // Non-AIU: full universality check
-                    if !univ_filters.contains_key(&y_idx) {
-                        univ_filters.insert(
-                            y_idx,
-                            PeekabooUniversalityFilter::new(
-                                fst, step_n, y_idx, &self.ip_universal_states,
-                            ),
+                if final_symbols.contains(&y_idx) {
+                    if quotient_sym.is_some() {
+                        panic!(
+                            "State is universal for multiple symbols — FST is likely non-functional"
                         );
                     }
-
-                    let filter = univ_filters.get_mut(&y_idx).unwrap();
-                    let is_univ = filter.is_universal(
-                        &nfa_set, y_idx, &nfa,
-                        &mut univ_arena, &mut self.eps_cache,
-                        self.num_source_symbols, step_n,
+                    quotient_sym = Some(y_idx);
+                }
+            }
+            for &y_idx in &relevant_symbols {
+                if final_symbols.contains(&y_idx) && quotient_sym != Some(y_idx) {
+                    remainder_syms.push(y_idx);
+                }
+            }
+        } else {
+            for &y_idx in &relevant_symbols {
+                if !self.univ_filters.contains_key(&y_idx) {
+                    self.univ_filters.insert(
+                        y_idx,
+                        PeekabooUniversalityFilter::new(
+                            fst,
+                            step_n,
+                            y_idx,
+                            &self.ip_universal_states,
+                        ),
                     );
-
-                    if is_univ {
-                        if quotient_sym.is_some() {
-                            panic!(
-                                "State is universal for multiple symbols — FST is likely non-functional"
-                            );
-                        }
-                        quotient_sym = Some(y_idx);
-                    } else if final_symbols.contains(&y_idx) {
-                        remainder_syms.push(y_idx);
-                    }
                 }
             }
 
-            // For AIU: non-quotient final symbols go to remainder
-            if self.all_input_universal {
-                for &y_idx in &relevant_symbols {
-                    if final_symbols.contains(&y_idx) && quotient_sym != Some(y_idx) {
-                        remainder_syms.push(y_idx);
+            let mut univ_filters = std::mem::take(&mut self.univ_filters);
+            let sym_to_idx = self.sym_to_idx.clone();
+            let target = self.target.clone();
+            let nfa = PeekabooNFAMapped::new(fst, &target, step_n, &sym_to_idx);
+
+            for &y_idx in &relevant_symbols {
+                let filter = univ_filters.get_mut(&y_idx).unwrap();
+                let is_univ = filter.is_universal(
+                    &nfa_set,
+                    y_idx,
+                    &nfa,
+                    &mut self.univ_arena,
+                    &mut self.eps_cache,
+                    self.num_source_symbols,
+                    step_n,
+                );
+
+                if is_univ {
+                    if quotient_sym.is_some() {
+                        panic!(
+                            "State is universal for multiple symbols — FST is likely non-functional"
+                        );
                     }
+                    quotient_sym = Some(y_idx);
+                } else if final_symbols.contains(&y_idx) {
+                    remainder_syms.push(y_idx);
                 }
             }
 
-            // Store classification
-            while self.classify_results.len() <= sid as usize {
-                self.classify_results.push(TokenClassify {
-                    quotient_sym: None,
-                    remainder_syms: Vec::new(),
-                    is_preimage: false,
-                    has_truncated: false,
-                    trunc_output_syms: Vec::new(),
-                });
-            }
-            self.classify_results[sid as usize] = TokenClassify {
-                quotient_sym,
-                remainder_syms,
-                is_preimage: state_is_preimage,
-                has_truncated: state_has_truncated,
-                trunc_output_syms,
-            };
+            self.univ_filters = univ_filters;
+        }
 
-            // If Q-absorbed, skip arc expansion (search never expands Q states)
-            while self.arcs_from.len() <= sid as usize {
-                self.arcs_from.push(Vec::new());
-            }
-            if quotient_sym.is_some() {
-                self.arcs_from[sid as usize] = Vec::new();
+        self.classify_results[sid_usize] = TokenClassify {
+            quotient_sym,
+            remainder_syms,
+            is_preimage: state_is_preimage,
+            has_truncated: state_has_truncated,
+            trunc_output_syms,
+        };
+        self.classify_computed[sid_usize] = true;
+    }
+
+    pub fn ensure_arcs(&mut self, fst: &Fst, sid: u32) {
+        let sid_usize = sid as usize;
+        if sid_usize < self.arcs_computed.len() && self.arcs_computed[sid_usize] {
+            return;
+        }
+        self.ensure_capacity(sid_usize + 1);
+
+        let nfa_set = self.nfa_reps[sid_usize].clone();
+        let sym_to_idx = self.sym_to_idx.clone();
+        let target = self.target.clone();
+        let step_n = self.step_n;
+
+        let nfa = PeekabooNFAMapped::new(fst, &target, step_n, &sym_to_idx);
+        let all_arcs = nfa.compute_all_arcs(&nfa_set, &mut self.eps_cache);
+
+        let mut arcs_list: Vec<(u32, u32)> = Vec::with_capacity(all_arcs.len());
+        for (x, successor) in all_arcs {
+            let dest_keys = extract_pos_keys(&successor);
+            if dest_keys.is_empty() {
                 continue;
             }
-
-            // --- Expand: compute NFA arcs per input symbol ---
-            let all_arcs = nfa.compute_all_arcs(&nfa_set, &mut self.eps_cache);
-
-            let mut arcs_list: Vec<(u32, u32)> = Vec::with_capacity(all_arcs.len());
-            let mut closure_cache: FxHashMap<Vec<u32>, u32> = FxHashMap::default();
-
-            for (x, successor) in all_arcs {
-                let dest_keys = extract_pos_keys(&successor);
-                if dest_keys.is_empty() {
-                    continue;
-                }
-
-                let dest_id = if let Some(&existing_id) = closure_cache.get(&dest_keys) {
-                    existing_id
-                } else {
-                    let id = self.arena.intern(dest_keys.clone());
-                    while self.nfa_reps.len() <= id as usize {
-                        self.nfa_reps.push(Vec::new());
-                    }
-                    if self.nfa_reps[id as usize].is_empty() {
-                        self.nfa_reps[id as usize] = successor;
-                    }
-                    closure_cache.insert(dest_keys, id);
-                    id
-                };
-
-                arcs_list.push((x, dest_id));
-
-                if visited.insert(dest_id) {
-                    worklist.push_back(dest_id);
-                }
+            let dest_id = self.arena.intern(dest_keys);
+            self.ensure_capacity(dest_id as usize + 1);
+            if self.nfa_reps[dest_id as usize].is_empty() {
+                self.max_bufpos[dest_id as usize] = max_bufpos_from_nfa(&successor);
+                self.nfa_reps[dest_id as usize] = successor;
             }
-
-            self.arcs_from[sid as usize] = arcs_list;
+            arcs_list.push((x, dest_id));
         }
+
+        self.arcs_from[sid_usize] = arcs_list;
+
+        for &(_label, dest_id) in &self.arcs_from[sid_usize] {
+            self.reverse_arcs[dest_id as usize].push(sid);
+        }
+
+        self.arcs_computed[sid_usize] = true;
+    }
+
+    /// Compute the DFA destination for a single input symbol from a state.
+    /// Lazily computes all arcs from the state on first access.
+    pub fn single_arc(&mut self, fst: &Fst, sid: u32, x: u32) -> Option<u32> {
+        self.ensure_arcs(fst, sid);
+        for &(lbl, dst) in &self.arcs_from[sid as usize] {
+            if lbl == x {
+                return Some(dst);
+            }
+        }
+        None
     }
 
     pub fn start_ids(&self) -> &[u32] {
@@ -430,10 +554,28 @@ impl TokenPeekabooDFA {
         &self.classify_results[sid as usize]
     }
 
-    /// Run a source path by simulating the peekaboo NFA directly, then
-    /// look up the resulting position-key set in the arena.  This avoids the
-    /// DFA's single-representative arc limitation and always finds the
-    /// correct DFA state for sentinel replay.
+    pub fn run(&mut self, fst: &Fst, source_path: &[u32]) -> Option<u32> {
+        if self.start_ids.is_empty() {
+            return None;
+        }
+        let mut state = self.start_ids[0];
+        for &x in source_path {
+            self.ensure_arcs(fst, state);
+            let mut found = false;
+            for &(lbl, dst) in &self.arcs_from[state as usize] {
+                if lbl == x {
+                    state = dst;
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return None;
+            }
+        }
+        Some(state)
+    }
+
     pub fn run_nfa(&mut self, fst: &Fst, source_path: &[u32]) -> Option<u32> {
         if self.start_ids.is_empty() {
             return None;
@@ -441,16 +583,12 @@ impl TokenPeekabooDFA {
         let sym_to_idx = self.sym_to_idx.clone();
         let nfa = PeekabooNFAMapped::new(fst, &self.target, self.step_n, &sym_to_idx);
 
-        // Start from the initial NFA set
         let raw_starts = nfa.start_states();
         let mut current = nfa.eps_closure_set(&raw_starts, &mut self.eps_cache);
 
-        // Follow each source symbol through the NFA
         for &x in source_path {
             let mut next_raw: Vec<u64> = Vec::new();
             for &packed in &current {
-                // Use the NFA's arcs() to get all transitions (handles buffer
-                // management, truncation, etc. correctly)
                 for (label, dest) in nfa.arcs(packed) {
                     if label == x {
                         next_raw.push(dest);
@@ -463,40 +601,17 @@ impl TokenPeekabooDFA {
             current = nfa.eps_closure_set(&next_raw, &mut self.eps_cache);
         }
 
-        // Look up position-key set in the arena
         let keys = extract_pos_keys(&current);
         if keys.is_empty() {
             return None;
         }
 
-        // Check arena for this exact key set
-        if keys.len() == 1 {
-            self.arena.single_map.get(&keys[0]).copied()
-        } else {
-            self.arena.map.get(&keys).copied()
+        let id = self.arena.intern(keys);
+        self.ensure_capacity(id as usize + 1);
+        if self.nfa_reps[id as usize].is_empty() {
+            self.max_bufpos[id as usize] = max_bufpos_from_nfa(&current);
+            self.nfa_reps[id as usize] = current;
         }
-    }
-
-    /// Run a source path from start using DFA arcs. Falls back to None if
-    /// an arc is missing (approximate — single-representative DFA).
-    pub fn run(&self, source_path: &[u32]) -> Option<u32> {
-        if self.start_ids.is_empty() {
-            return None;
-        }
-        let mut state = self.start_ids[0];
-        for &x in source_path {
-            let mut found = false;
-            for &(lbl, dst) in self.arcs(state) {
-                if lbl == x {
-                    state = dst;
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                return None;
-            }
-        }
-        Some(state)
+        Some(id)
     }
 }

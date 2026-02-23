@@ -57,3 +57,51 @@
 - [ ] Handle tokenizers with multiple byte representations for the same token
   (line 185)
 - [ ] Implement immutable-tuple KV cache fix (line 246)
+
+### peekaboo.rs — FactoredArena
+
+The `FactoredArena` replaces `PowersetArena` in `DirtyPeekaboo` and
+`LazyPeekabooDFA`.  It stores boundary DFA states (off-target NFA elements) as
+`(FST_closure, params_list)` groups instead of the full cartesian product,
+reducing per-state memory from O(|V| × |closure|) to O(|closure| + |V|).
+
+**Benchmark results** (synthetic BPE FSTs, 5 decomposition steps on
+"The quick brown", 2026-02-22):
+
+```
+Memory (peak RSS after 5 steps):
+
+  V       OLD         NEW       Reduction
+  100     448 MB      448 MB      0%
+  250     462 MB      460 MB      0%
+  500     485 MB      478 MB      1%
+ 1000     551 MB      516 MB      6%
+ 2000     813 MB      626 MB     23%
+ 5000    2324 MB     1334 MB     43%
+
+Wall-clock (avg ms/step):
+
+  V       OLD         NEW       Change
+  100     0.4         0.8       +100% (noise at <1ms)
+  250     8.7         8.9         +2%
+  500    26.7        22.5        -16%
+ 1000   124         119          -4%
+ 2000   826         972         +18%
+ 5000  3428        4241         +24%
+```
+
+Memory wins are significant at V >= 2000 (23-43% reduction).  Wall-clock is
+roughly neutral: slightly faster at V=500-1000 but ~20% slower at V=2000-5000
+due to `normalize_for_step` cloning, fingerprint-based interning overhead, and
+more complex arc computation.
+
+- [ ] **Profiling**: The BFS/universality check dominates wall-clock at large V,
+  not state representation.  Profile `compute_all_arcs_factored` vs
+  `bfs_universal` to identify the actual bottleneck.
+- [ ] **Avoid `normalize_for_step` cloning**: Instead of cloning + normalizing
+  on every access, store a `max_bufpos` in the arena per state and lazily
+  normalize only when `max_bufpos <= step_n`.  Or normalize in-place in the
+  arena (mutation) when step_n changes.
+- [ ] **Fingerprint collisions**: `FactoredArena` uses fingerprint hashing +
+  equality check.  For large arenas, profile whether fingerprint collision
+  chains become a bottleneck.

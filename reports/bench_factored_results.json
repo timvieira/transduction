@@ -1,0 +1,97 @@
+{
+  "label": "factored",
+  "fst_source": "gpt2_bpe",
+  "config": {
+    "n_steps": 8,
+    "n_runs": 3,
+    "target_text": "The quick brown fox",
+    "memory_limit_gb": 8
+  },
+  "baseline_rss_mb": 742,
+  "rows": [
+    {
+      "vocab_size": 100,
+      "fst_states": 101,
+      "avg_ms": null,
+      "runs_ms": [],
+      "peak_rss_mb": 742
+    },
+    {
+      "vocab_size": 250,
+      "fst_states": 251,
+      "avg_ms": 43.2,
+      "runs_ms": [
+        44.0,
+        43.2,
+        39.1
+      ],
+      "peak_rss_mb": 742
+    },
+    {
+      "vocab_size": 500,
+      "fst_states": 535,
+      "avg_ms": 105.1,
+      "runs_ms": [
+        108.6,
+        105.1,
+        97.7
+      ],
+      "peak_rss_mb": 742
+    },
+    {
+      "vocab_size": 1000,
+      "fst_states": 1254,
+      "avg_ms": 166.9,
+      "runs_ms": [
+        166.8,
+        166.9,
+        170.5
+      ],
+      "peak_rss_mb": 751
+    },
+    {
+      "vocab_size": 2000,
+      "fst_states": 2966,
+      "avg_ms": 568.9,
+      "runs_ms": [
+        568.9,
+        540.6,
+        826.4
+      ],
+      "peak_rss_mb": 808
+    },
+    {
+      "vocab_size": 5000,
+      "fst_states": 8673,
+      "avg_ms": 3843.0,
+      "runs_ms": [
+        3971.4,
+        3843.0,
+        3590.5
+      ],
+      "peak_rss_mb": 1323
+    },
+    {
+      "vocab_size": 7000,
+      "fst_states": 12389,
+      "avg_ms": 5932.3,
+      "runs_ms": [
+        7466.7,
+        5494.3,
+        5932.3
+      ],
+      "peak_rss_mb": 1771
+    },
+    {
+      "vocab_size": 10000,
+      "fst_states": 18189,
+      "avg_ms": 10140.7,
+      "runs_ms": [
+        10140.7,
+        9517.3,
+        10436.0
+      ],
+      "peak_rss_mb": 2436
+    }
+  ]
+}

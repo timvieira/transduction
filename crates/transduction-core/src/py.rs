@@ -503,8 +503,9 @@ pub struct RustDirtyPeekabooDecomp {
 #[pymethods]
 impl RustDirtyPeekabooDecomp {
     #[new]
-    fn new(py: Python<'_>, fst: Py<RustFst>) -> Self {
-        let persistent = peekaboo::DirtyPeekaboo::new(&fst.borrow(py).inner);
+    #[pyo3(signature = (fst, use_factored=true))]
+    fn new(py: Python<'_>, fst: Py<RustFst>, use_factored: bool) -> Self {
+        let persistent = peekaboo::DirtyPeekaboo::new(&fst.borrow(py).inner, use_factored);
         RustDirtyPeekabooDecomp { fst, persistent }
     }
 
@@ -585,10 +586,7 @@ impl RustDirtyPeekabooDecomp {
     /// Decode a DFA state ID to its NFA constituents.
     /// Returns list of (fst_state, buf_len, extra_sym_idx, truncated) tuples.
     fn decode_state(&self, state_id: u32) -> Vec<(u32, u16, u16, bool)> {
-        self.persistent.arena_sets(state_id)
-            .iter()
-            .map(|&packed| peekaboo::unpack_peekaboo(packed))
-            .collect()
+        self.persistent.arena_sets(state_id).iter_all_unpacked()
     }
 
     /// Return the idx→symbol mapping for decoding extra_sym_idx values.
@@ -720,13 +718,15 @@ pub struct RustLazyPeekabooDFA {
     idx_to_sym: Vec<u32>,
     ip_universal_states: Vec<bool>,
     num_source_symbols: usize,
+    use_factored: bool,
     lazy_dfa: Option<peekaboo::LazyPeekabooDFA>,
 }
 
 #[pymethods]
 impl RustLazyPeekabooDFA {
     #[new]
-    fn new(py: Python<'_>, fst: Py<RustFst>) -> Self {
+    #[pyo3(signature = (fst, use_factored=true))]
+    fn new(py: Python<'_>, fst: Py<RustFst>, use_factored: bool) -> Self {
         use rustc_hash::{FxHashMap, FxHashSet};
         use crate::fst::EPSILON;
 
@@ -765,6 +765,7 @@ impl RustLazyPeekabooDFA {
             idx_to_sym,
             ip_universal_states,
             num_source_symbols,
+            use_factored,
             lazy_dfa: None,
         }
     }
@@ -779,6 +780,7 @@ impl RustLazyPeekabooDFA {
                 self.idx_to_sym.clone(),
                 self.ip_universal_states.clone(),
                 self.num_source_symbols,
+                self.use_factored,
             ));
         }
         self.lazy_dfa.as_mut().unwrap().new_step(inner, target);
@@ -800,6 +802,15 @@ impl RustLazyPeekabooDFA {
     fn run(&mut self, py: Python<'_>, source_path: Vec<u32>) -> Option<u32> {
         let inner = &self.fst.borrow(py).inner;
         self.lazy_dfa.as_mut().expect("call new_step first").run(inner, &source_path)
+    }
+
+    /// Compute the DFA destination for a single input symbol from a state.
+    /// Returns the dest state ID or None if no arc for that symbol.
+    /// If arcs are already cached, this is a lookup; otherwise computes only
+    /// the requested arc without materializing all |V| arcs.
+    fn single_arc(&mut self, py: Python<'_>, sid: u32, x: u32) -> Option<u32> {
+        let inner = &self.fst.borrow(py).inner;
+        self.lazy_dfa.as_mut().expect("call new_step first").single_arc(inner, sid, x)
     }
 
     /// Lazily compute and return classification of a DFA state.
@@ -839,10 +850,7 @@ impl RustLazyPeekabooDFA {
     /// Returns list of (fst_state, buf_len, extra_sym_idx, truncated) tuples.
     fn decode_state(&self, state_id: u32) -> Vec<(u32, u16, u16, bool)> {
         let dfa = self.lazy_dfa.as_ref().expect("call new_step first");
-        dfa.arena_sets(state_id)
-            .iter()
-            .map(|&packed| peekaboo::unpack_peekaboo(packed))
-            .collect()
+        dfa.arena_sets(state_id).iter_all_unpacked()
     }
 
     /// Return the idx→symbol mapping for decoding extra_sym_idx values.
@@ -860,8 +868,9 @@ impl RustLazyPeekabooDFA {
 ///
 /// Same interface as `RustLazyPeekabooDFA` but uses position-key quotienting
 /// for much smaller DFAs on token-decomposable FSTs (~45 states for BPE vs
-/// ~7,000 with the generic approach).  The DFA is built eagerly in `new_step()`
-/// since it's small.
+/// ~7,000 with the generic approach).  The DFA is built lazily: `new_step()`
+/// only computes the start state, arcs and classification are computed on
+/// demand.
 #[pyclass(unsendable)]
 pub struct RustTokenPeekabooDFA {
     fst: Py<RustFst>,
@@ -876,8 +885,8 @@ impl RustTokenPeekabooDFA {
         RustTokenPeekabooDFA { fst, inner }
     }
 
-    /// Reset the DFA for the given target prefix.  Builds the entire
-    /// quotiented DFA eagerly (typically ~45 states for BPE).
+    /// Reset the DFA for the given target prefix.  Only computes the start
+    /// state; arcs and classification are computed lazily on demand.
     fn new_step(&mut self, py: Python<'_>, target: Vec<u32>) {
         let inner_fst = &self.fst.borrow(py).inner;
         self.inner.new_step(inner_fst, target);
@@ -889,18 +898,30 @@ impl RustTokenPeekabooDFA {
     }
 
     /// Return arcs from a DFA state: Vec<(input_label_u32, dest_sid)>.
-    fn arcs(&self, sid: u32) -> Vec<(u32, u32)> {
+    /// Lazily computes arcs on first access.
+    fn arcs(&mut self, py: Python<'_>, sid: u32) -> Vec<(u32, u32)> {
+        let inner_fst = &self.fst.borrow(py).inner;
+        self.inner.ensure_arcs(inner_fst, sid);
         self.inner.arcs(sid).to_vec()
     }
 
-    /// Run a source path by simulating the NFA directly.
+    /// Run a source path using DFA arcs (lazily computed).
     fn run(&mut self, py: Python<'_>, source_path: Vec<u32>) -> Option<u32> {
         let inner_fst = &self.fst.borrow(py).inner;
-        self.inner.run_nfa(inner_fst, &source_path)
+        self.inner.run(inner_fst, &source_path)
+    }
+
+    /// Compute the DFA destination for a single input symbol from a state.
+    fn single_arc(&mut self, py: Python<'_>, sid: u32, x: u32) -> Option<u32> {
+        let inner_fst = &self.fst.borrow(py).inner;
+        self.inner.single_arc(inner_fst, sid, x)
     }
 
     /// Classify a DFA state: quotient/remainder/preimage/truncated.
-    fn classify(&self, sid: u32) -> PeekabooClassifyResult {
+    /// Lazily computes classification on first access.
+    fn classify(&mut self, py: Python<'_>, sid: u32) -> PeekabooClassifyResult {
+        let inner_fst = &self.fst.borrow(py).inner;
+        self.inner.ensure_classify(inner_fst, sid);
         let cls = self.inner.classify(sid);
         let idx_to_sym = self.inner.idx_to_sym();
         PeekabooClassifyResult {
@@ -967,6 +988,12 @@ impl RustLazyPrecoverDFA {
     fn run(&mut self, py: Python<'_>, source_path: Vec<u32>) -> Option<u32> {
         let fst = &self.fst.borrow(py).inner;
         self.inner.run(fst, &source_path)
+    }
+
+    /// Compute the DFA destination for a single input symbol from a state.
+    fn single_arc(&mut self, py: Python<'_>, sid: u32, x: u32) -> Option<u32> {
+        let fst = &self.fst.borrow(py).inner;
+        self.inner.single_arc(fst, sid, x)
     }
 
     /// Total number of interned DFA states so far.

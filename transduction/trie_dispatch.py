@@ -496,6 +496,13 @@ class PythonLazyPeekabooDFAHelper:
         self._arcs_cache[sid] = arcs
         return arcs
 
+    def single_arc(self, sid, x_u32):
+        """Compute the DFA destination for a single input symbol."""
+        for lbl, dest in self.arcs(sid):
+            if lbl == x_u32:
+                return dest
+        return None
+
     def run(self, source_path):
         # source_path is list of u32; map back to symbols.
         path = [self._inv_sym[x] for x in source_path]

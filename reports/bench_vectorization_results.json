@@ -1,0 +1,139 @@
+{
+  "description": "BPE vocab scaling benchmark for FusedTransducedLM",
+  "config": {
+    "n_runs": 3,
+    "n_target_bytes": 8,
+    "scale_timeout_s": 300,
+    "text": "The quick brown fox",
+    "memory_limit_gb": 12
+  },
+  "baseline_rss_mb": 744,
+  "rows": [
+    {
+      "vocab_size": 297,
+      "fst_states": 387,
+      "n_target_bytes": 8,
+      "FusedLM_rust_avg_ms": 7,
+      "FusedLM_rust_runs_ms": [
+        8,
+        7,
+        7
+      ],
+      "peak_rss_mb": 744,
+      "FusedLM_rust_token_avg_ms": null,
+      "FusedLM_rust_token_runs_ms": []
+    },
+    {
+      "vocab_size": 529,
+      "fst_states": 623,
+      "n_target_bytes": 8,
+      "FusedLM_rust_avg_ms": 12,
+      "FusedLM_rust_runs_ms": [
+        12,
+        12,
+        12
+      ],
+      "peak_rss_mb": 752,
+      "FusedLM_rust_token_avg_ms": null,
+      "FusedLM_rust_token_runs_ms": []
+    },
+    {
+      "vocab_size": 1023,
+      "fst_states": 1313,
+      "n_target_bytes": 8,
+      "FusedLM_rust_avg_ms": 26,
+      "FusedLM_rust_runs_ms": [
+        26,
+        26,
+        26
+      ],
+      "peak_rss_mb": 786,
+      "FusedLM_rust_token_avg_ms": null,
+      "FusedLM_rust_token_runs_ms": []
+    },
+    {
+      "vocab_size": 2020,
+      "fst_states": 3010,
+      "n_target_bytes": 8,
+      "FusedLM_rust_avg_ms": 58,
+      "FusedLM_rust_runs_ms": [
+        59,
+        57,
+        58
+      ],
+      "peak_rss_mb": 877,
+      "FusedLM_rust_token_avg_ms": null,
+      "FusedLM_rust_token_runs_ms": []
+    },
+    {
+      "vocab_size": 5011,
+      "fst_states": 8694,
+      "n_target_bytes": 8,
+      "FusedLM_rust_avg_ms": 204,
+      "FusedLM_rust_runs_ms": [
+        204,
+        204,
+        216
+      ],
+      "peak_rss_mb": 1425,
+      "FusedLM_rust_token_avg_ms": null,
+      "FusedLM_rust_token_runs_ms": []
+    },
+    {
+      "vocab_size": 7010,
+      "fst_states": 12408,
+      "n_target_bytes": 8,
+      "FusedLM_rust_avg_ms": 140,
+      "FusedLM_rust_runs_ms": [
+        153,
+        140,
+        139
+      ],
+      "peak_rss_mb": 1882,
+      "FusedLM_rust_token_avg_ms": null,
+      "FusedLM_rust_token_runs_ms": []
+    },
+    {
+      "vocab_size": 10008,
+      "fst_states": 18203,
+      "n_target_bytes": 8,
+      "FusedLM_rust_avg_ms": 405,
+      "FusedLM_rust_runs_ms": [
+        405,
+        395,
+        418
+      ],
+      "peak_rss_mb": 3042,
+      "FusedLM_rust_token_avg_ms": null,
+      "FusedLM_rust_token_runs_ms": []
+    },
+    {
+      "vocab_size": 12008,
+      "fst_states": 22172,
+      "n_target_bytes": 8,
+      "FusedLM_rust_avg_ms": 253,
+      "FusedLM_rust_runs_ms": [
+        253,
+        253,
+        264
+      ],
+      "peak_rss_mb": 4126,
+      "FusedLM_rust_token_avg_ms": null,
+      "FusedLM_rust_token_runs_ms": []
+    },
+    {
+      "vocab_size": 15008,
+      "fst_states": 28005,
+      "n_target_bytes": 8,
+      "FusedLM_rust_avg_ms": 345,
+      "FusedLM_rust_runs_ms": [
+        341,
+        351,
+        345
+      ],
+      "peak_rss_mb": 4867,
+      "FusedLM_rust_token_avg_ms": null,
+      "FusedLM_rust_token_runs_ms": []
+    }
+  ]
+}
