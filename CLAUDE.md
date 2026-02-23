@@ -55,6 +55,7 @@ Self-contained language model interface for use with enumeration/sampling:
 - `transduction/lm/transduced.py` — `TransducedLM`, `TransducedState` (pushforward of an inner LM through an FST; defaults to Rust backend)
 - `transduction/lm/fused_transduced.py` — `FusedTransducedLM`, `FusedTransducedState` (single-pass interleaved decomposition + LM search; `helper=` for pluggable backends: `"rust"`, `"python"`, `"token"`)
 - `transduction/lm/reference_transduced.py` — `ReferenceTransducedLM` (ground-truth transduced LM via Precover; enumerates Q/R languages exactly; finite-relation FSTs only)
+- `transduction/lm/character_beam.py` — `CharacterBeam`, `TokenCharacterTrie`, `TrieState`, `CharacterBeamState` (character-level beam search exploiting SPM property; fast for BPE; optional `numba` JIT for trie mass updates)
 - `transduction/lm/pynini_transduced.py` — `PyniniTransducedLM` (pynini-backed transduced LM with particle-based inference)
 
 ### Rust Acceleration (`crates/transduction-core/`)
