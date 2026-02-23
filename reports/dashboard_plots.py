@@ -24,6 +24,7 @@ C_RUST_TOKEN = '#E07B54'
 C_TRANSDUCED = '#6BBF6B'
 C_PTB = '#D4A843'
 C_EXTRAPOLATE = '#999999'
+C_CHARBEAM = '#9B59B6'   # character beam (purple)
 C_FLAT = '#B85B5B'       # flat arena (old)
 C_FACTORED = '#5BB88D'   # factored arena (new)
 
@@ -86,6 +87,7 @@ fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
 method_styles = {
     'FusedLM_rust':       ('o-', C_FUSED, 2.5, 8, 'helper="rust"'),
     'FusedLM_rust_token': ('s-', C_RUST_TOKEN, 2, 7, 'helper="rust_token"'),
+    'CharacterBeam':      ('D-', C_CHARBEAM, 2, 7, 'CharacterBeam (K=10)'),
 }
 for key in method_keys:
     vs, ms = method_data[key]

@@ -5,9 +5,9 @@ marginalizing over all BPE tokenizations.  CharacterBeam exploits the
 strict-prefix-monotone (SPM) property for efficiency; FusedTransducedLM
 is a general-purpose fused decomposition + LM search.
 
-We verify they agree by wrapping a CharNgramLM (token-level) in a mock
-TokenizedLLM so CharacterBeam can consume it, then comparing their
-logp_next distributions at each byte position.
+We verify they agree by passing a CharNgramLM (token-level) and a vocab
+dict directly to CharacterBeam, then comparing their logp_next
+distributions at each byte position.
 """
 
 import numpy as np
@@ -15,62 +15,11 @@ import pytest
 
 from transduction.fst import FST
 from transduction.fsa import EPSILON
-from transduction.lm.ngram import CharNgramLM, CharNgramState
+from transduction.lm.ngram import CharNgramLM
 from transduction.lm.fused_transduced import FusedTransducedLM
 from transduction.lm.character_beam import CharacterBeam
-from transduction.lm.statelm import HfTokenizerVocab, LazyProb, flatten
+from transduction.lm.statelm import HfTokenizerVocab
 from transduction.util import LogDistr
-
-
-# ---------------------------------------------------------------------------
-# Mock classes: wrap CharNgramLM in the TokenizedLLM/StateLM interface
-# that CharacterBeam expects.
-# ---------------------------------------------------------------------------
-
-class MockStateLM:
-    """Wraps a CharNgramState to present the StateLM interface."""
-
-    def __init__(self, llm: 'MockTokenizedLLM', inner: CharNgramState,
-                 logp: float, context: tuple) -> None:
-        self._llm = llm
-        self._inner = inner
-        self.logp = logp
-        self.context = context
-        self.eos = llm.eos
-
-    def __rshift__(self, token_bytes: bytes) -> 'MockStateLM':
-        token_id = self._llm._encode[token_bytes]
-        next_inner = self._inner >> token_id
-        return MockStateLM(
-            self._llm, next_inner,
-            logp=self.logp + self._inner.logp_next[token_id],
-            context=(self.context, token_bytes),
-        )
-
-    @property
-    def logp_next(self) -> LazyProb:
-        """Build a LazyProb indexed by token_id from the inner CharNgramState."""
-        vocab_size = len(self._llm._decode)
-        p = np.full(vocab_size, -np.inf)
-        for token_id, logp_val in self._inner.logp_next.items():
-            if isinstance(token_id, int):
-                p[token_id] = logp_val
-        return LazyProb(p, self._llm._encode, self._llm._decode)
-
-
-class MockTokenizedLLM:
-    """Wraps CharNgramLM + vocab tables to present the TokenizedLLM interface."""
-
-    def __init__(self, decode: list, encode: dict, eos: bytes,
-                 inner_lm: CharNgramLM) -> None:
-        self._decode = decode
-        self._encode = encode
-        self.eos = eos
-        self.V: set = {x for x in decode if x is not None}
-        self._inner_lm = inner_lm
-
-    def initial(self) -> MockStateLM:
-        return MockStateLM(self, self._inner_lm.initial(), logp=0.0, context=())
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +52,7 @@ def setup():
 
     tokenizer = AutoTokenizer.from_pretrained('gpt2', use_fast=False,
                                               local_files_only=True)
-    vocab = HfTokenizerVocab(tokenizer)
+    hf_vocab = HfTokenizerVocab(tokenizer)
 
     drop = {x.encode() for x in tokenizer.all_special_tokens}
 
@@ -120,41 +69,34 @@ def setup():
 
     # Subsample ~300 tokens (keep test fast)
     all_token_ids = sorted(
-        i for i in range(len(vocab.decode)) if vocab.decode[i] not in drop
+        i for i in range(len(hf_vocab.decode)) if hf_vocab.decode[i] not in drop
     )
     used = sorted(set(all_token_ids[:300]) | set(train_used))
 
     # Build FST
-    fst = subsampled_bpe_fst(vocab.decode, used, drop)
+    fst = subsampled_bpe_fst(hf_vocab.decode, used, drop)
 
     # Source alphabet for CharNgramLM = token IDs used by the FST
     source_alpha = fst.A - {EPSILON}
     inner_lm = CharNgramLM.train(train_ids, n=3, alpha=0.5,
                                  alphabet=source_alpha)
 
-    # EOS bytes
+    # EOS handling
     eos_bytes = tokenizer.eos_token.encode()
+    eos_id = hf_vocab.encode[eos_bytes]
 
-    # Build restricted decode/encode tables: only the used tokens.
-    # Tokens not in `used` get None in _decode, so the trie excludes them.
-    used_set_local = set(used)
-    restricted_decode = [
-        vocab.decode[i] if i in used_set_local else None
-        for i in range(len(vocab.decode))
-    ]
-    restricted_encode = {
-        vocab.decode[i]: i for i in used if vocab.decode[i] is not None
-    }
+    # Build vocab: token_id -> bytes (only tokens in `used`)
+    cb_vocab: dict = {}
+    for tid in used:
+        word = hf_vocab.decode[tid]
+        if word is not None:
+            cb_vocab[tid] = word
     # EOS must be in the vocab for CharacterBeam
-    eos_id = vocab.encode[eos_bytes]
-    if eos_id not in used_set_local:
-        restricted_decode[eos_id] = eos_bytes
-        restricted_encode[eos_bytes] = eos_id
+    if eos_id not in cb_vocab:
+        cb_vocab[eos_id] = eos_bytes
 
     # CharacterBeam
-    mock_llm = MockTokenizedLLM(restricted_decode, restricted_encode,
-                                eos_bytes, inner_lm)
-    cb = CharacterBeam(mock_llm, K=100)
+    cb = CharacterBeam(inner_lm, cb_vocab, K=100, eos_token=eos_id)
 
     # FusedTransducedLM
     fused = FusedTransducedLM(inner_lm, fst, max_steps=500, max_beam=50,
@@ -189,7 +131,7 @@ def test_cb_vs_fused(setup):
         byte_prefix = context[:i]
 
         # CharacterBeam logp_next
-        cb_logp = cb.logp_next(byte_prefix)
+        cb_logp = cb(byte_prefix).logp_next
 
         # FusedTransducedLM logp_next
         fused_logp = fused_state.logp_next
@@ -231,13 +173,14 @@ def test_cb_self_consistency(setup):
     cb, _, _, _, _ = setup
 
     context = b"The"
-    logp = cb.logp_next(context)
-    Z = cb.logprefix(context)
+    state = cb(context)
+    logp = state.logp_next
+    Z = state.logp
 
-    # Check top-5 keys: logp_next[k] == logprefix(context + k) - Z
+    # Check top-5 keys: logp_next[k] == logp(context + k) - logp(context)
     for k in list(logp.top(5)):
-        if k == cb.eos:
+        if k == cb._eos_bytes:
             continue
         have = logp[k]
-        want = cb.logprefix(context + bytes([k])) - Z
+        want = (state >> k).logp - Z
         assert abs(have - want) < 1e-3, f"key={k!r}: {have:.6f} vs {want:.6f}"

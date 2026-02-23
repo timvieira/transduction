@@ -22,6 +22,7 @@ from transduction.fsa import EPSILON
 from transduction.lm.statelm import HfTokenizerVocab
 from transduction.lm.ngram import CharNgramLM
 from transduction.lm.fused_transduced import FusedTransducedLM
+from transduction.lm.character_beam import CharacterBeam
 from transduction.util import Timeout, timelimit, set_memory_limit
 
 set_memory_limit(12)
@@ -30,9 +31,13 @@ OUTFILE = os.path.join(os.path.dirname(__file__), 'bench_vectorization_results.j
 
 # ---- Setup ----
 tokenizer = AutoTokenizer.from_pretrained('gpt2', use_fast=False, local_files_only=True)
-_decode = HfTokenizerVocab(tokenizer).decode
+hf_vocab = HfTokenizerVocab(tokenizer)
+_decode = hf_vocab.decode
 drop = {x.encode() for x in tokenizer.all_special_tokens}
 all_token_ids = sorted(i for i in range(len(_decode)) if _decode[i] not in drop)
+
+eos_bytes = tokenizer.eos_token.encode()
+eos_id = hf_vocab.encode[eos_bytes]
 
 train_sentences = [
     "The quick brown fox jumps over the lazy dog.",
@@ -78,9 +83,18 @@ VOCAB_SIZES = [257, 500, 1000, 2000, 5000, 7000, 10000, 12000, 15000]
 SCALE_TIMEOUT = 300  # seconds per method per vocab
 N_RUNS = 3  # repeat for stability
 
+def make_character_beam(lm, used):
+    """Build a CharacterBeam from an LM and a set of token IDs."""
+    vocab = {tid: _decode[tid] for tid in used
+             if _decode[tid] is not None and _decode[tid] not in drop}
+    if eos_id not in vocab:
+        vocab[eos_id] = eos_bytes
+    return CharacterBeam(lm, vocab, K=10, eos_token=eos_id)
+
 methods = [
-    ('FusedLM_rust', lambda lm, fst: FusedTransducedLM(lm, fst, max_steps=200, max_beam=10, helper='rust')),
-    ('FusedLM_rust_token', lambda lm, fst: FusedTransducedLM(lm, fst, max_steps=200, max_beam=10, helper='rust_token')),
+    ('FusedLM_rust', lambda lm, fst, used: FusedTransducedLM(lm, fst, max_steps=200, max_beam=10, helper='rust')),
+    ('FusedLM_rust_token', lambda lm, fst, used: FusedTransducedLM(lm, fst, max_steps=200, max_beam=10, helper='rust_token')),
+    ('CharacterBeam', lambda lm, fst, used: make_character_beam(lm, used)),
 ]
 
 rows = []  # collected for JSON output
@@ -134,7 +148,7 @@ for vs in VOCAB_SIZES:
             step_times = []
             try:
                 with timelimit(SCALE_TIMEOUT):
-                    tlm_v = make_tlm(inner_v, fst_v)
+                    tlm_v = make_tlm(inner_v, fst_v, used)
                     state_v = tlm_v.initial()
                     for yb in target_bytes:
                         t0 = time.perf_counter()
