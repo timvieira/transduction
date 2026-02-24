@@ -8,10 +8,9 @@ Usage:
     R = result.remainder  # FSA
 """
 
-from transduction.fsa import FSA, EPSILON
+from transduction.fsa import FSA, EPSILON, trimmed_fsa as _trimmed_fsa
 from transduction.base import DecompositionResult, IncrementalDecomposition
-from transduction.peekaboo_incremental import _trimmed_fsa
-from transduction.util import Integerizer
+from transduction.util import Integerizer, validate_target
 from functools import cached_property
 
 
@@ -102,13 +101,9 @@ class RustDecomp(DecompositionResult):
         import transduction_core
 
         self.fst = fst
-        self.target = tuple(target)
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
-
-        oov = set(target) - self.target_alphabet
-        if oov:
-            raise ValueError(f"Out of vocabulary target symbols: {oov}")
+        self.target = validate_target(target, self.target_alphabet)
 
         rust_fst, sym_map, _state_map = to_rust_fst(fst)
 
@@ -234,15 +229,11 @@ class RustDirtyPeekaboo(DecompositionResult):
             _symbol: Internal; the symbol that extended the parent to this node.
         """
         self.fst = fst
-        target = tuple(target)
-        self.target = target
         self.target_alphabet = fst.B - {EPSILON}
+        self.target = validate_target(target, self.target_alphabet)
         self._minimize = minimize
         self._parent = _parent
         self._symbol = _symbol
-        oov = set(target) - self.target_alphabet
-        if oov:
-            raise ValueError(f"Out of vocabulary target symbols: {oov}")
         if _rust_state is not None:
             self._rust_state = _rust_state
         else:

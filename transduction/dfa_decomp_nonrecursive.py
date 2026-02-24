@@ -2,6 +2,7 @@ from transduction import FSA, EPSILON
 from transduction.base import DecompositionResult
 from transduction.precover_nfa import PrecoverNFA as LazyPrecoverNFA
 from transduction.universality import UniversalityFilter
+from transduction.util import validate_target
 from collections import deque
 
 
@@ -11,10 +12,7 @@ class NonrecursiveDFADecomp(DecompositionResult):
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
 
-        target = tuple(target)
-        oov = set(target) - self.target_alphabet
-        if oov:
-            raise ValueError(f"Out of vocabulary target symbols: {oov}")
+        target = validate_target(target, self.target_alphabet)
 
         # Implementation note: this is a truncated representation of the
         # Precover(fst, target).  The recursive algorithm attempts to do

@@ -26,7 +26,8 @@ from transduction.universality import (
     compute_ip_universal_states,
 )
 from transduction.precover_nfa import PeekabooFixedNFA
-from transduction.peekaboo_incremental import _trimmed_fsa
+from transduction.fsa import trimmed_fsa as _trimmed_fsa
+from transduction.util import validate_target
 from collections import deque
 from functools import cached_property
 
@@ -92,11 +93,7 @@ class DirtyPeekaboo(IncrementalDecomposition):
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
-        target = tuple(target)
-        oov = set(target) - self.target_alphabet
-        if oov:
-            raise ValueError(f"Out of vocabulary target symbols: {oov}")
-        self.target = target
+        self.target = validate_target(target, self.target_alphabet)
         self.parent = parent
         self._has_eps = EPSILON in fst.A
         self._cat = lambda s, y: s + (y,)

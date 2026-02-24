@@ -4,6 +4,7 @@ from transduction.lazy import Lazy
 from transduction.fsa import FSA
 from transduction.fst import EPSILON
 from transduction.precover_nfa import PeekabooFixedNFA as PeekabooPrecover
+from transduction.util import validate_target
 
 from collections import deque
 from functools import cached_property
@@ -28,10 +29,7 @@ class PeekabooStrings:
         For non-empty targets, calls decompose_next on the prefix and
         looks up the last symbol.
         """
-        target = tuple(target)
-        oov = set(target) - self.target_alphabet
-        if oov:
-            raise ValueError(f"Out of vocabulary target symbols: {oov}")
+        target = validate_target(target, self.target_alphabet)
         if not target:
             return Precover(self.fst, target)
         return self.decompose_next(target[:-1]).get(
@@ -101,13 +99,9 @@ class Peekaboo(DecompositionResult):
 
     def __init__(self, fst, target=(), *, _parent=None, _symbol=None):
         self.fst = fst
-        target = tuple(target)
-        self.target = target
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
-        oov = set(target) - self.target_alphabet
-        if oov:
-            raise ValueError(f"Out of vocabulary target symbols: {oov}")
+        self.target = validate_target(target, self.target_alphabet)
         self._parent = _parent
         self._symbol = _symbol
 

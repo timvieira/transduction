@@ -23,7 +23,7 @@ from transduction.precover_nfa import PeekabooLookaheadNFA
 from transduction.peekaboo_incremental import FstUniversality, TruncatedDFA
 from transduction.universality import UniversalityFilter
 from transduction import FSA
-from transduction.util import Integerizer
+from transduction.util import Integerizer, validate_target
 from collections import deque
 
 
@@ -559,10 +559,7 @@ class TrieDispatchDFADecomp(DecompositionResult):
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
 
-        target = tuple(target)
-        oov = set(target) - self.target_alphabet
-        if oov:
-            raise ValueError(f"Out of vocabulary target symbols: {oov}")
+        target = validate_target(target, self.target_alphabet)
 
         dfa = TrieDispatchPrecoverNFA(fst, target).det()
         filt = UniversalityFilter(fst, target, dfa, self.source_alphabet)

@@ -49,6 +49,49 @@ def dfs(Ps: Iterable[State], arcs: Callable[[State], Iterable[tuple[A, State]]])
     return m
 
 
+def trimmed_fsa(
+    start_states: Iterable[State],
+    stop_states: Iterable[State],
+    get_incoming: Callable[[State], Iterable[tuple[Any, State]]],
+) -> FSA[Any]:
+    """Build a trimmed FSA by backward BFS from stop states through a
+    reverse-arc graph.  All states in the incoming index are assumed
+    forward-reachable (guaranteed by the BFS that built them), so backward
+    reachability from stops gives exactly the trim (forward ∩ backward
+    reachable) set.
+
+    Args:
+        start_states: Forward-reachable start states of the FSA.
+        stop_states: Accepting states to trace back from.
+        get_incoming: ``get_incoming(state)`` returns ``(symbol, predecessor)``
+            pairs — the reverse-arc index.
+    """
+    stop_states = set(stop_states)
+    if not stop_states:
+        return FSA()
+    backward_reachable: set[State] = set()
+    worklist = deque(stop_states)
+    while worklist:
+        state = worklist.popleft()
+        if state in backward_reachable:
+            continue
+        backward_reachable.add(state)
+        for _, pred in get_incoming(state):
+            if pred not in backward_reachable:
+                worklist.append(pred)
+    arcs = [
+        (pred, x, state)
+        for state in backward_reachable
+        for x, pred in get_incoming(state)
+        if pred in backward_reachable
+    ]
+    return FSA(
+        start={s for s in start_states if s in backward_reachable},
+        arcs=arcs,
+        stop=stop_states,
+    )
+
+
 class frozenset(builtins.frozenset):  # type: ignore[type-arg]
     "Same as frozenset, but with a nicer printing method."
     def __repr__(self) -> str:

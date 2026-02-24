@@ -1,12 +1,13 @@
 from transduction.base import DecompositionResult, IncrementalDecomposition
 from transduction.lazy import Lazy
-from transduction.fsa import FSA, frozenset
+from transduction.fsa import FSA, frozenset, trimmed_fsa as _trimmed_fsa
 from transduction.fst import EPSILON
 from transduction.universality import (
     check_all_input_universal, compute_ip_universal_states,
     UniversalityFilter,
 )
 from transduction.precover_nfa import PeekabooLookaheadNFA as PeekabooPrecover
+from transduction.util import validate_target
 
 from collections import deque
 from functools import cached_property
@@ -28,40 +29,6 @@ from functools import cached_property
 #   truncating at N+1 (even for the triplets of doom example).
 #_______________________________________________________________________________
 #
-
-def _trimmed_fsa(start_states, stop_states, get_incoming):
-    """Build a trimmed FSA by backward BFS from stop states through the
-    reverse-arc graph.  All states in the incoming index are forward-reachable
-    (guaranteed by the BFS that built them), so backward reachability
-    from stops gives exactly the trim (forward ∩ backward reachable) set.
-
-    Args:
-        get_incoming: callable(state) -> iterable of (symbol, predecessor) pairs.
-    """
-    if not stop_states:
-        return FSA()
-    backward_reachable = set()
-    worklist = deque(stop_states)
-    while worklist:
-        state = worklist.popleft()
-        if state in backward_reachable:
-            continue
-        backward_reachable.add(state)
-        for _, pred in get_incoming(state):
-            if pred not in backward_reachable:
-                worklist.append(pred)
-    arcs = [
-        (pred, x, state)
-        for state in backward_reachable
-        for x, pred in get_incoming(state)
-        if pred in backward_reachable
-    ]
-    return FSA(
-        start={s for s in start_states if s in backward_reachable},
-        arcs=arcs,
-        stop=stop_states,
-    )
-
 
 class FstUniversality:
     """Precomputed universality info for an FST.  Computed once, shared across
@@ -269,11 +236,7 @@ class PeekabooState(IncrementalDecomposition):
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
-        target = tuple(target)
-        oov = set(target) - self.target_alphabet
-        if oov:
-            raise ValueError(f"Out of vocabulary target symbols: {oov}")
-        self.target = target
+        self.target = validate_target(target, self.target_alphabet)
         self.parent = parent
 
         assert parent is None or parent.target == target[:-1]

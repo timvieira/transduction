@@ -1,7 +1,7 @@
 from transduction.base import AbstractAlgorithm
 from transduction.precover_nfa import PrecoverNFA as LazyPrecoverNFA
 
-from transduction.util import memoize
+from transduction.util import memoize, validate_target
 
 
 class LazyNonrecursive(AbstractAlgorithm):
@@ -17,9 +17,7 @@ class LazyNonrecursive(AbstractAlgorithm):
         self.dfa = None
 
     def initialize(self, target):
-        oov = set(target) - self.target_alphabet
-        if oov:
-            raise ValueError(f"Out of vocabulary target symbols: {oov}")
+        validate_target(target, self.target_alphabet)
         self.state = {}
         self.nfa = LazyPrecoverNFA(self.fst, target)
         self.dfa = self.nfa.det()

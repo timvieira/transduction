@@ -1,7 +1,7 @@
 from transduction.base import IncrementalDecomposition
 from transduction.fst import EPSILON
 from transduction.fsa import FSA
-from transduction.util import colors
+from transduction.util import colors, validate_target
 from collections import deque
 
 
@@ -32,13 +32,9 @@ class LazyIncremental(IncrementalDecomposition):
             max_steps: Maximum BFS steps per decomposition (default unlimited).
         """
         self.fst = fst
-        target = tuple(target)
-        self.target = target
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
-        oov = set(target) - self.target_alphabet
-        if oov:
-            raise ValueError(f"Out of vocabulary target symbols: {oov}")
+        self.target = validate_target(target, self.target_alphabet)
 
         if parent is None:
             # Initial state: store config and create shared frontier cache

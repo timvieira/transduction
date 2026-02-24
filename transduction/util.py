@@ -394,6 +394,20 @@ class LogDistr(_SparseLogMap[K]):
 #_______________________________________________________________________________
 # sample (formerly from arsenal.maths)
 
+def validate_target(target: Any, target_alphabet: set[Any]) -> tuple[Any, ...]:
+    """Coerce *target* to a tuple and check for out-of-vocabulary symbols.
+
+    Returns the tuple-ified target on success; raises ``ValueError`` listing
+    OOV symbols otherwise.  Every decomposition algorithm repeats the same
+    three-line pattern — centralising it here keeps them DRY.
+    """
+    target = tuple(target)
+    oov = set(target) - target_alphabet
+    if oov:
+        raise ValueError(f"Out of vocabulary target symbols: {oov}")
+    return target
+
+
 def sample(w: npt.ArrayLike, size: int | None = None, u: npt.ArrayLike | None = None) -> Any:
     """Draw samples from an (unnormalized) discrete distribution via inverse CDF."""
     c = np.cumsum(w)

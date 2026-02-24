@@ -20,6 +20,7 @@ from transduction.peekaboo_nonrecursive import Peekaboo as PeekabooNonrecursive
 from transduction.peekaboo_incremental import PeekabooState
 from transduction.peekaboo_dirty import DirtyPeekaboo
 from transduction.trie_dispatch import TrieDispatchDFADecomp
+from conftest import run_decompose_next_test as run_test, assert_equal_decomp_map
 import os
 
 try:
@@ -29,35 +30,6 @@ try:
     HAS_RUST = True
 except ImportError:
     HAS_RUST = False
-
-
-def run_test(cls, fst, target, depth, verbosity=0):
-    """Unified test runner: recursively checks decompose_next() against reference."""
-    reference = Precover.factory(fst)
-    target_alphabet = fst.B - {EPSILON}
-    target = tuple(target)
-
-    def recurse(target, depth, state):
-        if depth == 0:
-            return
-        want = {y: reference(target + (y,)) for y in target_alphabet}
-        have = state.decompose_next()
-        assert_equal_decomp_map(have, want)
-        for y in want:
-            if verbosity > 0:
-                print('>', repr(target + (y,)))
-            q = want[y].quotient.trim()
-            r = want[y].remainder.trim()
-            if q.states or r.states:
-                recurse(target + (y,), depth - 1, have[y])
-
-    recurse(target, depth, cls(fst, target))
-
-
-def assert_equal_decomp_map(have, want):
-    for y in have | want:
-        assert have[y].quotient.equal(want[y].quotient)
-        assert have[y].remainder.equal(want[y].remainder)
 
 
 IMPLEMENTATIONS = [

@@ -9,7 +9,7 @@ from transduction.precover_nfa import (
     PopPrecoverNFA as PopPrecover,
 )
 
-from transduction.util import colors
+from transduction.util import colors, validate_target
 from functools import cached_property
 
 
@@ -47,12 +47,9 @@ class Precover(DecompositionResult):
                     symbols from the front of the target.
         """
         self.fst = fst
-        self.target = tuple(target)
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
-        oov = set(target) - self.target_alphabet
-        if oov:
-            raise ValueError(f"Out of vocabulary target symbols: {oov}")
+        self.target = validate_target(target, self.target_alphabet)
         self.U = FSA.universal(self.source_alphabet)
         self.impl = impl
 

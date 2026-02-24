@@ -5,22 +5,7 @@ from transduction import (
 )
 from transduction.fst import FST
 from transduction.peekaboo_nonrecursive import PeekabooStrings
-
-
-def assert_equal(have, want):
-    """Compare two DecompositionResults, handling both set and FSA quotient/remainder."""
-    hq, hr = have.quotient, have.remainder
-    wq, wr = want.quotient, want.remainder
-    if isinstance(hq, (set, frozenset)):
-        hq = FSA.from_strings(hq)
-    if isinstance(wq, (set, frozenset)):
-        wq = FSA.from_strings(wq)
-    if isinstance(hr, (set, frozenset)):
-        hr = FSA.from_strings(hr)
-    if isinstance(wr, (set, frozenset)):
-        wr = FSA.from_strings(wr)
-    assert hq.equal(wq), [hq.min(), wq.min()]
-    assert hr.equal(wr), [hr.min(), wr.min()]
+from conftest import assert_equal_decomp as assert_equal, run_factory_test as run_test_finite
 
 
 def _precover_factory(fst, **kwargs):
@@ -131,27 +116,6 @@ def test_backticks_to_quote(impl):
     assert_equal(tmp('`'), DecompositionResult({'`a'}, {'`'}))
     assert_equal(tmp('"'), DecompositionResult({'``'}, set()))
     assert_equal(tmp('`b'), DecompositionResult({'`a'}, set()))
-
-
-def run_test_finite(impl, fst, depth):
-    """Compare impl against Precover reference for all target prefixes up to depth."""
-    factory = impl(fst)
-    reference = Precover.factory(fst)
-    target_alphabet = fst.B - {EPSILON}
-
-    def recurse(target, depth):
-        if depth == 0:
-            return
-        assert_equal(factory(target), reference(target))
-        for y in target_alphabet:
-            ref_child = reference(target + y)
-            q, r = ref_child.quotient, ref_child.remainder
-            if isinstance(q, set): q = FSA.from_strings(q)
-            if isinstance(r, set): r = FSA.from_strings(r)
-            if q.trim().states or r.trim().states:
-                recurse(target + y, depth - 1)
-
-    recurse('', depth)
 
 
 def test_trivial_fst(impl):

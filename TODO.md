@@ -3,6 +3,20 @@
 - [ ] 100% code coverage
 - [ ] Replace all instances of llm -> lm
 
+## Refactoring
+
+- [ ] **Extract dirty-state infrastructure**: `dfa_decomp_incremental_truncated.py`
+  and `peekaboo_dirty.py` share near-identical dirty-state management (frontier
+  tracking, border identification, invalidation, epsilon-cache eviction,
+  `_incoming` dict maintenance).  Extract a shared `DirtyStateManager` to reduce
+  duplication and ensure bug fixes apply to both.
+
+- [ ] **Extract peekaboo symbol classification helper**: The "extract relevant
+  symbols → check universality → classify Q/R" loop is repeated across
+  `peekaboo_incremental.py`, `peekaboo_nonrecursive.py`, and `peekaboo_dirty.py`
+  with near-identical code.  A shared `_classify_symbols(frontier, target, N, fst)`
+  helper would be clean and low-risk.
+
 ## Inline TODOs/XXXs from source
 
 ### fst.py

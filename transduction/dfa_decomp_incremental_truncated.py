@@ -6,7 +6,8 @@ from transduction.universality import (
     check_all_input_universal,
     compute_ip_universal_states,
 )
-from transduction.peekaboo_incremental import _trimmed_fsa
+from transduction.fsa import trimmed_fsa as _trimmed_fsa
+from transduction.util import validate_target
 from collections import deque
 from functools import cached_property
 from transduction.lazy import EpsilonRemove
@@ -82,11 +83,7 @@ class TruncatedIncrementalDFADecomp(IncrementalDecomposition):
         self.fst = fst
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
-        target = tuple(target)
-        oov = set(target) - self.target_alphabet
-        if oov:
-            raise ValueError(f"Out of vocabulary target symbols: {oov}")
-        self.target = target
+        self.target = validate_target(target, self.target_alphabet)
         self.parent = parent
         self._consumed = False
         self._has_eps = EPSILON in fst.A
