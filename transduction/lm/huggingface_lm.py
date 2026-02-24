@@ -3,12 +3,26 @@ from __future__ import annotations
 import numpy as np
 import torch
 import transformers
-from transformers.cache_utils import DynamicCache
+from transformers.cache_utils import DynamicCache, DynamicLayer
 
 from functools import cached_property
 from typing import Any
 
 from transduction.lm.base import LM, LMState
+
+
+def _clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
+    """Deep-clone a DynamicCache so tree-structured branching works correctly."""
+    new_cache = DynamicCache()
+    for layer in cache.layers:
+        new_layer = DynamicLayer()
+        new_layer.keys = layer.keys.clone()
+        new_layer.values = layer.values.clone()
+        new_layer.dtype = layer.dtype
+        new_layer.device = layer.device
+        new_layer.is_initialized = True
+        new_cache.layers.append(new_layer)
+    return new_cache
 
 
 # ---------------------------------------------------------------------------
@@ -266,16 +280,18 @@ class HuggingFaceLM(LM[int]):
         input_ids = torch.tensor([[tid] for tid in token_ids], dtype=torch.long, device=self.device)
 
         # Expand parent's KV cache along batch dimension.
-        # Parent's ``out`` always converts DynamicCache → tuple-of-tuples
-        # (see TokenIDState.out), so parent_kv is always tuple-of-tuples here.
         parent_kv = parent.out.past_key_values
         batch_size = len(siblings)
 
-        batch_kv: Any = tuple(
-            (k.expand(batch_size, -1, -1, -1).contiguous(),
-             v.expand(batch_size, -1, -1, -1).contiguous())
-            for k, v in parent_kv
-        )
+        batch_kv = DynamicCache()
+        for layer in parent_kv.layers:
+            new_layer = DynamicLayer()
+            new_layer.keys = layer.keys.expand(batch_size, -1, -1, -1).contiguous()
+            new_layer.values = layer.values.expand(batch_size, -1, -1, -1).contiguous()
+            new_layer.dtype = layer.dtype
+            new_layer.device = layer.device
+            new_layer.is_initialized = True
+            batch_kv.layers.append(new_layer)
 
         # Single batched forward pass.
         self._calls += 1
@@ -289,17 +305,15 @@ class HuggingFaceLM(LM[int]):
         # Slice output: extract per-child logits + KV cache.
         out_kv = result.past_key_values
         for idx, state in enumerate(siblings):
-            if isinstance(out_kv, DynamicCache):
-                child_kv = tuple(
-                    (out_kv.key_cache[i][idx:idx+1].clone(),
-                     out_kv.value_cache[i][idx:idx+1].clone())
-                    for i in range(len(out_kv))
-                )
-            else:
-                child_kv = tuple(
-                    (k[idx:idx+1].clone(), v[idx:idx+1].clone())
-                    for k, v in out_kv
-                )
+            child_kv = DynamicCache()
+            for layer in out_kv.layers:
+                new_layer = DynamicLayer()
+                new_layer.keys = layer.keys[idx:idx+1].clone()
+                new_layer.values = layer.values[idx:idx+1].clone()
+                new_layer.dtype = layer.dtype
+                new_layer.device = layer.device
+                new_layer.is_initialized = True
+                child_kv.layers.append(new_layer)
             child_logits = result.logits[idx:idx+1].clone()
             # Inject into cached_property slot.
             state.__dict__['out'] = _BatchedOutput(child_logits, child_kv)
@@ -384,22 +398,16 @@ class TokenIDState(LMState[int]):
             else:
                 (_, token_id) = self.context
                 input_ids = torch.tensor([[token_id]], dtype=torch.long, device=self.lm.device)
+                # Clone the parent's KV cache so the model's in-place mutation
+                # doesn't corrupt it for sibling children.
                 past_kv = self._kv_source.out.past_key_values  # type: ignore[union-attr]
+                if isinstance(past_kv, DynamicCache):
+                    past_kv = _clone_dynamic_cache(past_kv)
                 self._kv_source = None
                 result = self.lm.model(
                     input_ids=input_ids,
                     past_key_values=past_kv,
                     use_cache=True,
-                )
-            # Convert DynamicCache to immutable tuple-of-tuples so that
-            # tree-structured branching (multiple children sharing a parent's
-            # cache) works correctly.  .clone() ensures each child gets an
-            # independent copy of the tensors.
-            past_kv = result.past_key_values
-            if isinstance(past_kv, DynamicCache):
-                result.past_key_values = tuple(
-                    (past_kv.key_cache[i].clone(), past_kv.value_cache[i].clone())
-                    for i in range(len(past_kv))
                 )
             return result
 
