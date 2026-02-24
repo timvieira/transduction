@@ -34,11 +34,10 @@ Usage::
 from __future__ import annotations
 
 import numpy as np
-from collections import defaultdict
 from functools import cached_property
 from typing import Any
 
-from transduction.util import logsumexp, LogDistr
+from transduction.util import logsumexp, LogDistr, LogVector
 from transduction.lm.base import LM, LMState
 
 
@@ -208,9 +207,13 @@ class _Bundle:
 
     @cached_property
     def _logp_next(self) -> LogDistr:
-        A = self._actions()
-        Z = logsumexp([bs.weight for _, bs in A.items()])
-        return LogDistr({k: float(bs.weight - Z) for k, bs in A.items()})
+        scores: LogVector = LogVector()
+        for hyp in self.extend:
+            node_mass = hyp.log_mass[hyp.node]
+            for a, child_node in hyp.actions.items():
+                if a is not None:
+                    scores.logaddexp(a, hyp.weight + hyp.log_mass[child_node] - node_mass)
+        return scores.normalize()
 
     @cached_property
     def extend(self) -> _Bundle:
@@ -225,18 +228,6 @@ class _Bundle:
         ]
         extended = [s for s in (h >> None for h in batch) if s is not None]
         return _Bundle(self.alg, self.states + extended)
-
-    def _actions(self) -> dict[Any, _Bundle]:
-        """Group next states by their character action."""
-        A: dict[Any, list[TrieState]] = defaultdict(list)
-        for hyp in self.extend:
-            for a in hyp.logp_next:
-                if a is not None:
-                    s = hyp >> a
-                    if s is not None:
-                        A[a].append(s)
-        return {a: _Bundle(self.alg, states)
-                for a, states in A.items()}
 
     @cached_property
     def weight(self) -> float:
