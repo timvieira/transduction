@@ -275,3 +275,87 @@ class TestBatchingCorrectness:
         for child in children:
             assert 'out' in child.__dict__
             assert np.isfinite(child.logp_next[enc[b' is']])
+
+    def test_cross_parent_matches_sequential(self, lm, enc):
+        """Cross-parent batched children match sequential computation."""
+        # Create 3 parents with different context lengths.
+        p1 = lm.initial() >> enc[b' the']                       # len 2
+        p2 = lm.initial() >> enc[b' the'] >> enc[b' cat']       # len 3
+        p3 = lm.initial() >> enc[b' a']                         # len 2
+
+        # Sequential computation (each triggers lazy eval).
+        seq_a = p1 >> enc[b' dog']
+        seq_b = p2 >> enc[b' is']
+        seq_c = p3 >> enc[b' bird']
+
+        seq_logps = {
+            'a': seq_a.logp_next[enc[b' is']],
+            'b': seq_b.logp_next[enc[b' very']],
+            'c': seq_c.logp_next[enc[b' is']],
+        }
+
+        # Create fresh parents and children, prefetch (triggers cross-parent batch).
+        p1b = lm.initial() >> enc[b' the']
+        p2b = lm.initial() >> enc[b' the'] >> enc[b' cat']
+        p3b = lm.initial() >> enc[b' a']
+
+        batch_a = p1b >> enc[b' dog']
+        batch_b = p2b >> enc[b' is']
+        batch_c = p3b >> enc[b' bird']
+
+        lm.prefetch([batch_a, batch_b, batch_c])
+
+        batch_logps = {
+            'a': batch_a.logp_next[enc[b' is']],
+            'b': batch_b.logp_next[enc[b' very']],
+            'c': batch_c.logp_next[enc[b' is']],
+        }
+
+        for key in seq_logps:
+            assert np.isclose(seq_logps[key], batch_logps[key], atol=1e-4), \
+                f"Mismatch for child {key}: seq={seq_logps[key]:.6f}, batch={batch_logps[key]:.6f}"
+
+    def test_cross_parent_continued_generation(self, lm, enc):
+        """KV caches from cross-parent batch support continued generation."""
+        p1 = lm.initial() >> enc[b' the']
+        p2 = lm.initial() >> enc[b' a']
+
+        # Cross-parent batch.
+        c1 = p1 >> enc[b' cat']
+        c2 = p2 >> enc[b' dog']
+        lm.prefetch([c1, c2])
+
+        # Continue generation from batched results.
+        gc1 = c1 >> enc[b' is']
+        gc2 = c2 >> enc[b' is']
+
+        # Sequential reference.
+        ref_c1 = lm.initial() >> enc[b' the'] >> enc[b' cat']
+        ref_gc1 = ref_c1 >> enc[b' is']
+        ref_c2 = lm.initial() >> enc[b' a'] >> enc[b' dog']
+        ref_gc2 = ref_c2 >> enc[b' is']
+
+        # Check grandchildren match.
+        assert np.isclose(gc1.logp_next[enc[b' very']], ref_gc1.logp_next[enc[b' very']], atol=1e-4)
+        assert np.isclose(gc2.logp_next[enc[b' very']], ref_gc2.logp_next[enc[b' very']], atol=1e-4)
+
+    def test_cross_parent_reduces_call_count(self, lm, enc):
+        """3 children from 3 different parents -> 1 batched call."""
+        p1 = lm.initial() >> enc[b' the']
+        p2 = lm.initial() >> enc[b' a']
+        p3 = lm.initial() >> enc[b' one']
+
+        c1 = p1 >> enc[b' cat']
+        c2 = p2 >> enc[b' dog']
+        c3 = p3 >> enc[b' bird']
+
+        calls_before = lm._calls
+        lm.prefetch([c1, c2, c3])
+        calls_after = lm._calls
+
+        # Should be 1 batched call (not 3 individual calls).
+        assert calls_after - calls_before == 1
+
+        # All children should have cached results.
+        for c in [c1, c2, c3]:
+            assert 'out' in c.__dict__

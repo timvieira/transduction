@@ -2,86 +2,49 @@
   "description": "GPT-2 + WikiText benchmark (200 bytes)",
   "config": {
     "num_bytes": 200,
-    "K": 10,
+    "K": 50,
     "device": "cpu"
   },
   "results": [
     {
       "name": "CharacterBeam (prefetch, threshold=0.1)",
-      "init_ms": 474,
+      "init_ms": 406,
       "steps": 200,
-      "total_ms": 1700,
-      "avg_ms": 8.6,
+      "total_ms": 2398,
+      "avg_ms": 12.0,
       "lm_calls": 53,
-      "calls_per_step": 0.27
+      "calls_per_step": 0.27,
+      "peak_rss_mb": 1540
     },
     {
       "name": "CharacterBeam (no prefetch, threshold=0.1)",
-      "init_ms": 379,
+      "init_ms": 357,
       "steps": 200,
-      "total_ms": 1700,
-      "avg_ms": 8.6,
+      "total_ms": 2491,
+      "avg_ms": 12.5,
       "lm_calls": 53,
-      "calls_per_step": 0.27
+      "calls_per_step": 0.27,
+      "peak_rss_mb": 1543
     },
     {
       "name": "GeneralizedBeam (prefetch)",
-      "init_ms": 781,
+      "init_ms": 672,
       "steps": 200,
-      "total_ms": 58000,
-      "avg_ms": 290.1,
-      "lm_calls": 1750,
-      "calls_per_step": 8.75
+      "total_ms": 230320,
+      "avg_ms": 1151.6,
+      "lm_calls": 199,
+      "calls_per_step": 0.99,
+      "peak_rss_mb": 2608
     },
     {
       "name": "GeneralizedBeam (no prefetch)",
-      "init_ms": 590,
+      "init_ms": 536,
       "steps": 200,
-      "total_ms": 59300,
-      "avg_ms": 296.5,
-      "lm_calls": 1750,
-      "calls_per_step": 8.75
+      "total_ms": 449750,
+      "avg_ms": 2248.8,
+      "lm_calls": 8461,
+      "calls_per_step": 42.3,
+      "peak_rss_mb": 2608
     }
-  ],
-  "previous_results": {
-    "description": "Before sparse matvec optimization (logaddexp.at COO scatter)",
-    "results": [
-      {
-        "name": "CharacterBeam (prefetch, threshold=0.1)",
-        "avg_ms": 28.0,
-        "total_ms": 5600,
-        "calls_per_step": 0.27
-      },
-      {
-        "name": "CharacterBeam (no prefetch, threshold=0.1)",
-        "avg_ms": 32.0,
-        "total_ms": 6400,
-        "calls_per_step": 0.27
-      },
-      {
-        "name": "CharacterBeam (prefetch, no threshold)",
-        "avg_ms": 1459.7,
-        "total_ms": 291944,
-        "calls_per_step": 7.68
-      },
-      {
-        "name": "CharacterBeam (no prefetch, no threshold)",
-        "avg_ms": 1298.7,
-        "total_ms": 259732,
-        "calls_per_step": 7.68
-      },
-      {
-        "name": "GeneralizedBeam (prefetch)",
-        "avg_ms": 1168.9,
-        "total_ms": 233786,
-        "calls_per_step": 8.75
-      },
-      {
-        "name": "GeneralizedBeam (no prefetch)",
-        "avg_ms": 1304.6,
-        "total_ms": 260921,
-        "calls_per_step": 8.75
-      }
-    ]
-  }
+  ]
 }
