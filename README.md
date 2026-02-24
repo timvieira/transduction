@@ -18,11 +18,11 @@ Both Q and R are returned as finite state automata (FSAs).
 
 ## What is transduction?
 
-Given a language model **p(x)** over source strings X\* and an FST **f : X\* → Y\***, transduction computes the **pushforward distribution p(y)** over target strings. Multiple source strings may map to the same target, so p(y) sums over all source preimages. For example, a lowercasing FST maps "It is cold outside", "it is cold outside", and "IT IS COLD OUTSIDE" to the same target, aggregating their probabilities:
+Given a language model $p_{\mathcal{X}}(\boldsymbol{x})$ over source strings $\boldsymbol{x} \in \mathcal{X}^\*$ and an FST $f \colon \mathcal{X}^\* \to \mathcal{Y}^\*$, transduction computes the **pushforward distribution p(y)** over target strings. Multiple source strings may map to the same target, so $p_{\mathcal{Y}}(\boldsymbol{y})$ sums over all source preimages. For example, a lowercasing FST maps "It is cold outside", "it is cold outside", and "IT IS COLD OUTSIDE" to the same target, aggregating their probabilities:
 
 <p align="center"><img src="images/pushforward.svg" alt="Pushforward: source distribution mapped through delete_b FST to target distribution" width="600"></p>
 
-The precover decomposition P(y) = Q(y)X\* ⊔ R(y) enables incremental, symbol-by-symbol computation of this distribution — the key primitive for autoregressive decoding with any string-to-string transformation.
+The precover decomposition $\mathcal{P}(\boldsymbol{y}) = \mathcal{Q}(\boldsymbol{y}) \mathcal{X}^\* \sqcup \mathcal{R}(\boldsymbol{y})$ enables incremental, symbol-by-symbol computation of this distribution — the key primitive for autoregressive decoding with any string-to-string transformation.
 
 ### Applications
 
