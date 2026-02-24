@@ -1,6 +1,7 @@
 # Documentation & Naming TODO
 
 - [ ] 100% code coverage
+- [x] Replace all instances of llm -> lm
 
 ## Inline TODOs/XXXs from source
 
@@ -52,11 +53,11 @@
 - [ ] Rename `stop` → `accepting` in FSA/FST classes ("final" and "stop" suggest
   you can't continue past the state, which is misleading; "accepting" is standard)
 
-### lm/statelm.py
+### lm/huggingface_lm.py
 
 - [ ] Handle tokenizers with multiple byte representations for the same token
-  (line 185)
-- [ ] Implement immutable-tuple KV cache fix (line 246)
+  (line 174)
+- [ ] Implement immutable-tuple KV cache fix for DynamicCache (line 285)
 
 ### peekaboo.rs — FactoredArena
 
