@@ -171,8 +171,20 @@ class TokenLogProbs:
         return repr(self.top(10))
 
 
-# TODO: This class will encounter issues when its token vocabulary has multiple
-# token_ids that map to the same string of bytes.
+class _BatchedOutput:
+    """Lightweight container matching the interface of model forward output.
+
+    Holds ``.logits`` and ``.past_key_values`` for a single sequence,
+    allowing ``TokenIDState.logp_next`` to consume it the same way it
+    consumes a real model output.
+    """
+    __slots__ = ('logits', 'past_key_values')
+
+    def __init__(self, logits: torch.Tensor, past_key_values: Any) -> None:
+        self.logits = logits
+        self.past_key_values = past_key_values
+
+
 class HuggingFaceLM(LM[int]):
     """LM[int] wrapping a HuggingFace causal LM.
 
@@ -208,6 +220,90 @@ class HuggingFaceLM(LM[int]):
     def encode_prompt(self, prompt: str) -> tuple[Any, ...]:
         "Encode ``prompt`` as a tuple of tokens (each a bytes object)."
         return unflatten(tuple(self._decode[i] for i in self.tokenizer.encode(prompt)))
+
+    def prefetch(self, states: list) -> None:
+        """Pre-compute logp_next for multiple TokenIDStates in batched forward passes.
+
+        Groups pending states (those without a cached ``out``) by parent,
+        and runs a single batched forward pass per sibling group.
+        Singletons are skipped (they'll compute lazily on first access).
+        """
+        # Filter to pending TokenIDStates that haven't computed ``out`` yet.
+        pending = [s for s in states
+                    if isinstance(s, TokenIDState) and 'out' not in s.__dict__
+                    and s.context != ()]
+
+        # Group by parent identity (siblings share a parent KV cache).
+        groups: dict[int, list[TokenIDState]] = {}
+        for s in pending:
+            key = id(s.parent)
+            groups.setdefault(key, []).append(s)
+
+        # Batch groups with >1 sibling; singletons compute lazily.
+        for siblings in groups.values():
+            if len(siblings) > 1:
+                self._batch_siblings(siblings)
+
+    def _batch_siblings(self, siblings: list[TokenIDState]) -> None:
+        """Run a single batched forward pass for sibling TokenIDStates.
+
+        All siblings must share the same parent (same KV cache).
+        Injects results into each state's ``__dict__['out']`` so that
+        the ``cached_property`` is pre-populated.
+        """
+        parent = siblings[0].parent
+        assert parent is not None
+
+        # Stack token IDs: each sibling consumed one token from the parent.
+        token_ids = [s.context[1] for s in siblings]
+        input_ids = torch.LongTensor([[tid] for tid in token_ids]).to(self.device)
+
+        # Expand parent's KV cache along batch dimension.
+        parent_kv = parent.out.past_key_values
+        batch_size = len(siblings)
+
+        if isinstance(parent_kv, DynamicCache):
+            # DynamicCache: expand each layer's key/value tensors.
+            expanded = DynamicCache()
+            for i in range(len(parent_kv)):
+                k = parent_kv.key_cache[i].expand(batch_size, -1, -1, -1).contiguous()
+                v = parent_kv.value_cache[i].expand(batch_size, -1, -1, -1).contiguous()
+                expanded.update(k, v, i)
+            batch_kv: Any = expanded
+        else:
+            # Tuple-of-tuples (legacy format): expand each layer.
+            batch_kv = tuple(
+                (k.expand(batch_size, -1, -1, -1).contiguous(),
+                 v.expand(batch_size, -1, -1, -1).contiguous())
+                for k, v in parent_kv
+            )
+
+        # Single batched forward pass.
+        self._calls += 1
+        with torch.no_grad():
+            result = self.model(
+                input_ids=input_ids,
+                past_key_values=batch_kv,
+                use_cache=True,
+            )
+
+        # Slice output: extract per-child logits + KV cache.
+        out_kv = result.past_key_values
+        for idx, state in enumerate(siblings):
+            if isinstance(out_kv, DynamicCache):
+                child_kv = tuple(
+                    (out_kv.key_cache[i][idx:idx+1].clone(),
+                     out_kv.value_cache[i][idx:idx+1].clone())
+                    for i in range(len(out_kv))
+                )
+            else:
+                child_kv = tuple(
+                    (k[idx:idx+1].clone(), v[idx:idx+1].clone())
+                    for k, v in out_kv
+                )
+            child_logits = result.logits[idx:idx+1]
+            # Inject into cached_property slot.
+            state.__dict__['out'] = _BatchedOutput(child_logits, child_kv)
 
     @classmethod
     def from_name(cls, model_name: str, **kw: Any) -> HuggingFaceLM:
@@ -277,22 +373,27 @@ class TokenIDState(LMState[int]):
         with torch.no_grad():
             if self.context == ():
                 input_ids = torch.LongTensor([[self.lm.tokenizer.bos_token_id]], device=self.lm.device)
-                return self.lm.model(input_ids=input_ids, past_key_values=None, use_cache=True)
+                result = self.lm.model(input_ids=input_ids, past_key_values=None, use_cache=True)
             else:
                 (_, token_id) = self.context
                 input_ids = torch.LongTensor([[token_id]], device=self.lm.device)
                 past_kv = self.parent.out.past_key_values  # type: ignore[union-attr]
-                if isinstance(past_kv, DynamicCache):
-                    raise TypeError(
-                        "TokenIDState does not support DynamicCache (mutates in-place, "
-                        "breaks tree-structured branching). See: "
-                        "https://github.com/timvieira/transduction/issues/1"
-                    )
-                return self.lm.model(
+                result = self.lm.model(
                     input_ids=input_ids,
                     past_key_values=past_kv,
                     use_cache=True,
                 )
+            # Convert DynamicCache to immutable tuple-of-tuples so that
+            # tree-structured branching (multiple children sharing a parent's
+            # cache) works correctly.  .clone() ensures each child gets an
+            # independent copy of the tensors.
+            past_kv = result.past_key_values
+            if isinstance(past_kv, DynamicCache):
+                result.past_key_values = tuple(
+                    (past_kv.key_cache[i].clone(), past_kv.value_cache[i].clone())
+                    for i in range(len(past_kv))
+                )
+            return result
 
     def token_ids(self) -> list[int]:
         return list(flatten(self.context))

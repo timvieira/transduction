@@ -30,9 +30,6 @@ try:
 except ImportError:
     HAS_RUST = False
 
-from transduction.pynini_ops import PyniniNonrecursiveDecomp
-
-
 
 def run_test(cls, fst, target, depth, verbosity=0):
     """Unified test runner: recursively checks decompose_next() against reference."""
@@ -82,11 +79,6 @@ if HAS_RUST:
     IMPLEMENTATIONS.append(
         pytest.param(RustDirtyPeekaboo, id="rust_dirty_peekaboo"),
     )
-
-IMPLEMENTATIONS.append(
-    pytest.param(PyniniNonrecursiveDecomp, id="pynini_nonrecursive"),
-)
-
 
 
 @pytest.fixture(params=IMPLEMENTATIONS)
@@ -336,15 +328,11 @@ def test_lowercase(impl):
     run_test(impl, fst, '', depth=2)
 
 def test_bpe_like(impl):
-    if impl in (PyniniNonrecursiveDecomp,):
-        pytest.xfail("Known mismatch on epsilon-input output chains; investigate pynini handling.")
     fst = examples.bpe_like(vocab_size=30, alphabet=tuple("ab"), max_len=3)
     run_test(impl, fst, '', depth=2)
 
 
 def test_bpe_embedded(impl):
-    if impl in (PyniniNonrecursiveDecomp,):
-        pytest.xfail("Known mismatch on epsilon-input output chains; investigate pynini handling.")
     fst = examples.bpe_embedded(vocab_size=30, alphabet=tuple("ab"), max_len=3, wrapper_alpha=tuple("xy"))
     run_test(impl, fst, '', depth=2)
 

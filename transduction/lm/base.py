@@ -63,6 +63,14 @@ class LM(ABC, Generic[Token]):
         """Shorthand for ``self.initial().greedy_decode(max_len)``."""
         return self.initial().greedy_decode(max_len)
 
+    def prefetch(self, states: list[LMState]) -> None:
+        """Hint: pre-compute logp_next for multiple states in a batch.
+
+        Default: no-op. HuggingFaceLM overrides to batch sibling forward passes.
+        Calling prefetch is always optional — states still compute lazily.
+        """
+        pass
+
     def sample(self) -> LMState:
         """Shorthand for ``self.initial().sample()``."""
         return self.initial().sample()

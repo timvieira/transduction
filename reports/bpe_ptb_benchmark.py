@@ -4,7 +4,6 @@ Benchmark: decomposition algorithms on BPE and PTB FSTs.
 Tests on real tokenizer FSTs with byte-sequence targets at various lengths.
 Compares:
   - NonrecursiveDFADecomp (fresh build per target)
-  - PyniniNonrecursiveDecomp (pynini composition backend)
   - RustDecomp (Rust-accelerated decomposition)
 
 Usage:
@@ -30,7 +29,6 @@ from collections import deque
 from transduction.fst import FST
 from transduction.fsa import EPSILON
 from transduction.dfa_decomp_nonrecursive import NonrecursiveDFADecomp
-from transduction.pynini_ops import PyniniNonrecursiveDecomp, PyniniPrecover
 from transduction.precover_nfa import PrecoverNFA
 
 try:
@@ -95,25 +93,6 @@ def time_nonrecursive_fresh(fst, targets):
     for target in targets:
         def run():
             d = NonrecursiveDFADecomp(fst, target)
-            _ = d.quotient
-            _ = d.remainder
-        elapsed, ok = timed_call(run)
-        total += elapsed
-        if ok:
-            count += 1
-        else:
-            timeouts += 1
-    return total, count, timeouts
-
-
-def time_pynini_fresh(fst, targets, backend=None):
-    """Time PyniniNonrecursiveDecomp on a list of targets."""
-    total = 0.0
-    count = 0
-    timeouts = 0
-    for target in targets:
-        def run():
-            d = PyniniNonrecursiveDecomp(fst, target, backend=backend)
             _ = d.quotient
             _ = d.remainder
         elapsed, ok = timed_call(run)
@@ -243,21 +222,11 @@ def benchmark_fst(name, fst, targets_by_length):
     print(f"{'='*100}")
     print(f"  FST: {len(fst.states)} states, |A|={len(fst.A)}, |B|={len(fst.B)}")
     print(f"  Per-call timeout: {CALL_TIMEOUT}s")
-
-    # Pre-init pynini backend (shared across targets for this FST)
-    t0 = time.perf_counter()
-    pynini_backend = PyniniPrecover(fst)
-    t_pynini_init = time.perf_counter() - t0
-    print(f"  Pynini init: {t_pynini_init*1000:.1f}ms")
     print()
 
-    hdr = (f"  {'Len':<5s} {'#Tgt':>5s}  "
-           f"{'Standard':>14s}  {'Pynini':>14s}  ")
+    hdr = f"  {'Len':<5s} {'#Tgt':>5s}  {'Standard':>14s}  "
     if HAS_RUST:
-        hdr += f"{'Rust':>14s}  "
-    hdr += f"{'Pyn/Std':>8s} "
-    if HAS_RUST:
-        hdr += f"{'Pyn/Rust':>9s} "
+        hdr += f"{'Rust':>14s}  {'Rust/Std':>9s} "
     print(hdr)
     print(f"  {'-'*len(hdr)}")
 
@@ -270,31 +239,22 @@ def benchmark_fst(name, fst, targets_by_length):
         sys.stdout.write(f"{fmt_time(t_std, n_std, len(targets), to_std):>14s}  ")
         sys.stdout.flush()
 
-        t_pyn, n_pyn, to_pyn = time_pynini_fresh(fst, targets, backend=pynini_backend)
-        sys.stdout.write(f"{fmt_time(t_pyn, n_pyn, len(targets), to_pyn):>14s}  ")
-        sys.stdout.flush()
+        row = {
+            'length': length, 'n_targets': len(targets),
+            't_std': t_std,
+        }
 
         if HAS_RUST:
             t_rust, n_rust, to_rust = time_rust_fresh(fst, targets)
             sys.stdout.write(f"{fmt_time(t_rust, n_rust, len(targets), to_rust):>14s}  ")
             sys.stdout.flush()
 
-        pyn_vs_std = t_std / t_pyn if t_pyn > 0 else float('inf')
-
-        line = f"{pyn_vs_std:>7.2f}x "
-        if HAS_RUST:
-            pyn_vs_rust = t_rust / t_pyn if t_pyn > 0 else float('inf')
-            line += f"{pyn_vs_rust:>8.2f}x "
-        print(line)
-
-        row = {
-            'length': length, 'n_targets': len(targets),
-            't_std': t_std, 't_pyn': t_pyn,
-            'pyn_vs_std': pyn_vs_std,
-        }
-        if HAS_RUST:
+            rust_vs_std = t_std / t_rust if t_rust > 0 else float('inf')
+            sys.stdout.write(f"{rust_vs_std:>8.2f}x ")
             row['t_rust'] = t_rust
-            row['pyn_vs_rust'] = pyn_vs_rust
+            row['rust_vs_std'] = rust_vs_std
+
+        print()
         results.append(row)
 
     return results
@@ -371,21 +331,17 @@ def main():
 
     # --- Summary ---
     print(f"\n\n{'='*100}")
-    print(f"  SUMMARY (geomean speedup vs Standard)")
+    print(f"  SUMMARY (geomean speedup Rust vs Standard)")
     print(f"{'='*100}")
     from math import exp, log
     for name, results in all_results.items():
         if not results:
             continue
         print(f"\n  {name}:")
-        for key, label in [
-            ('pyn_vs_std', 'Pynini'),
-            ('pyn_vs_rust', 'Pynini vs Rust'),
-        ]:
-            vals = [r[key] for r in results if key in r and 0 < r[key] < float('inf')]
-            if vals:
-                geo = exp(sum(log(s) for s in vals) / len(vals))
-                print(f"    {label:<28s} geomean: {geo:.2f}x")
+        vals = [r['rust_vs_std'] for r in results if 'rust_vs_std' in r and 0 < r['rust_vs_std'] < float('inf')]
+        if vals:
+            geo = exp(sum(log(s) for s in vals) / len(vals))
+            print(f"    {'Rust vs Standard':<28s} geomean: {geo:.2f}x")
 
     print("\nDone.")
 

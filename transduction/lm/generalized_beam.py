@@ -221,37 +221,50 @@ class _HybridBundle:
     def _extend_hub_hyps(self) -> tuple[list[HubHyp], list[Particle]]:
         """Extend hub hyps at end-of-token.
 
+        Uses a 3-phase prepare/prefetch/complete pattern to enable batched
+        forward passes when the inner LM supports prefetch (e.g. HuggingFaceLM).
+
         Returns (new_hub_hyps_from_extension, new_particles_from_hub_exit).
         """
         new_hub_hyps: list[HubHyp] = []
         new_particles: list[Particle] = []
 
+        # Phase 1: Prepare — create child LM states (cheap: >> is lazy).
+        # Collect items that go to hubs (need logp_next) vs non-hubs (particles).
+        hub_pending: list[tuple[LMState, Any, OutputTrie, float]] = []
+        needs_logp: list[LMState] = []
+
         for h in self.hub_hyps:
             if not h.has_EOT():
                 continue
 
-            # For each token reachable at EOT
             for eot_child_node, (src_sym, dest_state) in self._eot_leaves(h):
                 w_prime = h.weight + h.log_mass[eot_child_node] - h.log_mass[h.node]
                 if w_prime <= -np.inf:
                     continue
 
-                # Advance LM by consuming the source symbol
                 new_lm_state = h.lm_state >> src_sym
 
                 if dest_state in self.alg._hub_tries:
-                    # Destination is a hub: create new HubHyp
                     dest_trie = self.alg._hub_tries[dest_state]
-                    new_mass = dest_trie.log_mass_sum(new_lm_state.logp_next)
-                    new_hub_hyps.append(HubHyp(
-                        new_lm_state, dest_state, dest_trie,
-                        dest_trie.root, new_mass, w_prime,
-                    ))
+                    hub_pending.append((new_lm_state, dest_state, dest_trie, w_prime))
+                    needs_logp.append(new_lm_state)
                 else:
-                    # Destination is not a hub: create Particle
                     new_particles.append(Particle(
                         None, new_lm_state, w_prime, (src_sym,),
                     ))
+
+        # Phase 2: Prefetch — batch forward passes for hub-bound states.
+        if needs_logp:
+            self.alg.inner_lm.prefetch(needs_logp)
+
+        # Phase 3: Complete — consume (now-cached) logp_next via log_mass_sum.
+        for new_lm_state, dest_state, dest_trie, w_prime in hub_pending:
+            new_mass = dest_trie.log_mass_sum(new_lm_state.logp_next)
+            new_hub_hyps.append(HubHyp(
+                new_lm_state, dest_state, dest_trie,
+                dest_trie.root, new_mass, w_prime,
+            ))
 
         return new_hub_hyps, new_particles
 

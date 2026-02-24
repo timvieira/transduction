@@ -153,6 +153,31 @@ class TrieState:
         return TrieState(self.lm_state, self.trie, next_node,
                          self.log_mass, new_weight)
 
+    def _prepare_eot(self) -> tuple[LMState, float] | None:
+        """Prepare EOT transition: create child LM state without triggering forward pass.
+
+        Returns (child_lm_state, new_weight) or None if EOT leads to EOS.
+        """
+        next_node = self.trie.children[self.node].get(None)
+        if next_node is None:
+            return None
+        new_weight = self.weight + self.log_mass[next_node] - self.log_mass[self.node]
+        lm_token = self.trie.leaf2lm_token[next_node]
+        if lm_token == self.lm_state.eos:
+            return None
+        # Create child LM state (cheap: no forward pass yet).
+        child_lm = self.lm_state >> lm_token
+        return (child_lm, new_weight)
+
+    def _complete_eot(self, child_lm: LMState, weight: float) -> TrieState:
+        """Complete EOT transition using a (possibly prefetched) child LM state.
+
+        Calls log_mass_sum(child_lm.logp_next) which consumes the now-cached logp_next.
+        """
+        next_log_mass = self.trie.log_mass_sum(child_lm.logp_next)
+        return TrieState(child_lm, self.trie, self.trie.root,
+                         next_log_mass, weight)
+
     @classmethod
     def initial(cls, lm: LM, trie: TokenCharacterTrie) -> TrieState:
         lm_state = lm.initial()
@@ -217,7 +242,11 @@ class _Bundle:
 
     @cached_property
     def extend(self) -> _Bundle:
-        """Extend hypotheses at end-of-token by advancing the LM."""
+        """Extend hypotheses at end-of-token by advancing the LM.
+
+        Uses a 3-phase prepare/prefetch/complete pattern to enable batched
+        forward passes when the LM supports prefetch (e.g. HuggingFaceLM).
+        """
         batch = [
             hyp for hyp in self
             if hyp.has_EOT() and (
@@ -226,7 +255,25 @@ class _Bundle:
                           - self.weight) >= self.alg.extend_threshold
             )
         ]
-        extended = [s for s in (h >> None for h in batch) if s is not None]
+
+        # Phase 1: Prepare — create child LM states without forward passes.
+        prepared: list[tuple[TrieState, LMState, float]] = []
+        child_states: list[LMState] = []
+        for hyp in batch:
+            result = hyp._prepare_eot()
+            if result is not None:
+                child_lm, weight = result
+                prepared.append((hyp, child_lm, weight))
+                child_states.append(child_lm)
+
+        # Phase 2: Prefetch — batch forward passes for all children.
+        if child_states:
+            self.alg.lm.prefetch(child_states)
+
+        # Phase 3: Complete — consume (now-cached) logp_next.
+        extended = [hyp._complete_eot(child_lm, weight)
+                    for hyp, child_lm, weight in prepared]
+
         return _Bundle(self.alg, self.states + extended)
 
     @cached_property
