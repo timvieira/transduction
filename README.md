@@ -22,7 +22,7 @@ Given a language model **p(x)** over source strings X\* and an FST **f : X\* →
 
 <p align="center"><img src="images/pushforward.svg" alt="Pushforward: source distribution mapped through delete_b FST to target distribution" width="600"></p>
 
-The precover decomposition P(y) = Q(y)X\* ⊔ R(y) enables incremental, symbol-by-symbol computation of this distribution — the key primitive for autoregressive decoding with any string-to-string transformation.
+The precover decomposition $\mathcal{P}(\boldsymbol{y}) = \matcal{Q}(\boldsymbol{y}) \mathac{X}^* \sqcup \mathcal{R}(\boldsymbol{y})$ enables incremental, symbol-by-symbol computation of this distribution — the key primitive for autoregressive decoding with any string-to-string transformation.
 
 ### Applications
 
