@@ -99,7 +99,6 @@ Optional deps:
 Eliminated deps (previously external, now inlined):
 - `arsenal` — `Integerizer`, `colors`, `memoize`, `timelimit`, `timeit`, `sample`, `set_memory_limit`, `memory_limit` inlined into `util.py`
 - `genlm` — `get_byte_vocab` replaced with local `HfTokenizerVocab`
-- `tokenization` — LM state/vocab logic inlined into `huggingface_lm.py`; `logsumexp` into `util.py`
 - `LogpNext` (formerly in `lm/base.py`) — replaced by `LogDistr` in `util.py`
 
 ## Test Status
