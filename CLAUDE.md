@@ -44,14 +44,13 @@ Self-contained language model interface for use with enumeration/sampling:
 
 - `transduction/lm/base.py` — `LM` (ABC), `LMState` (ABC; defines `logp_next`, `eos`, `__rshift__`, `__call__`, `greedy_decode`, `sample_decode`)
 - `transduction/lm/ngram.py` — `ByteNgramLM`, `CharNgramLM` (lightweight n-gram LMs for testing)
-- `transduction/lm/statelm.py` — `StateLM`, `TokenizedLLM`, `load_model_by_name`
+- `transduction/lm/statelm.py` — `StateLM`, `TokenIDStateLM`, `TokenizedLLM`, `load_model_by_name`
   - Wraps HuggingFace causal LMs with KV-cache-based incremental decoding
-  - `StateLM.initial('gpt2')` loads a model and returns the initial state
-  - `state >> token` advances by one token (bytes), caching KV pairs
-  - `state.logp_next[token]` returns log-probability (accepts bytes or int token ID)
-  - `state.eos` returns the EOS token (bytes)
-  - Includes inlined dependencies: `HfTokenizerVocab`, `LazyProb`, `flatten`/`unflatten`
-  - External deps: `torch`, `transformers`, `arsenal`
+  - `StateLM` (`LM[bytes]`): `state >> token` takes bytes, `logp_next` keyed on bytes
+  - `TokenIDStateLM` (`LM[int]`): `state >> token_id` takes int token IDs, `logp_next` keyed on ints; directly compatible with `CharacterBeam`, `GeneralizedBeam`, `FusedTransducedLM`
+  - `TokenIDStateLM.from_name('gpt2')` or `TokenIDStateLM(llm)` to construct
+  - Includes inlined dependencies: `HfTokenizerVocab`, `LazyProb`, `IntLazyProb`, `flatten`/`unflatten`
+  - External deps: `torch`, `transformers`
 - `transduction/lm/transduced.py` — `TransducedLM`, `TransducedState` (pushforward of an inner LM through an FST; defaults to Rust backend)
 - `transduction/lm/fused_transduced.py` — `FusedTransducedLM`, `FusedTransducedState` (single-pass interleaved decomposition + LM search; `helper=` for pluggable backends: `"rust"`, `"python"`, `"token"`)
 - `transduction/lm/reference_transduced.py` — `ReferenceTransducedLM` (ground-truth transduced LM via Precover; enumerates Q/R languages exactly; finite-relation FSTs only)
@@ -119,8 +118,8 @@ Eliminated deps (previously external, now inlined):
 - `test_ptb_nltk.py`: 4 passed
 - `test_make_total.py`: 3 passed
 - `test_generalized_beam.py`: 33 passed
-- `test_statelm_kv_cache.py`: 3 passed
-- **Total: 1224 tests across 17 files (1222 passed, 2 xfailed)**
+- `test_statelm_kv_cache.py`: 13 passed
+- **Total: 1234 tests across 17 files (1232 passed, 2 xfailed)**
 - `test_general.py` tests the **general-case** algorithms (handle infinite quotients/remainders):
   NonrecursiveDFADecomp, TruncatedIncrementalDFADecomp, TrieDispatchDFADecomp,
   PeekabooState, PeekabooNonrecursive, DirtyPeekaboo, RustDecomp, RustDirtyState,

@@ -380,16 +380,8 @@ class FusedTransducedLM(LM[Token]):
             self._inv_sym_map = {v: k for k, v in sym_map.items()}
             self._state_map = state_map
             self._helper_mode = "rust_token"
-        elif helper == "openfst":
-            from transduction.openfst_bridge import OpenFstLazyPeekabooDFA
-            helper_obj = OpenFstLazyPeekabooDFA(fst)
-            self._rust_helper = helper_obj
-            self._sym_map = {k: v for k, v in helper_obj._sym_map.items()}
-            self._inv_sym_map = {v: k for k, v in helper_obj._sym_map.items()}
-            self._state_map = helper_obj._state_map
-            self._helper_mode = "openfst"
         else:
-            raise ValueError("helper must be 'rust', 'python', 'token', 'rust_token', or 'openfst'")
+            raise ValueError("helper must be 'rust', 'python', 'token', or 'rust_token'")
 
     def decode_dfa_state(self, state_id: int,
                          target: Str[Token]) -> frozenset[Any]:

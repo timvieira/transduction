@@ -32,13 +32,6 @@ except ImportError:
 
 from transduction.pynini_ops import PyniniNonrecursiveDecomp
 
-try:
-    from transduction.openfst_bridge import (
-        OpenFstDecomp, OpenFstDirtyPeekaboo,
-    )
-    HAS_OPENFST = True
-except ImportError:
-    HAS_OPENFST = False
 
 
 def run_test(cls, fst, target, depth, verbosity=0):
@@ -94,13 +87,6 @@ IMPLEMENTATIONS.append(
     pytest.param(PyniniNonrecursiveDecomp, id="pynini_nonrecursive"),
 )
 
-if HAS_OPENFST:
-    IMPLEMENTATIONS.append(
-        pytest.param(OpenFstDecomp, id="openfst_decomp"),
-    )
-    IMPLEMENTATIONS.append(
-        pytest.param(OpenFstDirtyPeekaboo, id="openfst_dirty_peekaboo"),
-    )
 
 
 @pytest.fixture(params=IMPLEMENTATIONS)
