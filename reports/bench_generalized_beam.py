@@ -92,7 +92,7 @@ if args.quick:
 else:
     VOCAB_SIZES = [257, 500, 1000, 2000, 5000, 7000, 10000, 12000, 15000, 20000, 30000, 50256]
     SCALE_TIMEOUT = 300
-    N_RUNS = 3
+    N_RUNS = 1
 
 bpe_rows = []
 

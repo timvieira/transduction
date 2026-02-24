@@ -1,192 +1,178 @@
 {
   "description": "BPE vocab scaling benchmark for FusedTransducedLM",
   "config": {
-    "n_runs": 3,
+    "n_runs": 1,
     "n_target_bytes": 8,
     "scale_timeout_s": 300,
     "text": "The quick brown fox",
     "memory_limit_gb": 12
   },
-  "baseline_rss_mb": 743,
+  "baseline_rss_mb": 744,
   "rows": [
     {
       "vocab_size": 297,
       "fst_states": 387,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 2,
+      "FusedLM_rust_avg_ms": 1,
       "FusedLM_rust_runs_ms": [
-        2,
-        2,
-        2
+        1
       ],
-      "peak_rss_mb": 745,
-      "FusedLM_rust_token_avg_ms": null,
-      "FusedLM_rust_token_runs_ms": [],
-      "CharacterBeam_avg_ms": 7,
+      "peak_rss_mb": 744,
+      "CharacterBeam_avg_ms": 4,
       "CharacterBeam_runs_ms": [
-        8,
-        7,
-        6
+        4
       ]
     },
     {
       "vocab_size": 529,
       "fst_states": 623,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 5,
+      "FusedLM_rust_avg_ms": 2,
       "FusedLM_rust_runs_ms": [
-        5,
-        3,
-        5
+        2
       ],
-      "peak_rss_mb": 757,
-      "FusedLM_rust_token_avg_ms": null,
-      "FusedLM_rust_token_runs_ms": [],
-      "CharacterBeam_avg_ms": 11,
+      "peak_rss_mb": 746,
+      "CharacterBeam_avg_ms": 6,
       "CharacterBeam_runs_ms": [
-        11,
-        9,
-        13
+        6
       ]
     },
     {
       "vocab_size": 1023,
       "fst_states": 1313,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 9,
+      "FusedLM_rust_avg_ms": 6,
       "FusedLM_rust_runs_ms": [
-        9,
-        9,
-        10
+        6
       ],
-      "peak_rss_mb": 792,
-      "FusedLM_rust_token_avg_ms": null,
-      "FusedLM_rust_token_runs_ms": [],
-      "CharacterBeam_avg_ms": 14,
+      "peak_rss_mb": 758,
+      "CharacterBeam_avg_ms": 7,
       "CharacterBeam_runs_ms": [
-        14,
-        12,
-        14
+        7
       ]
     },
     {
       "vocab_size": 2020,
       "fst_states": 3010,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 20,
+      "FusedLM_rust_avg_ms": 14,
       "FusedLM_rust_runs_ms": [
-        22,
-        19,
-        20
+        14
       ],
-      "peak_rss_mb": 883,
-      "FusedLM_rust_token_avg_ms": null,
-      "FusedLM_rust_token_runs_ms": [],
-      "CharacterBeam_avg_ms": 18,
+      "peak_rss_mb": 795,
+      "CharacterBeam_avg_ms": 10,
       "CharacterBeam_runs_ms": [
-        18,
-        17,
-        18
+        10
       ]
     },
     {
       "vocab_size": 5011,
       "fst_states": 8694,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 70,
+      "FusedLM_rust_avg_ms": 54,
       "FusedLM_rust_runs_ms": [
-        87,
-        66,
-        70
+        54
       ],
-      "peak_rss_mb": 1456,
-      "FusedLM_rust_token_avg_ms": null,
-      "FusedLM_rust_token_runs_ms": [],
-      "CharacterBeam_avg_ms": 33,
+      "peak_rss_mb": 991,
+      "CharacterBeam_avg_ms": 22,
       "CharacterBeam_runs_ms": [
-        38,
-        30,
-        33
+        22
       ]
     },
     {
       "vocab_size": 7010,
       "fst_states": 12408,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 68,
+      "FusedLM_rust_avg_ms": 52,
       "FusedLM_rust_runs_ms": [
-        73,
-        68,
-        63
+        52
       ],
-      "peak_rss_mb": 1879,
-      "FusedLM_rust_token_avg_ms": null,
-      "FusedLM_rust_token_runs_ms": [],
-      "CharacterBeam_avg_ms": 47,
+      "peak_rss_mb": 1173,
+      "CharacterBeam_avg_ms": 26,
       "CharacterBeam_runs_ms": [
-        49,
-        40,
-        47
+        26
       ]
     },
     {
       "vocab_size": 10008,
       "fst_states": 18203,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 171,
+      "FusedLM_rust_avg_ms": 197,
       "FusedLM_rust_runs_ms": [
-        197,
-        164,
-        171
+        197
       ],
-      "peak_rss_mb": 3097,
-      "FusedLM_rust_token_avg_ms": null,
-      "FusedLM_rust_token_runs_ms": [],
-      "CharacterBeam_avg_ms": 69,
+      "peak_rss_mb": 1601,
+      "CharacterBeam_avg_ms": 50,
       "CharacterBeam_runs_ms": [
-        69,
-        71,
-        67
+        50
       ]
     },
     {
       "vocab_size": 12008,
       "fst_states": 22172,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 158,
+      "FusedLM_rust_avg_ms": 136,
       "FusedLM_rust_runs_ms": [
-        174,
-        147,
-        158
+        136
       ],
-      "peak_rss_mb": 4032,
-      "FusedLM_rust_token_avg_ms": null,
-      "FusedLM_rust_token_runs_ms": [],
-      "CharacterBeam_avg_ms": 96,
+      "peak_rss_mb": 1955,
+      "CharacterBeam_avg_ms": 50,
       "CharacterBeam_runs_ms": [
-        96,
-        96,
-        93
+        50
       ]
     },
     {
       "vocab_size": 15008,
       "fst_states": 28005,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 213,
+      "FusedLM_rust_avg_ms": 224,
       "FusedLM_rust_runs_ms": [
-        201,
-        227,
-        213
+        224
       ],
-      "peak_rss_mb": 4815,
-      "FusedLM_rust_token_avg_ms": null,
-      "FusedLM_rust_token_runs_ms": [],
-      "CharacterBeam_avg_ms": 103,
+      "peak_rss_mb": 2579,
+      "CharacterBeam_avg_ms": 85,
       "CharacterBeam_runs_ms": [
-        103,
-        103,
-        112
+        85
+      ]
+    },
+    {
+      "vocab_size": 20005,
+      "fst_states": 37786,
+      "n_target_bytes": 8,
+      "FusedLM_rust_avg_ms": 402,
+      "FusedLM_rust_runs_ms": [
+        402
+      ],
+      "peak_rss_mb": 3924,
+      "CharacterBeam_avg_ms": 87,
+      "CharacterBeam_runs_ms": [
+        87
+      ]
+    },
+    {
+      "vocab_size": 30002,
+      "fst_states": 57401,
+      "n_target_bytes": 8,
+      "FusedLM_rust_avg_ms": 1064,
+      "FusedLM_rust_runs_ms": [
+        1064
+      ],
+      "peak_rss_mb": 7803,
+      "CharacterBeam_avg_ms": 129,
+      "CharacterBeam_runs_ms": [
+        129
+      ]
+    },
+    {
+      "vocab_size": 50256,
+      "fst_states": 98024,
+      "n_target_bytes": 8,
+      "FusedLM_rust_avg_ms": null,
+      "FusedLM_rust_runs_ms": [],
+      "peak_rss_mb": 8102,
+      "CharacterBeam_avg_ms": 273,
+      "CharacterBeam_runs_ms": [
+        273
       ]
     }
   ]

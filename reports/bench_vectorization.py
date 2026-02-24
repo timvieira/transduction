@@ -93,9 +93,9 @@ if args.quick:
     SCALE_TIMEOUT = 60
     N_RUNS = 1
 else:
-    VOCAB_SIZES = [257, 500, 1000, 2000, 5000, 7000, 10000, 12000, 15000]
+    VOCAB_SIZES = [257, 500, 1000, 2000, 5000, 7000, 10000, 12000, 15000, 20000, 30000, 50256]
     SCALE_TIMEOUT = 300
-    N_RUNS = 3
+    N_RUNS = 1
 
 def make_character_beam(lm, used):
     """Build a CharacterBeam from an LM and a set of token IDs."""
@@ -107,7 +107,6 @@ def make_character_beam(lm, used):
 
 methods = [
     ('FusedLM_rust', lambda lm, fst, used: FusedTransducedLM(lm, fst, max_steps=200, max_beam=10, helper='rust')),
-    ('FusedLM_rust_token', lambda lm, fst, used: FusedTransducedLM(lm, fst, max_steps=200, max_beam=10, helper='rust_token')),
     ('CharacterBeam', lambda lm, fst, used: make_character_beam(lm, used)),
 ]
 
