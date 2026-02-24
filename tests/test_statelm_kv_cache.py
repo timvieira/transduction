@@ -170,7 +170,7 @@ class TestHuggingFaceLM:
 
     def test_intlazyprob_top(self, lm):
         """TokenLogProbs.top(K) should return K entries sorted by logp."""
-        top5 = lm.initial().logp_next.top(5)
+        top5 = lm.initial().logp_next.top_ids(5)
         assert len(top5) == 5
         vals = list(top5.values())
         assert vals == sorted(vals, reverse=True)

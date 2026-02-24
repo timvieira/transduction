@@ -178,7 +178,7 @@ class _FusedSearch:
             # Uses single_arc() to compute individual DFA transitions without
             # materializing all |V| arcs — O(k) instead of O(|V|).
             sym_map = self._tlm._sym_map
-            for x, logp in lm_logp_next.top(self._top_k).items():
+            for x, logp in lm_logp_next.top_ids(self._top_k).items():
                 if x not in sym_map:
                     continue
                 x_u32 = sym_map[x]

@@ -9,6 +9,7 @@ from functools import cached_property
 from typing import Any
 
 from transduction.lm.base import LM, LMState
+from transduction.util import LogDistr
 
 
 def _clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
@@ -168,7 +169,15 @@ class TokenLogProbs:
         probs /= probs.sum()
         return int(np.random.choice(len(probs), p=probs))
 
-    def top(self, K: int) -> dict[int, Any]:
+    def top(self, K: int) -> LogDistr[bytes]:
+        top_idx = self._p.argsort()[-K:]
+        return LogDistr({
+            self._decode[i]: self._p[i]
+            for i in reversed(top_idx)
+            if self._decode[i] is not None
+        })
+
+    def top_ids(self, K: int) -> dict[int, Any]:
         top_idx = self._p.argsort()[-K:]
         return {int(i): self._p[i] for i in reversed(top_idx)}
 
@@ -182,7 +191,7 @@ class TokenLogProbs:
         return {keys[i]: self._p[i] for i in reversed(top_idx) if keys[i] is not None}
 
     def __repr__(self) -> str:
-        return repr(self.top(10))
+        return repr(self.top_ids(10))
 
 
 class _BatchedOutput:
