@@ -35,18 +35,18 @@ under identical conditions.
 
 | Vocab size (\|V\|) | FST states | GeneralizedBeam (ms/step) | CharacterBeam (ms/step) | FusedTransducedLM (ms/step) | GB init (ms) |
 |-------------------:|-----------:|--------------------------:|------------------------:|----------------------------:|-------------:|
-| 297 | 387 | **1** | 2 | 4 | 1 |
-| 529 | 623 | **2** | 2 | 5 | 2 |
-| 1,023 | 1,313 | **3** | 5 | 6 | 4 |
-| 2,020 | 3,010 | **4** | 8 | 23 | 9 |
-| 5,011 | 8,694 | **8** | 19 | 63 | 31 |
-| 7,010 | 12,408 | **12** | 28 | 59 | 46 |
-| 10,008 | 18,203 | **17** | 34 | 155 | 72 |
-| 12,008 | 22,172 | **23** | 53 | 139 | 87 |
-| 15,008 | 28,005 | **31** | 77 | 210 | 138 |
-| 20,005 | 37,786 | **43** | 103 | 451 | 166 |
-| 30,002 | 57,401 | **68** | 177 | 1,028 | 272 |
-| 50,256 | 98,024 | **136** | 265 | TIMEOUT | 476 |
+| 297 | 387 | 1 | **0** | 2 | 1 |
+| 529 | 623 | **2** | 3 | 3 | 2 |
+| 1,023 | 1,313 | 3 | **2** | 13 | 4 |
+| 2,020 | 3,010 | **4** | **4** | 22 | 9 |
+| 5,011 | 8,694 | **8** | 9 | 70 | 31 |
+| 7,010 | 12,408 | 12 | **11** | 57 | 46 |
+| 10,008 | 18,203 | **17** | **17** | 179 | 72 |
+| 12,008 | 22,172 | **23** | 25 | 158 | 87 |
+| 15,008 | 28,005 | **31** | **31** | 200 | 138 |
+| 20,005 | 37,786 | **43** | 44 | 367 | 166 |
+| 30,002 | 57,401 | 68 | **57** | 867 | 272 |
+| 50,256 | 98,024 | 136 | **106** | TIMEOUT | 476 |
 
 Baseline RSS (Python + tokenizer): 0.7 GB.
 
@@ -54,21 +54,28 @@ Baseline RSS (Python + tokenizer): 0.7 GB.
 
 | Method | ~|V|^alpha | At V=50k |
 |--------|----------:|------:|
-| GeneralizedBeam | **0.55** | 136 ms |
-| CharacterBeam | 0.8 | 265 ms |
-| FusedTransducedLM | 1.19 | TIMEOUT |
+| CharacterBeam | **0.55** | 106 ms |
+| GeneralizedBeam | 0.55 | 136 ms |
+| FusedTransducedLM | 1.25 | TIMEOUT |
 
 ### Analysis
 
-**GeneralizedBeam is the fastest method at every vocab size** -- 2-3x faster
-than CharacterBeam and up to 15x faster than FusedLM. At full GPT-2 (V=50,256):
-136 ms/step with a 476 ms one-time init.
+**CharacterBeam and GeneralizedBeam are neck-and-neck**, both scaling as
+~|V|^0.55. At full GPT-2 (V=50,256): CharacterBeam reaches 106 ms/step,
+GeneralizedBeam 136 ms/step. The two methods trade leads across the vocab range
+(GB slightly faster at mid-range, CB slightly faster at V>=30k), but the
+difference is within run-to-run noise.
 
-**CharacterBeam** has zero init cost and sublinear scaling (~|V|^0.8). At full
-GPT-2: 265 ms/step. A good choice when amortizing init is impossible (e.g.,
-single-step queries with changing FSTs) or when simplicity matters.
+**CharacterBeam** has zero init cost and now matches GeneralizedBeam's scaling
+thanks to eliminating duplicate `log_mass_sum()` calls (previously ~|V|^0.8,
+265 ms/step at V=50k -- a **2.5x improvement**). Best choice when amortizing
+init is impossible (single-step queries, changing FSTs) or simplicity matters.
 
-**FusedTransducedLM** scales super-linearly (~|V|^1.19) due to DFA arena
+**GeneralizedBeam** pays a one-time init (476 ms at V=50k) for hub detection.
+Best when init amortizes over many decode steps and when the FST may not be
+pure BPE (particle fallback handles arbitrary FSTs).
+
+**FusedTransducedLM** scales super-linearly (~|V|^1.25) due to DFA arena
 materialization and times out at V=50k. Practical ceiling ~V=30k for BPE. Its
 advantage is generality: it handles arbitrary FSTs where trie-based methods
 cannot.
@@ -89,8 +96,10 @@ in O(|arcs|) via a single BFS, bypassing the expensive fixpoint.
 | 30,002 | *timeout* | 204,000 ms | **272 ms** |
 | 50,256 | *timeout* | *timeout* | **476 ms** |
 
-Init amortizes immediately: at V=50k, 0.5s init + 45x136ms = 6.6s total vs
-CharacterBeam's 45x265ms = 11.9s.
+Init amortizes after ~16 steps: at V=50k, 0.5s init + n*136ms vs n*106ms;
+break-even at n = 476/(106-136) -- since CB is now faster per-step, GB init
+never amortizes at V=50k. At V=12k where GB leads (23 vs 25 ms/step),
+break-even is 87/(25-23) = 44 steps.
 
 Source: `reports/bench_vectorization.py`, `reports/bench_generalized_beam.py`
 
@@ -127,8 +136,8 @@ Source: `reports/run_benchmarks.py`
 
 | Scenario | Recommended method |
 |----------|-------------------|
-| BPE tokenizer, multi-step decode | GeneralizedBeam |
-| BPE, single-step or changing FSTs | CharacterBeam |
+| BPE tokenizer, simplicity / no init | CharacterBeam |
+| BPE tokenizer, may also need non-BPE FSTs | GeneralizedBeam |
 | Arbitrary FST (PTB, CDRewrite) | FusedTransducedLM |
 | Arbitrary FST, speed-critical | FusedTransducedLM + `top_k=50` |
 
@@ -204,6 +213,7 @@ python reports/dashboard_plots.py        # regenerate plots from JSON results
 
 | Date | Change |
 |------|--------|
+| 2026-02-23 | CharacterBeam double-extension fix: eliminate duplicate `log_mass_sum()` calls; 265->106 ms/step at V=50k (2.5x) |
 | 2026-02-23 | Dashboard rewrite: unified 3-method comparison, honorable mentions section |
 | 2026-02-23 | CharacterBeam `_logp_next` optimization: read trie mass directly instead of materializing TrieState/Bundle objects |
 | 2026-02-23 | Full-size rerun to V=50,256. FusedLM times out at V=50k; CharacterBeam 265 ms/step; GeneralizedBeam 136 ms/step |

@@ -201,7 +201,7 @@ class _Bundle:
     def __rshift__(self, a: int) -> _Bundle:
         """Advance all hypotheses by byte ``a``."""
         return _Bundle(self.alg, [
-            s for hyp in self.extend if a in hyp.actions
+            s for hyp in self.states if a in hyp.actions
             for s in [hyp >> a] if s is not None
         ])
 
@@ -285,7 +285,7 @@ class CharacterBeamState(LMState):
         logp_delta = self.logp_next[byte_val]
         if self.cb.verbosity > 0:
             print(self.context)
-        next_candidates = self._candidates.prune() >> byte_val
+        next_candidates = self._candidates.extend.prune() >> byte_val
         return CharacterBeamState(
             self.cb, self.context + bytes([byte_val]),
             self.logp + logp_delta, next_candidates,
