@@ -185,12 +185,6 @@ O(|total DFA|). Steady-state: 0.02-0.14 ms/step regardless of DFA size
 - **DirtyPeekaboo non-monotonic targets** ([#5](https://github.com/timvieira/transduction/issues/5)):
   Incorrect results with tree-branching decode (shorter target after longer).
 
-- **PyniniNonrecursiveDecomp epsilon-chain bug**: 2 xfailed tests
-  (`test_bpe_like`, `test_bpe_embedded`).
-
-- **rust_token broken**: `FusedTransducedLM(helper='rust_token')` fails with
-  ValueError on the first decode step. Dropped from benchmarks.
-
 ---
 
 ## Regenerating

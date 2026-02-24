@@ -20,7 +20,6 @@ FACTORED_FILE = os.path.join(os.path.dirname(__file__), 'bench_factored_results.
 # Color palette
 C_FUSED = '#5B8DB8'
 C_FUSED_MEM = '#2E6B9E'
-C_RUST_TOKEN = '#E07B54'
 C_TRANSDUCED = '#6BBF6B'
 C_PTB = '#D4A843'
 C_EXTRAPOLATE = '#999999'
@@ -99,7 +98,6 @@ fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
 # Left panel: time — all methods
 method_styles = {
     'FusedLM_rust':       ('o-', C_FUSED, 2.5, 8, 'FusedTransducedLM'),
-    'FusedLM_rust_token': ('s-', C_RUST_TOKEN, 2, 7, 'FusedLM (rust_token)'),
     'CharacterBeam':      ('D-', C_CHARBEAM, 2, 7, 'CharacterBeam'),
 }
 for key in method_keys:

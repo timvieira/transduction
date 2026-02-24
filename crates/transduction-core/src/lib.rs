@@ -5,8 +5,6 @@ pub mod decompose;
 pub mod peekaboo;
 pub mod minimize;
 pub mod incremental;
-pub mod token_decompose;
-pub mod token_peekaboo;
 pub mod lazy_precover;
 pub mod py;
 
@@ -27,10 +25,8 @@ fn transduction_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<py::PeekabooBeamView>()?;
     m.add_class::<py::RustLazyPeekabooDFA>()?;
     m.add_class::<py::PeekabooClassifyResult>()?;
-    m.add_class::<py::RustTokenPeekabooDFA>()?;
     m.add_class::<py::RustLazyPrecoverDFA>()?;
     m.add_function(wrap_pyfunction!(py::rust_decompose, m)?)?;
-    m.add_function(wrap_pyfunction!(py::rust_decompose_token_level, m)?)?;
     m.add_function(wrap_pyfunction!(py::rust_compute_ip_universal_states, m)?)?;
     m.add_function(wrap_pyfunction!(py::rust_compute_hub_vocab, m)?)?;
     Ok(())

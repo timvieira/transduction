@@ -29,8 +29,7 @@ Documentation now covers all public modules (module docstrings), constructors,
 abstract interfaces, and the Rust bridge classes; a tutorial notebook
 (`examples/tutorial.ipynb`) provides an end-to-end walkthrough with rich
 Graphviz and HTML display. The remaining path to production readiness: batch
-LM calls for GPU utilization, and full-scale BPE validation with
-`TokenPeekabooHelper`.
+LM calls for GPU utilization.
 
 ---
 
@@ -49,9 +48,7 @@ Each variant serves a distinct niche:
 | Batched | `PeekabooState`, `Peekaboo` (nonrecursive) | Amortize DFA across all next symbols |
 | Incremental | `DirtyPeekaboo`, `TruncatedIncrementalDFADecomp` | Reuse DFA state across decode steps |
 | Trie dispatch | `TrieDispatchDFADecomp` | Trie-based decomposition dispatch |
-| Token-level | `TokenDecompose`, `TokenPeekabooHelper` | O(N) position-set DFA for BPE-like FSTs |
 | Lazy DFA | `LazyPrecoverDFA` | On-demand DFA with integer packing + hash-consing |
-| Pynini | `pynini_ops`, `PyniniTransducedLM` | WFST-composition reference; pynini-backed LM |
 | Rust | `RustDecomp`, `RustDirtyState`, `RustDirtyPeekaboo` | 3-25x over Python |
 | Finite-only | `LazyIncremental`, `LazyNonrecursive`, `PrioritizedLazy` | Finite-language FSTs |
 
@@ -99,7 +96,6 @@ is self-contained with no pollution of core algorithms.
 - `test_fst.py`: 56 tests covering FST methods (99% coverage)
 - `test_lazy_peekaboo_dfa.py`: 23 tests for Rust lazy DFA integration
 - `test_lazy_precover_dfa.py`: 26 tests for lazy precover DFA (Python + Rust)
-- `test_pynini_ops.py`: 115 tests for pynini reference operations
 - `test_fsa.py`: 28 tests for FSA operations
 - Recent additions: 9 new parametrized test cases for epsilon chains,
   nonproductive cycles, delayed output, multichar output symbols, OOV symbols
@@ -222,7 +218,7 @@ with GPT-2's tuple caches but will silently corrupt results with modern
 
 All public API modules now have type annotations: `base.py`, `fst.py`,
 `lm/base.py`, `lm/transduced.py`, `lm/ngram.py`, `lm/statelm.py`,
-`lm/fused_transduced.py`, `lm/reference_transduced.py`, `lm/pynini_transduced.py`.
+`lm/fused_transduced.py`, `lm/reference_transduced.py`.
 
 ---
 
@@ -233,9 +229,9 @@ All public API modules now have type annotations: `base.py`, `fst.py`,
 | Component | Files | Lines | Notes |
 |-----------|-------|-------|-------|
 | Core (FST/FSA/base) | 4 | ~1,920 | Stable, well-tested (precover.py split out) |
-| Algorithms | 16 | ~5,600 | +lazy_precover_dfa, token_decompose, trie_dispatch |
+| Algorithms | 14 | ~4,800 | +lazy_precover_dfa, trie_dispatch |
 | LM integration | 7 | ~2,200 | +FusedTransducedLM `helper=` backends |
-| Rust backend | 12 | ~7,300 | +lazy_precover, token_decompose, token_peekaboo |
+| Rust backend | 10 | ~6,200 | +lazy_precover |
 | Applications | 3 | ~580 | BPE, PTB, WikiText |
 | Utilities | 8 | ~3,950 | viz, examples, lazy, util, rust_bridge (+257 lines), enumeration |
 | **Total Python** | **38** | **~15,200** | |
@@ -312,5 +308,4 @@ decomposition with position-set DFA states for BPE-like FSTs, and pluggable
 fixed (max diff 0.000287, was 2.03). A critical bug in PeekabooState on
 BPE-style epsilon-output chains was identified and fixed (#9). Test coverage
 stands at 1191 tests across 16 files. The remaining work is performance
-(batched LM calls) and scaling validation (full GPT-2 BPE with
-`TokenPeekabooHelper`).
+(batched LM calls).

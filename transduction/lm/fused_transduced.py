@@ -83,11 +83,6 @@ class _FusedSearch:
             if item.dfa_state is None:
                 s = tlm.run(item.source_path)
                 if s is None:
-                    # Sentinel unresolvable in quotiented DFA — drop particle.
-                    # This can happen with approximate helpers (e.g. 'token',
-                    # 'rust_token') where position-key quotienting causes the
-                    # DFA to miss some states.  The generic 'rust' helper
-                    # never hits this because its powerset DFA is exact.
                     continue
                 resolved.append(Particle(s, item.lm_state, item.log_weight, item.source_path))
             else:
@@ -333,6 +328,13 @@ class FusedTransducedLM(LM[Token]):
     Combines decomposition and LM-weighted search into a single best-first
     pass.  The lazy DFA is constructed on demand per target step; only states
     reachable via high-probability source paths are expanded.
+
+    Batching note: FusedTransducedLM's best-first search is inherently
+    sequential (pop one particle, score, expand), so it does not currently
+    benefit from ``LM.prefetch()``.  Batching would require popping K
+    particles at once or pre-populating logp_next for queued particles.
+    This is left as future work.  For batched inference, use
+    ``CharacterBeam`` or ``GeneralizedBeam``, which support prefetch.
     """
 
     def __init__(self, inner_lm: LM, fst: FST[Any, Any],
@@ -364,24 +366,8 @@ class FusedTransducedLM(LM[Token]):
             self._inv_sym_map = {v: k for k, v in helper_obj._sym_map.items()}
             self._state_map = None
             self._helper_mode = "python"
-        elif helper == "token":
-            from transduction.token_decompose import TokenPeekabooHelper
-            helper_obj = TokenPeekabooHelper(fst)
-            self._rust_helper = helper_obj
-            self._sym_map = {k: v for k, v in helper_obj._sym_map.items()}
-            self._inv_sym_map = {v: k for k, v in helper_obj._sym_map.items()}
-            self._state_map = None
-            self._helper_mode = "token"
-        elif helper == "rust_token":
-            import transduction_core
-            rust_fst, sym_map, state_map = to_rust_fst(fst)
-            self._rust_helper = transduction_core.RustTokenPeekabooDFA(rust_fst)
-            self._sym_map = {k: v for k, v in sym_map.items()}
-            self._inv_sym_map = {v: k for k, v in sym_map.items()}
-            self._state_map = state_map
-            self._helper_mode = "rust_token"
         else:
-            raise ValueError("helper must be 'rust', 'python', 'token', or 'rust_token'")
+            raise ValueError("helper must be 'rust' or 'python'")
 
     def decode_dfa_state(self, state_id: int,
                          target: Str[Token]) -> frozenset[Any]:

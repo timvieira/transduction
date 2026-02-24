@@ -26,15 +26,13 @@ Do not auto-commit after finishing work.
 - `transduction/prioritized_lazy_incremental.py` — PrioritizedLazyIncremental (finite-language, heuristic BFS)
 - `transduction/viz.py` — Visualization/display utilities for automata (used in notebooks)
 - `transduction/enumeration.py` — LM-weighted path enumeration (prioritized_enumeration, importance_sampling)
-- `transduction/pynini_ops.py` — Pynini/OpenFST-backed reference P(y)/Q(y)/R(y) via composition and projection
 - `transduction/lazy.py` — Lazy automaton framework (LazyDeterminize, EpsilonRemove)
 - `transduction/lazy_precover_dfa.py` — LazyPrecoverDFA: on-demand DFA with integer packing, hash-consing, eps-closure caching
-- `transduction/token_decompose.py` — TokenDecompose, TokenPeekabooHelper: position-set DFA states O(N) for BPE-like FSTs; FusedTransducedLM `helper="token"` backend
 - `transduction/trie_dispatch.py` — TrieDispatchDFADecomp: trie-based dispatch for decomposition
 - `transduction/applications/bpe.py` — BPE WFST builder (`bpe_wfst`)
 - `transduction/applications/ptb.py` — PTB tokenizer FST built with pynini
 - `transduction/applications/wikitext.py` — WikiText data loading (`load_wikitext`, `wikitext_detokenize`)
-- `transduction/rust_bridge.py` — Python ↔ Rust conversion layer; also provides `RustPeekabooState`, `RustLazyPeekabooDFA`, `RustTokenPeekabooDFA`
+- `transduction/rust_bridge.py` — Python ↔ Rust conversion layer; also provides `RustPeekabooState`, `RustLazyPeekabooDFA`
 - `transduction/util.py` — Shared utilities: `Integerizer`, `logsumexp`, `LogVector` (mutable log-space accumulator), `LogDistr` (immutable log-probability distribution), `memoize`, `timelimit`, `set_memory_limit`, `memory_limit`, `sample`, `colors`
 - `transduction/examples.py` — Example FSTs for testing
 
@@ -53,11 +51,10 @@ Self-contained language model interface for use with enumeration/sampling:
   - Includes inlined dependencies: `HfTokenizerVocab`, `flatten`/`unflatten`
   - External deps: `torch`, `transformers`
 - `transduction/lm/transduced.py` — `TransducedLM`, `TransducedState` (pushforward of an inner LM through an FST; defaults to Rust backend)
-- `transduction/lm/fused_transduced.py` — `FusedTransducedLM`, `FusedTransducedState` (single-pass interleaved decomposition + LM search; `helper=` for pluggable backends: `"rust"`, `"python"`, `"token"`)
+- `transduction/lm/fused_transduced.py` — `FusedTransducedLM`, `FusedTransducedState` (single-pass interleaved decomposition + LM search; `helper=` for pluggable backends: `"rust"`, `"python"`)
 - `transduction/lm/reference_transduced.py` — `ReferenceTransducedLM` (ground-truth transduced LM via Precover; enumerates Q/R languages exactly; finite-relation FSTs only)
 - `transduction/lm/character_beam.py` — `CharacterBeam`, `TokenCharacterTrie`, `TrieState`, `CharacterBeamState` (character-level beam search exploiting SPM property; fast for BPE; optional `numba` JIT for trie mass updates)
 - `transduction/lm/generalized_beam.py` — `GeneralizedBeam`, `GeneralizedBeamState`, `OutputTrie`, `HubHyp` (hybrid trie-mass / particle beam search; trie-mass at IP-universal accepting hubs, particle expansion elsewhere; unifies CharacterBeam and FusedTransducedLM)
-- `transduction/lm/pynini_transduced.py` — `PyniniTransducedLM` (pynini-backed transduced LM with particle-based inference)
 
 ### Rust Acceleration (`crates/transduction-core/`)
 
@@ -69,9 +66,7 @@ Self-contained language model interface for use with enumeration/sampling:
 - `powerset.rs` — PowersetArena (hash-consing DFA states; single-element fast path for 99% of BPE cases)
 - `minimize.rs` — DFA minimization
 - `lazy_precover.rs` — LazyPrecoverDFA: lazy DFA over precover NFA with on-demand expansion and arc caching
-- `token_decompose.rs` — Token-level decomposition using compact bitsets for position sets
-- `token_peekaboo.rs` — Position-set-quotiented peekaboo DFA for FusedTransducedLM
-- `py.rs` — PyO3 bindings (RustFst, RustFsa, DecompResult, PeekabooDecompResult, TokenPeekabooDFA)
+- `py.rs` — PyO3 bindings (RustFst, RustFsa, DecompResult, PeekabooDecompResult)
 
 ## Dependencies
 
@@ -90,7 +85,7 @@ Test-only deps:
 - `pytest` — test runner
 
 Optional deps:
-- `pynini` — PTB tokenizer FST construction (`applications/ptb.py`)
+- `pynini` — PTB tokenizer FST construction (`applications/ptb.py`; no longer used for decomposition)
 - `nltk` — PTB tokenizer testing
 - `datasets` — WikiText data loading
 - `tqdm` — progress bars in benchmarks
@@ -103,10 +98,9 @@ Eliminated deps (previously external, now inlined):
 
 ## Test Status
 
-- `test_general.py`: 470 passed (10 implementations × 47 test cases)
+- `test_general.py`: 423 passed (9 implementations × 47 test cases)
 - `test_finite.py`: 119 passed
-- `test_pynini_ops.py`: 115 passed
-- `test_transduced.py`: 106 passed
+- `test_transduced.py`: 90 passed
 - `test_lazy.py`: 100 passed
 - `test_fst.py`: 56 passed
 - `test_enumeration.py`: 55 passed
@@ -120,11 +114,11 @@ Eliminated deps (previously external, now inlined):
 - `test_make_total.py`: 3 passed
 - `test_generalized_beam.py`: 33 passed
 - `test_statelm_kv_cache.py`: 12 passed
-- **Total: 1233 tests across 17 files (1231 passed, 2 xfailed)**
+- **Total: 1055 tests across 16 files (1055 passed)**
 - `test_general.py` tests the **general-case** algorithms (handle infinite quotients/remainders):
   NonrecursiveDFADecomp, TruncatedIncrementalDFADecomp, TrieDispatchDFADecomp,
   PeekabooState, PeekabooNonrecursive, DirtyPeekaboo, RustDecomp, RustDirtyState,
-  RustDirtyPeekaboo, PyniniNonrecursiveDecomp.
+  RustDirtyPeekaboo.
 - **Finite-only algorithms are excluded from test_general.py** and tested in
   `test_finite.py`. These diverge on FSTs with infinite quotients because they
   don't truncate the target buffer:

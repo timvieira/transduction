@@ -1,6 +1,6 @@
 use pyo3::prelude::*;
 use crate::fst::{Fst, compute_ip_universal_states};
-use crate::{decompose, peekaboo, incremental, minimize, token_peekaboo, lazy_precover};
+use crate::{decompose, peekaboo, incremental, minimize, lazy_precover};
 use std::time::Instant;
 
 /// Python-visible FST wrapper. Constructed once from Python arrays, then
@@ -215,15 +215,6 @@ fn wrap_decomp_result(py: Python<'_>, result: decompose::DecompResult, do_minimi
 #[pyo3(signature = (fst, target, minimize=false))]
 pub fn rust_decompose(py: Python<'_>, fst: &RustFst, target: Vec<u32>, minimize: bool) -> PyResult<DecompResult> {
     let result = decompose::decompose(&fst.inner, &target);
-    wrap_decomp_result(py, result, minimize)
-}
-
-/// Token-level decomposition for BPE-like FSTs where all_input_universal holds.
-/// Uses position-set bitsets instead of the full NFA state space.
-#[pyfunction]
-#[pyo3(signature = (fst, target, minimize=false))]
-pub fn rust_decompose_token_level(py: Python<'_>, fst: &RustFst, target: Vec<u32>, minimize: bool) -> PyResult<DecompResult> {
-    let result = crate::token_decompose::decompose_token_level(&fst.inner, &target);
     wrap_decomp_result(py, result, minimize)
 }
 
@@ -878,87 +869,6 @@ impl RustLazyPeekabooDFA {
         self.idx_to_sym.clone()
     }
 
-}
-
-// ---------------------------------------------------------------------------
-// RustTokenPeekabooDFA: position-set-quotiented lazy DFA
-// ---------------------------------------------------------------------------
-
-/// Rust-backed position-set-quotiented peekaboo DFA.
-///
-/// Same interface as `RustLazyPeekabooDFA` but uses position-key quotienting
-/// for much smaller DFAs on token-decomposable FSTs (~45 states for BPE vs
-/// ~7,000 with the generic approach).  The DFA is built lazily: `new_step()`
-/// only computes the start state, arcs and classification are computed on
-/// demand.
-#[pyclass(unsendable)]
-pub struct RustTokenPeekabooDFA {
-    fst: Py<RustFst>,
-    inner: token_peekaboo::TokenPeekabooDFA,
-}
-
-#[pymethods]
-impl RustTokenPeekabooDFA {
-    #[new]
-    fn new(py: Python<'_>, fst: Py<RustFst>) -> Self {
-        let inner = token_peekaboo::TokenPeekabooDFA::new(&fst.borrow(py).inner);
-        RustTokenPeekabooDFA { fst, inner }
-    }
-
-    /// Reset the DFA for the given target prefix.  Only computes the start
-    /// state; arcs and classification are computed lazily on demand.
-    fn new_step(&mut self, py: Python<'_>, target: Vec<u32>) {
-        let inner_fst = &self.fst.borrow(py).inner;
-        self.inner.new_step(inner_fst, target);
-    }
-
-    /// Return the start state IDs for the current step.
-    fn start_ids(&self) -> Vec<u32> {
-        self.inner.start_ids().to_vec()
-    }
-
-    /// Return arcs from a DFA state: Vec<(input_label_u32, dest_sid)>.
-    /// Lazily computes arcs on first access.
-    fn arcs(&mut self, py: Python<'_>, sid: u32) -> Vec<(u32, u32)> {
-        let inner_fst = &self.fst.borrow(py).inner;
-        self.inner.ensure_arcs(inner_fst, sid);
-        self.inner.arcs(sid).to_vec()
-    }
-
-    /// Run a source path using DFA arcs (lazily computed).
-    fn run(&mut self, py: Python<'_>, source_path: Vec<u32>) -> Option<u32> {
-        let inner_fst = &self.fst.borrow(py).inner;
-        self.inner.run(inner_fst, &source_path)
-    }
-
-    /// Compute the DFA destination for a single input symbol from a state.
-    fn single_arc(&mut self, py: Python<'_>, sid: u32, x: u32) -> Option<u32> {
-        let inner_fst = &self.fst.borrow(py).inner;
-        self.inner.single_arc(inner_fst, sid, x)
-    }
-
-    /// Classify a DFA state: quotient/remainder/preimage/truncated.
-    /// Lazily computes classification on first access.
-    fn classify(&mut self, py: Python<'_>, sid: u32) -> PeekabooClassifyResult {
-        let inner_fst = &self.fst.borrow(py).inner;
-        self.inner.ensure_classify(inner_fst, sid);
-        let cls = self.inner.classify(sid);
-        let idx_to_sym = self.inner.idx_to_sym();
-        PeekabooClassifyResult {
-            quotient_sym: cls.quotient_sym.map(|idx| idx_to_sym[idx as usize]),
-            remainder_syms: cls.remainder_syms
-                .iter().map(|&idx| idx_to_sym[idx as usize]).collect(),
-            is_preimage: cls.is_preimage,
-            has_truncated: cls.has_truncated,
-            trunc_output_syms: cls.trunc_output_syms
-                .iter().map(|&idx| idx_to_sym[idx as usize]).collect(),
-        }
-    }
-
-    /// Return the idx→symbol mapping for decoding.
-    fn idx_to_sym_map(&self) -> Vec<u32> {
-        self.inner.idx_to_sym().to_vec()
-    }
 }
 
 // ---------------------------------------------------------------------------

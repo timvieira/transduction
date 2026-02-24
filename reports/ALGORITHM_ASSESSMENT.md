@@ -43,15 +43,6 @@ All implementations now support the `>>` operator: incremental algorithms provid
 optimized `__rshift__`; non-incremental implementations inherit `DecompositionResult.__rshift__`
 which constructs a fresh decomposition for the extended target.
 
-### Pynini-Backed Reference Implementations
-
-These use OpenFST/pynini WFST operations for composition-based P(y)/Q(y)/R(y).
-
-| Algorithm | Language | File | Notes |
-|-----------|----------|------|-------|
-| `pynini_ops` | Python | `pynini_ops.py` | Precover, quotient, remainder via pynini composition/projection |
-| `PyniniTransducedLM` | Python | `lm/pynini_transduced.py` | Pynini-backed transduced LM with particle inference |
-
 ### Token-Level and Lazy Decomposition
 
 These optimize decomposition for specific FST topologies or via on-demand construction.
@@ -59,8 +50,6 @@ These optimize decomposition for specific FST topologies or via on-demand constr
 | Algorithm | Language | File | Notes |
 |-----------|----------|------|-------|
 | `LazyPrecoverDFA` | Python+Rust | `lazy_precover_dfa.py`, `lazy_precover.rs` | On-demand DFA with integer packing, hash-consing, eps-closure caching |
-| `TokenDecompose` | Python+Rust | `token_decompose.py`, `token_decompose.rs` | Position-set DFA states O(N) for BPE-like FSTs |
-| `TokenPeekabooHelper` | Python+Rust | `token_decompose.py`, `token_peekaboo.rs` | FusedTransducedLM backend via `helper="token"` |
 | `TrieDispatchDFADecomp` | Python | `trie_dispatch.py` | Trie-based dispatch for decomposition |
 
 ### Finite-Only Decomposition Algorithms
@@ -94,9 +83,7 @@ quotients. Tested separately in `test_finite.py`.
 | `FusedTransducedLM` | `lm/fused_transduced.py` | Single-pass interleaved decomposition + LM search |
 | `RustPeekabooState` | `rust_bridge.py` | Rust-backed incremental peekaboo state (default for TransducedLM) |
 | `RustLazyPeekabooDFA` | `rust_bridge.py` | Rust-backed lazy DFA interface for FusedTransducedLM beam search |
-| `TokenPeekabooHelper` | `token_decompose.py` | Position-set-quotiented backend for FusedTransducedLM (`helper="token"`) |
 | `ReferenceTransducedLM` | `lm/reference_transduced.py` | Ground-truth transduced LM via Precover (finite-relation FSTs only) |
-| `PyniniTransducedLM` | `lm/pynini_transduced.py` | Pynini-backed transduced LM with particle-based inference |
 
 Self-contained (no external tokenization deps). Example:
 ```python
@@ -184,9 +171,6 @@ decomps = peekaboo.decompose_next()  # Q/R for all next symbols
 
 For **one-shot decomposition**, use `RustDecomp` (Rust) or `NonrecursiveDFADecomp` (Python).
 
-For **pynini-backed reference** (41x on BPE vs Python), use `PyniniNonrecursiveDecomp`
-(requires the `pynini` optional dependency).
-
 ### Finite-Only Algorithms
 
 `LazyIncremental`, `LazyNonrecursive`, and `PrioritizedLazyIncremental` lack target-buffer
@@ -205,15 +189,10 @@ FSTs.
 
 ### Open Questions
 
-1. **Full-scale BPE feasibility**: Will `TokenPeekabooHelper` (O(N) position-set
-   DFA states) make full GPT-2 BPE (50,257 tokens) tractable? The position-set
-   compression is the key scaling hypothesis but hasn't been tested beyond 1k
-   tokens.
-
-2. **Real LM profiling**: What is the decomposition vs LM-forward-pass cost
+1. **Real LM profiling**: What is the decomposition vs LM-forward-pass cost
    split with a real neural LM? All benchmarks use CharNgramLM (O(1) per call).
 
-3. **Batched LM inference**: How much speedup can batched `lm_state >> x`
+2. **Batched LM inference**: How much speedup can batched `lm_state >> x`
    calls provide on GPU? This is the single most impactful unstarted optimization.
 
 ---
@@ -258,9 +237,7 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 
 6. **UniversalityFilter cascade** — AUI fast path $\to$ witness check $\to$ monotonicity caches $\to$ BFS fallback.
 
-7. **Token-level decomposition** — For BPE-like hub-topology FSTs, DFA states collapse to position sets {0..N}, yielding O(N) states instead of O(|FST|×N). Combined with `TokenPeekabooHelper`, this is the key scaling hypothesis for full-vocabulary BPE.
-
-8. **Lazy precover DFA** — On-demand DFA construction with integer packing (`fst_state * stride + buf_pos` → single int), hash-consing (PowersetArena), and productivity-filtered epsilon-closure caching. Python implementation approaches Rust-level performance.
+7. **Lazy precover DFA** — On-demand DFA construction with integer packing (`fst_state * stride + buf_pos` → single int), hash-consing (PowersetArena), and productivity-filtered epsilon-closure caching. Python implementation approaches Rust-level performance.
 
 ---
 
@@ -268,7 +245,6 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 
 - **`test_general.py`**: 470 passed (10 implementations × 47 test cases)
 - **`test_finite.py`**: 119 passed
-- **`test_pynini_ops.py`**: 115 passed
 - **`test_transduced.py`**: 106 passed
 - **`test_lazy.py`**: 100 passed
 - **`test_fst.py`**: 56 passed
