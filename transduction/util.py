@@ -24,8 +24,11 @@ from functools import partial
 from types import FrameType
 from typing import Any, Generic, TypeAlias, TypeVar, overload
 
+import math
+
 import numpy as np
 import numpy.typing as npt
+import torch
 
 _T = TypeVar('_T')
 Str = tuple[_T, ...]
@@ -265,18 +268,13 @@ def memory_limit(gb: float | None) -> Iterator[None]:
 #_______________________________________________________________________________
 # logsumexp
 
-def logsumexp(arr: npt.ArrayLike) -> float:
+def logsumexp(arr) -> float:
     """Numerically stable log-sum-exp over an array of log values."""
-    a = np.array(arr, dtype=np.float64)
-    a = a[a > -np.inf]
-    if len(a) == 0:
+    a = torch.as_tensor(arr, dtype=torch.float64)
+    mask = a > float('-inf')
+    if not mask.any():
         return float('-inf')
-    vmax = a.max()
-    a -= vmax
-    np.exp(a, out=a)
-    out = np.log(a.sum())
-    out += vmax
-    return float(out)
+    return float(torch.logsumexp(a[mask], dim=0))
 
 
 def log1mexp(x: float) -> float:
@@ -291,8 +289,8 @@ def log1mexp(x: float) -> float:
     if x >= 0:
         return _NEG_INF
     if x < -0.6931471805599453:   # -log(2)
-        return float(np.log1p(-np.exp(x)))
-    return float(np.log(-np.expm1(x)))
+        return math.log1p(-math.exp(x))
+    return math.log(-math.expm1(x))
 
 
 #_______________________________________________________________________________
@@ -348,7 +346,7 @@ class _SparseLogMap(dict[K, float]):
         if n == 0:
             return header + ' <i>empty</i>'
         items = sorted(self.items(), key=lambda kv: kv[1], reverse=True)
-        rows = [[repr(k), f'{v:.4f}', f'{np.exp(v):.4f}']
+        rows = [[repr(k), f'{v:.4f}', f'{math.exp(v):.4f}']
                 for k, v in items]
         return header + format_table(
             rows, headings=['key', 'logp', 'p'], max_rows=20,
@@ -367,7 +365,15 @@ class LogVector(_SparseLogMap[K]):
         if prev is None:
             self[key] = value
         else:
-            self[key] = float(np.logaddexp(prev, value))
+            # Inline logaddexp to avoid tensor creation overhead.
+            # logaddexp(a, b) = max(a,b) + log1p(exp(-|a-b|))
+            a, b = prev, value
+            if a < b:
+                a, b = b, a
+            if b == _NEG_INF:
+                self[key] = a
+            else:
+                self[key] = a + math.log1p(math.exp(b - a))
 
     def normalize(self) -> LogDistr[K]:
         """Return a ``LogDistr`` by subtracting ``logsumexp`` from each entry."""
@@ -384,11 +390,11 @@ class LogDistr(_SparseLogMap[K]):
     def sample(self) -> K:
         """Sample a key proportional to ``exp(value)``."""
         toks = list(self.keys())
-        logps = np.array(list(self.values()), dtype=np.float64)
+        logps = torch.tensor(list(self.values()), dtype=torch.float64)
         logps -= logps.max()
-        probs = np.exp(logps)
+        probs = torch.exp(logps)
         probs /= probs.sum()
-        return toks[np.random.choice(len(toks), p=probs)]
+        return toks[int(torch.multinomial(probs, 1).item())]
 
 
 #_______________________________________________________________________________

@@ -17,6 +17,7 @@ and crude_importance_sampling (without decomposition).
 from transduction import Precover, LazyPrecoverNFA
 
 import heapq
+import math
 import numpy as np
 from dataclasses import dataclass
 
@@ -97,7 +98,7 @@ class prioritized_enumeration:
                 ))
             for x, next_state in self.dfa.arcs(item.state):
                 next_weight = float(item.weight + lm_logp_next[x])   # use LM state here
-                if next_weight == -np.inf:
+                if next_weight == float('-inf'):
                     continue
                 next_item = Item(
                     weight = next_weight,
@@ -124,7 +125,7 @@ def _sample_step(lm_logp_next, arcs, is_eos_eligible, EOS):
     keys = list(q.keys())
     vals = np.array(list(q.values()))
     Z = logsumexp(vals)
-    if np.isfinite(Z):
+    if math.isfinite(Z):
         vals = np.exp(vals - Z)
     else:
         vals = np.ones(len(vals))
@@ -161,7 +162,7 @@ class importance_sampling:
         self.precover = precover
         self.lm = lm
 
-    def sample(self, max_length=np.inf):
+    def sample(self, max_length=math.inf):
         EOS = self.lm.eos
 
         t = 0
@@ -205,7 +206,7 @@ class crude_importance_sampling:
         self.dfa = LazyPrecoverNFA(fst, target).det()
         self.lm = lm
 
-    def sample(self, max_length=np.inf):
+    def sample(self, max_length=math.inf):
         EOS = self.lm.eos
 
         t = 0

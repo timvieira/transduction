@@ -22,7 +22,6 @@ Usage:
 
 from __future__ import annotations
 
-import numpy as np
 from functools import cached_property
 from typing import Any
 
@@ -100,7 +99,7 @@ class ReferenceTransducedState(LMState[Token]):
         scores: dict[Token, float] = {}
         for y in self.tlm._target_alphabet:
             s = self._score(self._target + (y,))
-            if s > -np.inf:
+            if s > float('-inf'):
                 scores[y] = s - Z
         # EOS as residual: log P(EOS) = log(1 - Σ_y P(y)) = log1mexp(log Σ_y P(y))
         # (No direct decomposition for P(output = target exactly) because
@@ -112,7 +111,7 @@ class ReferenceTransducedState(LMState[Token]):
         if y == self.eos:
             raise ValueError("Cannot advance past EOS")
         lp = self.logp_next[y]
-        if lp == -np.inf:
+        if lp == float('-inf'):
             raise ValueError(f"Symbol {y!r} has zero probability")
         return ReferenceTransducedState(self.tlm, self._target + (y,), self.logp + lp)
 

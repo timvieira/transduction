@@ -27,9 +27,8 @@ Usage::
 
 from __future__ import annotations
 
-import heapq
-import numpy as np
-import scipy.sparse as sp
+import math
+import torch
 from collections import defaultdict, deque
 from functools import cached_property
 from typing import Any
@@ -52,7 +51,7 @@ class OutputTrie:
     Generalizes TokenCharacterTrie from character_beam.py.  Each leaf stores
     ``(source_symbol, dest_state)`` — the source token consumed and the FST
     state reached.  Precomputes a COO reachability index for vectorized
-    ``log_mass_sum`` via ``np.logaddexp.at``.
+    ``log_mass_sum`` via sparse matvec.
     """
 
     def __init__(self, entries: list[tuple[Any, tuple, Any]],
@@ -104,38 +103,36 @@ class OutputTrie:
 
         self.children = children
         self.leaf_info = leaf_info
-        self._coo_nodes = np.array(coo_nodes, dtype=np.intp)
-        self._coo_src_ids = np.array(coo_src_ids, dtype=np.intp)
         self._inner_eos = inner_eos
 
-        # Pre-compute integer source-sym array for fast numpy indexing
-        # when logp_next is a TokenLogProbs (backed by a numpy array).
+        # Pre-compute integer source-sym tensor for fast indexing
+        # when logp_next is a TokenLogProbs (backed by a tensor).
         try:
-            self._source_sym_ids_np = np.array(self._source_syms, dtype=np.intp)
+            self._source_sym_ids = torch.tensor(self._source_syms, dtype=torch.long)
         except (TypeError, ValueError):
-            self._source_sym_ids_np = None
+            self._source_sym_ids = None
 
         # Sparse reachability matrix for fast log_mass_sum via matvec.
         n_nodes = len(children)
         n_tokens = len(self._source_syms)
-        self._reach = sp.csr_matrix(
-            (np.ones(len(coo_nodes), dtype=np.float64),
-             (coo_nodes, coo_src_ids)),
-            shape=(n_nodes, n_tokens),
-        )
+        indices = torch.tensor([coo_nodes, coo_src_ids], dtype=torch.long)
+        values = torch.ones(len(coo_nodes), dtype=torch.float64)
+        self._reach = torch.sparse_coo_tensor(
+            indices, values, (n_nodes, n_tokens),
+        ).coalesce()
 
-    def log_mass_sum(self, logp_next: LogDistr) -> np.ndarray:
+    def log_mass_sum(self, logp_next: LogDistr) -> torch.Tensor:
         """Bottom-up log-probability mass at each trie node via sparse matvec."""
         p = getattr(logp_next, '_p', None)
-        if p is not None and self._source_sym_ids_np is not None:
-            logp = p[self._source_sym_ids_np]
+        if p is not None and self._source_sym_ids is not None:
+            logp = p[self._source_sym_ids].double()
         else:
-            logp = np.array([logp_next[tok] for tok in self._source_syms])
+            logp = torch.tensor([logp_next[tok] for tok in self._source_syms],
+                                dtype=torch.float64)
         logp_max = logp.max()
-        prob = np.exp(logp - logp_max)
-        mass = self._reach @ prob
-        with np.errstate(divide='ignore'):
-            log_mass = np.log(mass) + logp_max
+        prob = torch.exp(logp - logp_max)
+        mass = torch.mv(self._reach, prob)
+        log_mass = torch.log(mass) + logp_max
         return log_mass
 
     @property
@@ -155,7 +152,7 @@ class HubHyp:
     __slots__ = ('lm_state', 'hub', 'trie', 'node', 'log_mass', 'weight')
 
     def __init__(self, lm_state: LMState, hub: Any, trie: OutputTrie,
-                 node: int, log_mass: np.ndarray, weight: float) -> None:
+                 node: int, log_mass: torch.Tensor, weight: float) -> None:
         self.lm_state = lm_state
         self.hub = hub
         self.trie = trie
@@ -263,8 +260,8 @@ class _HybridBundle:
                 continue
 
             for eot_child_node, (src_sym, dest_state) in self._eot_leaves(h):
-                w_prime = h.weight + h.log_mass[eot_child_node] - h.log_mass[h.node]
-                if w_prime <= -np.inf:
+                w_prime = float(h.weight + h.log_mass[eot_child_node] - h.log_mass[h.node])
+                if w_prime <= float('-inf'):
                     continue
 
                 new_lm_state = h.lm_state >> src_sym
@@ -309,7 +306,7 @@ class _HybridBundle:
     def _scored(self) -> tuple[LogDistr[Token], dict[Token, list]]:
         """Compute logp_next and carry_forward."""
         scores: LogVector[Token] = LogVector()
-        eos_score = -np.inf
+        eos_score = float('-inf')
         carry_forward: dict[Token, list] = defaultdict(list)
 
         # Phase 1: Hub hyp scoring + extension
@@ -319,18 +316,20 @@ class _HybridBundle:
 
         for h in all_hub_hyps:
             # Score output symbols via trie mass
-            node_mass = h.log_mass[h.node]
+            node_mass = float(h.log_mass[h.node])
             for y, child_node in h.trie.children[h.node].items():
                 if y is None:
                     continue  # EOT sentinel, not a real output symbol
-                child_mass = h.log_mass[child_node]
+                child_mass = float(h.log_mass[child_node])
                 scores.logaddexp(y, h.weight + child_mass - node_mass)
 
             # EOS contribution: hub hyps at root contribute P_inner(EOS)
             if h.node == h.trie.root:
                 eos_lp = h.lm_state.logp_next[self.alg.inner_lm.eos]
-                if eos_lp > -np.inf:
-                    eos_score = np.logaddexp(eos_score, h.weight + eos_lp)
+                if eos_lp > float('-inf'):
+                    a, b = eos_score, h.weight + eos_lp
+                    if a < b: a, b = b, a
+                    eos_score = a + math.log1p(math.exp(b - a)) if b > float('-inf') else a
 
         # Phase 2: Particle search
         all_particles = list(self.particles) + hub_exit_particles
@@ -339,13 +338,15 @@ class _HybridBundle:
             p_scores, p_eos, p_carry = self._particle_search(all_particles)
             for sym, w in p_scores.items():
                 scores.logaddexp(sym, w)
-            eos_score = np.logaddexp(eos_score, p_eos)
+            a, b = eos_score, p_eos
+            if a < b: a, b = b, a
+            eos_score = a + math.log1p(math.exp(b - a)) if b > float('-inf') else a
             for sym, ps in p_carry.items():
                 carry_forward[sym].extend(ps)
 
         # Hub hyp carry-forward: advance trie on each symbol
         for h in all_hub_hyps:
-            node_mass = h.log_mass[h.node]
+            node_mass = float(h.log_mass[h.node])
             for y, child_node in h.trie.children[h.node].items():
                 if y is None:
                     continue
@@ -380,7 +381,7 @@ class _HybridBundle:
         for item in carry:
             if isinstance(item, tuple) and item[0] == 'hub':
                 _, h, child_node = item
-                new_w = h.weight + h.log_mass[child_node] - h.log_mass[h.node]
+                new_w = float(h.weight + h.log_mass[child_node] - h.log_mass[h.node])
                 new_hub_hyps.append(HubHyp(
                     h.lm_state, h.hub, h.trie,
                     child_node, h.log_mass, new_w,

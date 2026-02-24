@@ -76,7 +76,8 @@ Self-contained language model interface for use with enumeration/sampling:
 ## Dependencies
 
 Core library (`transduction/`):
-- `numpy` — numerical operations (enumeration, LM integration)
+- `torch` — tensor ops, sparse matvec (trie mass), log-space utilities
+- `numpy` — numerical operations (enumeration, ngram LM, viz)
 - `graphviz` — FSA/FST visualization
 - `IPython` — notebook display utilities (`display_table`)
 
@@ -100,6 +101,7 @@ Eliminated deps (previously external, now inlined):
 - `arsenal` — `Integerizer`, `colors`, `memoize`, `timelimit`, `timeit`, `sample`, `set_memory_limit`, `memory_limit` inlined into `util.py`
 - `genlm` — `get_byte_vocab` replaced with local `HfTokenizerVocab`
 - `LogpNext` (formerly in `lm/base.py`) — replaced by `LogDistr` in `util.py`
+- `scipy` — sparse CSR matvec replaced with `torch.sparse_coo_tensor` + `torch.mv`
 
 ## Test Status
 

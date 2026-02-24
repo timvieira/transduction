@@ -17,8 +17,8 @@ At each character step:
 Uses the library's ``LM``/``LMState`` interface for language model states
 and ``LogDistr`` for probability distributions.
 
-The trie mass update uses a vectorized log-space scatter via ``np.logaddexp.at``
-over a precomputed COO reachability index (leaf → all ancestors).
+The trie mass update uses a vectorized log-space sparse matvec via
+a precomputed COO reachability index (leaf → all ancestors).
 
 Usage::
 
@@ -33,8 +33,7 @@ Usage::
 
 from __future__ import annotations
 
-import numpy as np
-import scipy.sparse as sp
+import torch
 from functools import cached_property
 from typing import Any
 
@@ -98,37 +97,35 @@ class TokenCharacterTrie:
         self.children = children
         self.leaf2lm_token = leaf2lm_token
         self.node2prefix = node2prefix
-        self._coo_nodes = np.array(coo_nodes, dtype=np.intp)
-        self._coo_token_ids = np.array(coo_token_ids, dtype=np.intp)
 
-        # Pre-compute integer token ID array for fast numpy indexing
-        # when logp_next is a TokenLogProbs (backed by a numpy array).
+        # Pre-compute integer token ID tensor for fast indexing
+        # when logp_next is a TokenLogProbs (backed by a tensor).
         try:
-            self._token_ids_np = np.array(self._tokens, dtype=np.intp)
+            self._token_ids = torch.tensor(self._tokens, dtype=torch.long)
         except (TypeError, ValueError):
-            self._token_ids_np = None
+            self._token_ids = None
 
         # Sparse reachability matrix for fast log_mass_sum via matvec.
         n_nodes = len(children)
         n_tokens = len(self._tokens)
-        self._reach = sp.csr_matrix(
-            (np.ones(len(coo_nodes), dtype=np.float64),
-             (coo_nodes, coo_token_ids)),
-            shape=(n_nodes, n_tokens),
-        )
+        indices = torch.tensor([coo_nodes, coo_token_ids], dtype=torch.long)
+        values = torch.ones(len(coo_nodes), dtype=torch.float64)
+        self._reach = torch.sparse_coo_tensor(
+            indices, values, (n_nodes, n_tokens),
+        ).coalesce()
 
-    def log_mass_sum(self, logp_next: LogDistr) -> np.ndarray:
+    def log_mass_sum(self, logp_next: LogDistr) -> torch.Tensor:
         """Bottom-up log-probability mass at each trie node via sparse matvec."""
         p = getattr(logp_next, '_p', None)
-        if p is not None and self._token_ids_np is not None:
-            logp = p[self._token_ids_np]
+        if p is not None and self._token_ids is not None:
+            logp = p[self._token_ids].double()
         else:
-            logp = np.array([logp_next[tok] for tok in self._tokens])
+            logp = torch.tensor([logp_next[tok] for tok in self._tokens],
+                                dtype=torch.float64)
         logp_max = logp.max()
-        prob = np.exp(logp - logp_max)
-        mass = self._reach @ prob
-        with np.errstate(divide='ignore'):
-            log_mass = np.log(mass) + logp_max
+        prob = torch.exp(logp - logp_max)
+        mass = torch.mv(self._reach, prob)
+        log_mass = torch.log(mass) + logp_max
         return log_mass
 
 
@@ -144,7 +141,7 @@ class TrieState:
     """
 
     def __init__(self, lm_state: LMState, trie: TokenCharacterTrie,
-                 node: int, log_mass: np.ndarray, weight: float) -> None:
+                 node: int, log_mass: torch.Tensor, weight: float) -> None:
         self.lm_state = lm_state
         self.trie = trie
         self.node = node
@@ -163,7 +160,7 @@ class TrieState:
         next_node = self.trie.children[self.node].get(a)
         if next_node is None:
             return None
-        new_weight = self.weight + self.log_mass[next_node] - self.log_mass[self.node]
+        new_weight = float(self.weight + self.log_mass[next_node] - self.log_mass[self.node])
         if a is None:
             # End-of-token: complete current token, advance LM state.
             lm_token = self.trie.leaf2lm_token[next_node]
@@ -185,7 +182,7 @@ class TrieState:
         next_node = self.trie.children[self.node].get(None)
         if next_node is None:
             return None
-        new_weight = self.weight + self.log_mass[next_node] - self.log_mass[self.node]
+        new_weight = float(self.weight + self.log_mass[next_node] - self.log_mass[self.node])
         lm_token = self.trie.leaf2lm_token[next_node]
         if lm_token == self.lm_state.eos:
             return None
@@ -210,8 +207,8 @@ class TrieState:
 
     @cached_property
     def logp_next(self) -> LogDistr:
-        logZ = self.log_mass[self.node]
-        return LogDistr({a: float(self.log_mass[i] - logZ)
+        logZ = float(self.log_mass[self.node])
+        return LogDistr({a: float(self.log_mass[i]) - logZ
                          for a, i in self.actions.items()})
 
     def has_EOT(self) -> bool:
@@ -258,10 +255,10 @@ class _Bundle:
     def _logp_next(self) -> LogDistr:
         scores: LogVector = LogVector()
         for hyp in self.extend:
-            node_mass = hyp.log_mass[hyp.node]
+            node_mass = float(hyp.log_mass[hyp.node])
             for a, child_node in hyp.actions.items():
                 if a is not None:
-                    scores.logaddexp(a, hyp.weight + hyp.log_mass[child_node] - node_mass)
+                    scores.logaddexp(a, hyp.weight + float(hyp.log_mass[child_node]) - node_mass)
         return scores.normalize()
 
     @cached_property
@@ -275,8 +272,8 @@ class _Bundle:
             hyp for hyp in self
             if hyp.has_EOT() and (
                 self.alg.extend_threshold is None
-                or np.exp(hyp.weight + hyp.logp_next[None]
-                          - self.weight) >= self.alg.extend_threshold
+                or torch.exp(torch.tensor(hyp.weight + hyp.logp_next[None]
+                          - self.weight)).item() >= self.alg.extend_threshold
             )
         ]
 
@@ -306,12 +303,13 @@ class _Bundle:
 
     def prune(self) -> _Bundle:
         """Apply beam-width pruning."""
-        S = sorted([h for h in self if h.weight > -np.inf],
+        S = sorted([h for h in self if h.weight > float('-inf')],
                    key=lambda h: -h.weight)
 
         if self.alg.relative_score_threshold is not None:
+            from math import exp
             S = [h for h in S
-                 if np.exp(S[0].weight - h.weight)
+                 if exp(S[0].weight - h.weight)
                     <= self.alg.relative_score_threshold
                  or (self.alg.eot_immunity and not h.has_EOT())]
 

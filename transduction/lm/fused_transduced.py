@@ -37,7 +37,7 @@ Usage:
 from __future__ import annotations
 
 import heapq
-import numpy as np
+import math
 from collections import defaultdict
 from typing import Any
 
@@ -71,7 +71,7 @@ class _FusedSearch:
 
         # Search accumulators
         self.scores = LogVector()                     # symbol -> log-weight
-        self.eos_score = -np.inf
+        self.eos_score = float('-inf')
         self.carry_forward = defaultdict(list)        # symbol -> [Particle]
         self._cf_paths = defaultdict(set)             # symbol -> set of source_paths
 
@@ -151,7 +151,9 @@ class _FusedSearch:
             eos_lp = item.lm_state.logp_next[self._inner_eos]
 
             if result.is_preimage and q_sym is None:
-                self.eos_score = np.logaddexp(self.eos_score, item.log_weight + eos_lp)
+                a, b = self.eos_score, item.log_weight + eos_lp
+                if a < b: a, b = b, a
+                self.eos_score = a + math.log1p(math.exp(b - a)) if b > float('-inf') else a
 
             # Non-Q carry-forward: uses prefix check.
             carry = self._add_carry_checked if not has_trunc else self._add_carry_sentinel_checked
@@ -186,7 +188,7 @@ class _FusedSearch:
                 if dest_sid is None:
                     continue
                 w = float(item.log_weight + logp)
-                if w > -np.inf:
+                if w > float('-inf'):
                     child = Particle(dest_sid, item.lm_state >> x, w,
                                      item.source_path + (x,))
                     heapq.heappush(self._queue, child)
@@ -202,7 +204,7 @@ class _FusedSearch:
             for x_u32, dest_sid in helper.arcs(item.dfa_state):
                 x = inv[x_u32]
                 w = float(item.log_weight + lm_logp_next[x])
-                if w > -np.inf:
+                if w > float('-inf'):
                     child = Particle(dest_sid, item.lm_state >> x, w,
                                      item.source_path + (x,))
                     heapq.heappush(self._queue, child)

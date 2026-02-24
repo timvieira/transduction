@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import numpy as np
 import torch
 import transformers
 from transformers.cache_utils import DynamicCache, DynamicLayer
@@ -133,19 +132,19 @@ def unflatten(ys: tuple[Any, ...]) -> tuple[Any, ...]:
 # ---------------------------------------------------------------------------
 
 class TokenLogProbs:
-    """Log-probability distribution over token IDs (backed by a numpy array).
+    """Log-probability distribution over token IDs (backed by a torch tensor).
 
     Supports ``logp_next[token_id]``, ``token_id in logp_next``,
     ``argmax()``, ``sample()``, ``top(K)``, and ``relabel(keys)``
     to produce a dict with arbitrary key types.
     """
 
-    def __init__(self, _p: np.ndarray, decode: list[bytes | None]) -> None:
+    def __init__(self, _p: torch.Tensor, decode: list[bytes | None]) -> None:
         self._p = _p
         self._decode = decode
 
-    def __getitem__(self, token_id: int) -> float:
-        return self._p[token_id]
+    def __getitem__(self, token_id: int | torch.Tensor) -> float:
+        return float(self._p[token_id])
 
     def __contains__(self, token_id: int) -> bool:
         return 0 <= token_id < len(self._p) and self._decode[token_id] is not None
@@ -153,7 +152,7 @@ class TokenLogProbs:
     def keys(self) -> range:
         return range(len(self._p))
 
-    def values(self) -> np.ndarray:
+    def values(self) -> torch.Tensor:
         return self._p
 
     def items(self) -> enumerate:
@@ -163,23 +162,23 @@ class TokenLogProbs:
         return int(self._p.argmax())
 
     def sample(self) -> int:
-        logps = self._p.copy().astype(np.float64)
+        logps = self._p.clone().double()
         logps -= logps.max()
-        probs = np.exp(logps)
+        probs = torch.exp(logps)
         probs /= probs.sum()
-        return int(np.random.choice(len(probs), p=probs))
+        return int(torch.multinomial(probs, 1).item())
 
     def top(self, K: int) -> LogDistr[bytes]:
         top_idx = self._p.argsort()[-K:]
         return LogDistr({
-            self._decode[i]: self._p[i]
-            for i in reversed(top_idx)
+            self._decode[i]: float(self._p[i])
+            for i in reversed(top_idx.tolist())
             if self._decode[i] is not None
         })
 
     def top_ids(self, K: int) -> dict[int, Any]:
         top_idx = self._p.argsort()[-K:]
-        return {int(i): self._p[i] for i in reversed(top_idx)}
+        return {int(i): float(self._p[i]) for i in reversed(top_idx.tolist())}
 
     def relabel(self, keys: list) -> dict:
         """Return a dict mapping ``keys[i] → logp[i]``, skipping None keys.
@@ -188,7 +187,7 @@ class TokenLogProbs:
         ``dict[bytes, float]`` keyed on token byte strings.
         """
         top_idx = self._p.argsort()
-        return {keys[i]: self._p[i] for i in reversed(top_idx) if keys[i] is not None}
+        return {keys[i]: float(self._p[i]) for i in reversed(top_idx.tolist()) if keys[i] is not None}
 
     def __repr__(self) -> str:
         return repr(self.top_ids(10))
@@ -206,6 +205,57 @@ class _BatchedOutput:
     def __init__(self, logits: torch.Tensor, past_key_values: Any) -> None:
         self.logits = logits
         self.past_key_values = past_key_values
+
+
+class _BatchWorkspace:
+    """Pre-allocated arena for cross-parent batched forward passes.
+
+    Lazily allocates on first use (needs model config for shapes).
+    Grows if sequence length exceeds current buffer size.
+    Between calls, buffers are overwritten in-place.
+    """
+    __slots__ = ('_capacity', '_device', '_buf_seq', '_num_layers', '_dtype',
+                 '_keys_buf', '_vals_buf', '_attn_mask', '_pos_ids', '_input_ids')
+
+    def __init__(self, capacity: int, device: torch.device) -> None:
+        self._capacity = capacity
+        self._device = device
+        self._buf_seq = 0
+        self._num_layers = 0
+        self._dtype: torch.dtype | None = None
+        self._keys_buf: list[torch.Tensor] = []
+        self._vals_buf: list[torch.Tensor] = []
+        self._attn_mask: torch.Tensor | None = None
+        self._pos_ids: torch.Tensor | None = None
+        self._input_ids: torch.Tensor | None = None
+
+    def ensure(self, num_layers: int, num_heads: int, head_dim: int,
+               max_seq: int, dtype: torch.dtype) -> None:
+        """Ensure buffers can accommodate the given dimensions. Lazy-init or grow."""
+        if (self._attn_mask is not None
+                and self._num_layers == num_layers
+                and self._buf_seq >= max_seq
+                and self._dtype == dtype):
+            return
+        self._num_layers = num_layers
+        self._buf_seq = max(max_seq, self._buf_seq)
+        self._dtype = dtype
+        self._keys_buf = [
+            torch.zeros(self._capacity, num_heads, self._buf_seq, head_dim,
+                        dtype=dtype, device=self._device)
+            for _ in range(num_layers)
+        ]
+        self._vals_buf = [
+            torch.zeros(self._capacity, num_heads, self._buf_seq, head_dim,
+                        dtype=dtype, device=self._device)
+            for _ in range(num_layers)
+        ]
+        self._attn_mask = torch.zeros(self._capacity, self._buf_seq + 1,
+                                       device=self._device)
+        self._pos_ids = torch.zeros(self._capacity, 1, dtype=torch.long,
+                                     device=self._device)
+        self._input_ids = torch.zeros(self._capacity, 1, dtype=torch.long,
+                                       device=self._device)
 
 
 class HuggingFaceLM(LM[int]):
@@ -231,6 +281,7 @@ class HuggingFaceLM(LM[int]):
         self._calls: int = 0
         self.V: set[bytes | None] = set(self._decode)
         self.eos: int = self._encode[self.tokenizer.eos_token.encode()]
+        self._workspace = _BatchWorkspace(self._MAX_BATCH, self.device)
 
     def initial(self) -> TokenIDState:
         return TokenIDState(
@@ -252,10 +303,11 @@ class HuggingFaceLM(LM[int]):
     def prefetch(self, states: list) -> None:
         """Pre-compute logp_next for multiple TokenIDStates in batched forward passes.
 
-        Groups pending states (those without a cached ``out``) by parent,
-        and runs a single batched forward pass per sibling group.
-        Singletons are skipped (they'll compute lazily on first access).
-        Large sibling groups are chunked to stay within ``_MAX_BATCH``.
+        Groups pending states (those without a cached ``out``) by parent.
+        Same-parent groups with >1 sibling use ``_batch_siblings`` (no padding).
+        Remaining singletons from different parents are batched together via
+        ``_batch_cross_parents`` (left-padded KV + attention mask).
+        Large groups are chunked to stay within ``_MAX_BATCH``.
         """
         # Filter to pending TokenIDStates that haven't computed ``out`` yet.
         pending = [s for s in states
@@ -268,11 +320,20 @@ class HuggingFaceLM(LM[int]):
             key = id(s._kv_source)
             groups.setdefault(key, []).append(s)
 
-        # Batch groups with >1 sibling; singletons compute lazily.
+        # Same-parent groups with >1 sibling → _batch_siblings.
+        # Singletons are collected for cross-parent batching.
+        singletons: list[TokenIDState] = []
         for siblings in groups.values():
             if len(siblings) > 1:
                 for i in range(0, len(siblings), self._MAX_BATCH):
                     self._batch_siblings(siblings[i:i + self._MAX_BATCH])
+            else:
+                singletons.append(siblings[0])
+
+        # Cross-parent batch: batch singletons from different parents.
+        if len(singletons) >= 2:
+            for i in range(0, len(singletons), self._MAX_BATCH):
+                self._batch_cross_parents(singletons[i:i + self._MAX_BATCH])
 
     def _batch_siblings(self, siblings: list[TokenIDState]) -> None:
         """Run a single batched forward pass for sibling TokenIDStates.
@@ -327,6 +388,107 @@ class HuggingFaceLM(LM[int]):
             # Inject into cached_property slot.
             state.__dict__['out'] = _BatchedOutput(child_logits, child_kv)
             state._kv_source = None
+
+    def _batch_cross_parents(self, children: list[TokenIDState]) -> None:
+        """Batch children from different parents in a single forward pass.
+
+        Uses left-padded KV caches with attention masks and explicit position
+        IDs so children with different-length parents can be batched together.
+        Uses the pre-allocated ``_workspace`` arena to avoid per-call allocation.
+        """
+        N = len(children)
+
+        # Step 1: Collect metadata from each child's parent.
+        parents: list[TokenIDState] = []
+        parent_lens: list[int] = []
+        token_ids: list[int] = []
+        for child in children:
+            parent = child._kv_source
+            assert parent is not None
+            parent_kv = parent.out.past_key_values
+            parent_len = parent_kv.layers[0].keys.shape[2]
+            parents.append(parent)
+            parent_lens.append(parent_len)
+            token_ids.append(child.context[1])
+
+        max_seq = max(parent_lens)
+
+        # Get model config from first parent's KV cache.
+        first_kv = parents[0].out.past_key_values
+        num_layers = len(first_kv.layers)
+        num_heads = first_kv.layers[0].keys.shape[1]
+        head_dim = first_kv.layers[0].keys.shape[3]
+        kv_dtype = first_kv.layers[0].keys.dtype
+
+        # Step 2: Fill workspace buffers (no allocation — write into arena).
+        ws = self._workspace
+        ws.ensure(num_layers, num_heads, head_dim, max_seq, kv_dtype)
+
+        # Zero only the region that will be read.
+        for layer_idx in range(num_layers):
+            ws._keys_buf[layer_idx][:N, :, :max_seq, :].zero_()
+            ws._vals_buf[layer_idx][:N, :, :max_seq, :].zero_()
+        ws._attn_mask[:N, :max_seq + 1].zero_()
+
+        for i, (child, parent, parent_len) in enumerate(
+            zip(children, parents, parent_lens)
+        ):
+            pad = max_seq - parent_len
+            parent_kv = parent.out.past_key_values
+
+            for layer_idx in range(num_layers):
+                layer = parent_kv.layers[layer_idx]
+                # Left-pad: write parent KV into positions [pad, max_seq).
+                ws._keys_buf[layer_idx][i, :, pad:max_seq, :] = layer.keys[0]
+                ws._vals_buf[layer_idx][i, :, pad:max_seq, :] = layer.values[0]
+
+            # Attention mask: 1 for real positions + new token, 0 for padding.
+            ws._attn_mask[i, pad:max_seq + 1] = 1.0
+            # Position of the new token (0-indexed).
+            ws._pos_ids[i, 0] = parent_len
+            # Input token ID.
+            ws._input_ids[i, 0] = token_ids[i]
+
+        # Step 3: Forward pass with workspace buffer views (no copy).
+        batch_kv = DynamicCache()
+        for layer_idx in range(num_layers):
+            new_layer = DynamicLayer()
+            new_layer.keys = ws._keys_buf[layer_idx][:N, :, :max_seq, :]
+            new_layer.values = ws._vals_buf[layer_idx][:N, :, :max_seq, :]
+            new_layer.dtype = first_kv.layers[0].dtype
+            new_layer.device = first_kv.layers[0].device
+            new_layer.is_initialized = True
+            batch_kv.layers.append(new_layer)
+
+        self._calls += 1
+        with torch.no_grad():
+            result = self.model(
+                input_ids=ws._input_ids[:N],
+                past_key_values=batch_kv,
+                attention_mask=ws._attn_mask[:N, :max_seq + 1],
+                position_ids=ws._pos_ids[:N],
+                use_cache=True,
+            )
+
+        # Step 4: Extract per-child results, stripping left-padding.
+        out_kv = result.past_key_values
+        for i, (child, parent_len) in enumerate(zip(children, parent_lens)):
+            pad = max_seq - parent_len
+            child_kv = DynamicCache()
+            for layer_idx in range(num_layers):
+                layer = out_kv.layers[layer_idx]
+                new_layer = DynamicLayer()
+                # Strip left-padding: keep [pad:] = parent_len + 1 real positions.
+                new_layer.keys = layer.keys[i:i+1, :, pad:, :].clone()
+                new_layer.values = layer.values[i:i+1, :, pad:, :].clone()
+                new_layer.dtype = layer.dtype
+                new_layer.device = layer.device
+                new_layer.is_initialized = True
+                child_kv.layers.append(new_layer)
+            child_logits = result.logits[i:i+1].clone()
+            # Inject into cached_property slot.
+            child.__dict__['out'] = _BatchedOutput(child_logits, child_kv)
+            child._kv_source = None
 
     @classmethod
     def from_name(cls, model_name: str, **kw: Any) -> HuggingFaceLM:
@@ -393,7 +555,7 @@ class TokenIDState(LMState[int]):
     def logp_next(self) -> TokenLogProbs:  # type: ignore[override]
         with torch.no_grad():
             return TokenLogProbs(
-                torch.nn.functional.log_softmax(self.out.logits, dim=-1).squeeze().detach().numpy(),
+                torch.nn.functional.log_softmax(self.out.logits, dim=-1).squeeze().detach().cpu(),
                 self.lm._decode,
             )
 

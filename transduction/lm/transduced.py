@@ -35,7 +35,7 @@ Usage:
 from __future__ import annotations
 
 import heapq
-import numpy as np
+import torch
 from collections import defaultdict
 from typing import Any
 
@@ -81,14 +81,13 @@ class Particle:
 # ---------------------------------------------------------------------------
 
 def _select_top_k(particles: list[Particle], k: int) -> list[Particle]:
-    """Select the k highest-weight particles in O(n) expected time."""
+    """Select the k highest-weight particles."""
     n = len(particles)
     if n <= k:
         return list(particles)
-    weights = np.array([p.log_weight for p in particles])
-    # argpartition: after partitioning, the k largest are at indices[n-k:]
-    indices = np.argpartition(weights, n - k)[n - k:]
-    return [particles[i] for i in indices]
+    weights = torch.tensor([p.log_weight for p in particles])
+    _, indices = torch.topk(weights, k)
+    return [particles[i] for i in indices.tolist()]
 
 
 
@@ -224,7 +223,7 @@ class TransducedState(LMState[Token]):
 
             eos_lp = particle.lm_state.logp_next[self.tlm.inner_lm.eos]
 
-            if eos_lp > -np.inf:
+            if eos_lp > float('-inf'):
                 eos_w = w + eos_lp
 
                 # preimage (EOS): skip when particle is Q-absorbed.
@@ -295,7 +294,7 @@ class TransducedState(LMState[Token]):
             lm_logp = particle.lm_state.logp_next
             for x, next_dfa_state in dfa.arcs(particle.dfa_state):
                 child_w = particle.log_weight + lm_logp[x]
-                if child_w > -np.inf:
+                if child_w > float('-inf'):
                     heapq.heappush(queue, Particle(
                         next_dfa_state,
                         particle.lm_state >> x,
