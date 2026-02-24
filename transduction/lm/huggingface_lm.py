@@ -214,12 +214,17 @@ class HuggingFaceLM(LM[int]):
             lm=self,
             logp=0,
             context=(),
-            parent=None,
+            _kv_source=None,
         )
 
     def encode_prompt(self, prompt: str) -> tuple[Any, ...]:
         "Encode ``prompt`` as a tuple of tokens (each a bytes object)."
         return unflatten(tuple(self._decode[i] for i in self.tokenizer.encode(prompt)))
+
+    # Maximum siblings to batch in a single forward pass.  Keeps peak
+    # memory bounded when an FST node has very high fan-out (e.g. full
+    # vocab transitions from one hub).
+    _MAX_BATCH: int = 64
 
     def prefetch(self, states: list) -> None:
         """Pre-compute logp_next for multiple TokenIDStates in batched forward passes.
@@ -227,22 +232,24 @@ class HuggingFaceLM(LM[int]):
         Groups pending states (those without a cached ``out``) by parent,
         and runs a single batched forward pass per sibling group.
         Singletons are skipped (they'll compute lazily on first access).
+        Large sibling groups are chunked to stay within ``_MAX_BATCH``.
         """
         # Filter to pending TokenIDStates that haven't computed ``out`` yet.
         pending = [s for s in states
                     if isinstance(s, TokenIDState) and 'out' not in s.__dict__
-                    and s.context != ()]
+                    and s.context != () and s._kv_source is not None]
 
         # Group by parent identity (siblings share a parent KV cache).
         groups: dict[int, list[TokenIDState]] = {}
         for s in pending:
-            key = id(s.parent)
+            key = id(s._kv_source)
             groups.setdefault(key, []).append(s)
 
         # Batch groups with >1 sibling; singletons compute lazily.
         for siblings in groups.values():
             if len(siblings) > 1:
-                self._batch_siblings(siblings)
+                for i in range(0, len(siblings), self._MAX_BATCH):
+                    self._batch_siblings(siblings[i:i + self._MAX_BATCH])
 
     def _batch_siblings(self, siblings: list[TokenIDState]) -> None:
         """Run a single batched forward pass for sibling TokenIDStates.
@@ -251,32 +258,24 @@ class HuggingFaceLM(LM[int]):
         Injects results into each state's ``__dict__['out']`` so that
         the ``cached_property`` is pre-populated.
         """
-        parent = siblings[0].parent
+        parent = siblings[0]._kv_source
         assert parent is not None
 
         # Stack token IDs: each sibling consumed one token from the parent.
         token_ids = [s.context[1] for s in siblings]
-        input_ids = torch.LongTensor([[tid] for tid in token_ids]).to(self.device)
+        input_ids = torch.tensor([[tid] for tid in token_ids], dtype=torch.long, device=self.device)
 
         # Expand parent's KV cache along batch dimension.
+        # Parent's ``out`` always converts DynamicCache → tuple-of-tuples
+        # (see TokenIDState.out), so parent_kv is always tuple-of-tuples here.
         parent_kv = parent.out.past_key_values
         batch_size = len(siblings)
 
-        if isinstance(parent_kv, DynamicCache):
-            # DynamicCache: expand each layer's key/value tensors.
-            expanded = DynamicCache()
-            for i in range(len(parent_kv)):
-                k = parent_kv.key_cache[i].expand(batch_size, -1, -1, -1).contiguous()
-                v = parent_kv.value_cache[i].expand(batch_size, -1, -1, -1).contiguous()
-                expanded.update(k, v, i)
-            batch_kv: Any = expanded
-        else:
-            # Tuple-of-tuples (legacy format): expand each layer.
-            batch_kv = tuple(
-                (k.expand(batch_size, -1, -1, -1).contiguous(),
-                 v.expand(batch_size, -1, -1, -1).contiguous())
-                for k, v in parent_kv
-            )
+        batch_kv: Any = tuple(
+            (k.expand(batch_size, -1, -1, -1).contiguous(),
+             v.expand(batch_size, -1, -1, -1).contiguous())
+            for k, v in parent_kv
+        )
 
         # Single batched forward pass.
         self._calls += 1
@@ -301,9 +300,10 @@ class HuggingFaceLM(LM[int]):
                     (k[idx:idx+1].clone(), v[idx:idx+1].clone())
                     for k, v in out_kv
                 )
-            child_logits = result.logits[idx:idx+1]
+            child_logits = result.logits[idx:idx+1].clone()
             # Inject into cached_property slot.
             state.__dict__['out'] = _BatchedOutput(child_logits, child_kv)
+            state._kv_source = None
 
     @classmethod
     def from_name(cls, model_name: str, **kw: Any) -> HuggingFaceLM:
@@ -339,15 +339,22 @@ class TokenIDState(LMState[int]):
     children share a parent's cache directly, the first child's forward pass
     corrupts it for the second.  We detect ``DynamicCache`` and raise rather
     than silently produce wrong results.
+
+    Memory Management
+    -----------------
+    ``_kv_source`` holds a reference to the parent state, used solely to
+    retrieve its KV cache during the forward pass.  Once ``out`` is computed,
+    ``_kv_source`` is set to ``None`` so that ancestor states (and their KV
+    caches) can be garbage-collected when no longer reachable.
     """
 
     def __init__(self, lm: HuggingFaceLM, logp: float,
-                 context: tuple[Any, ...], parent: TokenIDState | None) -> None:
+                 context: tuple[Any, ...], _kv_source: TokenIDState | None) -> None:
         self.lm = lm
         self.eos = lm.eos
         self.logp = logp
         self.context = context
-        self.parent = parent
+        self._kv_source = _kv_source
 
     def __rshift__(self, token_id: int) -> TokenIDState:
         if token_id not in self.logp_next or token_id == self.eos:
@@ -356,7 +363,7 @@ class TokenIDState(LMState[int]):
             lm=self.lm,
             logp=self.logp + self.logp_next[token_id],
             context=(self.context, token_id),
-            parent=self,
+            _kv_source=self,
         )
 
     @cached_property
@@ -372,12 +379,13 @@ class TokenIDState(LMState[int]):
         self.lm._calls += 1
         with torch.no_grad():
             if self.context == ():
-                input_ids = torch.LongTensor([[self.lm.tokenizer.bos_token_id]], device=self.lm.device)
+                input_ids = torch.tensor([[self.lm.tokenizer.bos_token_id]], dtype=torch.long, device=self.lm.device)
                 result = self.lm.model(input_ids=input_ids, past_key_values=None, use_cache=True)
             else:
                 (_, token_id) = self.context
-                input_ids = torch.LongTensor([[token_id]], device=self.lm.device)
-                past_kv = self.parent.out.past_key_values  # type: ignore[union-attr]
+                input_ids = torch.tensor([[token_id]], dtype=torch.long, device=self.lm.device)
+                past_kv = self._kv_source.out.past_key_values  # type: ignore[union-attr]
+                self._kv_source = None
                 result = self.lm.model(
                     input_ids=input_ids,
                     past_key_values=past_kv,

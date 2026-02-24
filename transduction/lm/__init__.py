@@ -7,3 +7,8 @@ from transduction.lm.fused_transduced import FusedTransducedLM
 from transduction.lm.reference_transduced import ReferenceTransducedLM
 from transduction.lm.character_beam import CharacterBeam, CharacterBeamState
 from transduction.lm.generalized_beam import GeneralizedBeam, GeneralizedBeamState
+
+try:
+    from transduction.lm.llama_cpp_lm import LlamaCppLM
+except ImportError:
+    pass
