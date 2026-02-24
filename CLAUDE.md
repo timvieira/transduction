@@ -44,12 +44,13 @@ Self-contained language model interface for use with enumeration/sampling:
 
 - `transduction/lm/base.py` — `LM` (ABC), `LMState` (ABC; defines `logp_next`, `eos`, `__rshift__`, `__call__`, `greedy_decode`, `sample_decode`)
 - `transduction/lm/ngram.py` — `ByteNgramLM`, `CharNgramLM` (lightweight n-gram LMs for testing)
-- `transduction/lm/statelm.py` — `StateLM`, `TokenIDStateLM`, `TokenizedLLM`, `load_model_by_name`
+- `transduction/lm/huggingface_lm.py` — `HuggingFaceLM`, `TokenIDState`, `TokenLogProbs`, `load_model_by_name`
   - Wraps HuggingFace causal LMs with KV-cache-based incremental decoding
-  - `StateLM` (`LM[bytes]`): `state >> token` takes bytes, `logp_next` keyed on bytes
-  - `TokenIDStateLM` (`LM[int]`): `state >> token_id` takes int token IDs, `logp_next` keyed on ints; directly compatible with `CharacterBeam`, `GeneralizedBeam`, `FusedTransducedLM`
-  - `TokenIDStateLM.from_name('gpt2')` or `TokenIDStateLM(llm)` to construct
-  - Includes inlined dependencies: `HfTokenizerVocab`, `LazyProb`, `IntLazyProb`, `flatten`/`unflatten`
+  - `HuggingFaceLM` (`LM[int]`): model/tokenizer/vocab owner; `lm.initial()` → `TokenIDState`
+  - `TokenIDState` (`LMState[int]`): `state >> token_id`, `state.logp_next[token_id]`; directly compatible with `CharacterBeam`, `GeneralizedBeam`, `FusedTransducedLM`
+  - `HuggingFaceLM.from_name('gpt2')` or `load_model_by_name('gpt2')` to construct
+  - `TokenLogProbs`: lazy log-prob distribution; `relabel(lm._decode)` for bytes-keyed dict
+  - Includes inlined dependencies: `HfTokenizerVocab`, `flatten`/`unflatten`
   - External deps: `torch`, `transformers`
 - `transduction/lm/transduced.py` — `TransducedLM`, `TransducedState` (pushforward of an inner LM through an FST; defaults to Rust backend)
 - `transduction/lm/fused_transduced.py` — `FusedTransducedLM`, `FusedTransducedState` (single-pass interleaved decomposition + LM search; `helper=` for pluggable backends: `"rust"`, `"python"`, `"token"`)
@@ -97,7 +98,7 @@ Optional deps:
 Eliminated deps (previously external, now inlined):
 - `arsenal` — `Integerizer`, `colors`, `memoize`, `timelimit`, `timeit`, `sample`, `set_memory_limit`, `memory_limit` inlined into `util.py`
 - `genlm` — `get_byte_vocab` replaced with local `HfTokenizerVocab`
-- `tokenization` — `StateLM`, `LazyProb`, `logsumexp` all copied/inlined
+- `tokenization` — LM state/vocab logic inlined into `huggingface_lm.py`; `logsumexp` into `util.py`
 - `LogpNext` (formerly in `lm/base.py`) — replaced by `LogDistr` in `util.py`
 
 ## Test Status
@@ -118,8 +119,8 @@ Eliminated deps (previously external, now inlined):
 - `test_ptb_nltk.py`: 4 passed
 - `test_make_total.py`: 3 passed
 - `test_generalized_beam.py`: 33 passed
-- `test_statelm_kv_cache.py`: 13 passed
-- **Total: 1234 tests across 17 files (1232 passed, 2 xfailed)**
+- `test_statelm_kv_cache.py`: 12 passed
+- **Total: 1233 tests across 17 files (1231 passed, 2 xfailed)**
 - `test_general.py` tests the **general-case** algorithms (handle infinite quotients/remainders):
   NonrecursiveDFADecomp, TruncatedIncrementalDFADecomp, TrieDispatchDFADecomp,
   PeekabooState, PeekabooNonrecursive, DirtyPeekaboo, RustDecomp, RustDirtyState,

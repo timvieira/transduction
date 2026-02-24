@@ -199,32 +199,31 @@ class TestCrudeImportanceSampling:
 # ---------------------------------------------------------------------------
 
 try:
-    from transduction.lm import StateLM
-    from transformers import AutoTokenizer
+    from transduction.lm import HuggingFaceLM, load_model_by_name
     HAS_LLM_DEPS = True
 except ImportError:
     HAS_LLM_DEPS = False
 
-pytestmark_bpe = pytest.mark.skipif(not HAS_LLM_DEPS, reason="requires transformers + genlm + tokenization")
+pytestmark_bpe = pytest.mark.skipif(not HAS_LLM_DEPS, reason="requires transformers")
 
 
-def _subsampled_bpe_fst(decode, token_ids, special=frozenset()):
+def _subsampled_bpe_fst(decode, token_ids, eos_id):
     """Build a BPE WFST from a subset of token IDs.
 
-    Uses the bytes representation of each token as the FST input label
-    (matching what StateLM expects for ``<<`` and ``logp_next``).
+    Uses int token IDs as FST input labels (matching HuggingFaceLM's
+    ``state >> token_id`` and ``logp_next[token_id]``).
     """
     from transduction import FST, EPSILON
     m = FST()
     m.add_start(())
     for i in token_ids:
-        x = decode[i]
-        if x in special:
+        if i == eos_id:
             continue
+        x = decode[i]
         bx = tuple(x)
         for j in range(len(bx)):
             m.add_arc(bx[:j], EPSILON, bx[j], bx[:j + 1])
-        m.add_arc(bx, x, EPSILON, ())   # bytes token as input label
+        m.add_arc(bx, i, EPSILON, ())   # int token ID as input label
     m.add_stop(())
     return m
 
@@ -232,17 +231,17 @@ def _subsampled_bpe_fst(decode, token_ids, special=frozenset()):
 @pytest.fixture(scope='session')
 def gpt2_lm():
     if not HAS_LLM_DEPS:
-        pytest.skip("requires transformers + genlm + tokenization")
-    return StateLM.initial('gpt2')
+        pytest.skip("requires transformers")
+    lm = load_model_by_name('gpt2')
+    return lm.initial()
 
 
 @pytest.fixture(scope='session')
 def gpt2_vocab(gpt2_lm):
     if not HAS_LLM_DEPS:
-        pytest.skip("requires transformers + genlm + tokenization")
-    decode = gpt2_lm.lm._decode
-    special = {gpt2_lm.lm.tokenizer.eos_token.encode()}
-    return decode, special
+        pytest.skip("requires transformers")
+    lm = gpt2_lm.lm
+    return lm._decode, lm.eos
 
 
 @pytest.fixture(scope='session')
@@ -250,11 +249,11 @@ def small_bpe_fst(gpt2_vocab):
     """BPE FST subsampled to ~500 tokens (all single-byte + target-relevant + random)."""
     import random
     rng = random.Random(42)
-    decode, special = gpt2_vocab
+    decode, eos_id = gpt2_vocab
 
     token_ids = set()
     for i, x in enumerate(decode):
-        if x in special:
+        if i == eos_id:
             continue
         if len(x) == 1:                             # all single-byte tokens
             token_ids.add(i)
@@ -262,11 +261,11 @@ def small_bpe_fst(gpt2_vocab):
             token_ids.add(i)
 
     # pad to ~350 with random multi-byte tokens
-    remaining = [i for i, x in enumerate(decode) if x not in special and i not in token_ids]
+    remaining = [i for i, x in enumerate(decode) if i != eos_id and i not in token_ids]
     rng.shuffle(remaining)
     token_ids.update(remaining[:max(0, 350 - len(token_ids))])
 
-    return _subsampled_bpe_fst(decode, token_ids, special).renumber()
+    return _subsampled_bpe_fst(decode, token_ids, eos_id).renumber()
 
 
 @pytestmark_bpe

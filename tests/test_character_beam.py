@@ -20,7 +20,7 @@ from transduction.lm.ngram import CharNgramLM
 from transduction.lm.fused_transduced import FusedTransducedLM
 from transduction.lm.reference_transduced import ReferenceTransducedLM
 from transduction.lm.character_beam import CharacterBeam
-from transduction.lm.statelm import HfTokenizerVocab
+from transduction.lm.huggingface_lm import HfTokenizerVocab
 from transduction.util import LogDistr
 
 

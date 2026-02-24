@@ -6,7 +6,7 @@ objects via ``initial()``, and each state supports ``state >> token`` to
 advance and ``state.logp_next`` to query next-token log-probabilities.
 
 Concrete implementations: :mod:`transduction.lm.ngram`,
-:mod:`transduction.lm.statelm`, :mod:`transduction.lm.transduced`.
+:mod:`transduction.lm.huggingface_lm`, :mod:`transduction.lm.transduced`.
 """
 
 from __future__ import annotations

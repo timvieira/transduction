@@ -22,7 +22,7 @@ from collections import defaultdict
 from transformers import AutoTokenizer
 from transduction.fst import FST
 from transduction.fsa import EPSILON
-from transduction.lm.statelm import HfTokenizerVocab
+from transduction.lm.huggingface_lm import HfTokenizerVocab
 from transduction.lm.ngram import CharNgramLM
 from transduction.lm.fused_transduced import FusedTransducedLM
 from transduction.lm.character_beam import CharacterBeam

@@ -4,7 +4,7 @@ from transformers import AutoTokenizer
 from transduction.applications.bpe import bpe_wfst
 from transduction.fst import FST
 from transduction.fsa import EPSILON
-from transduction.lm.statelm import HfTokenizerVocab
+from transduction.lm.huggingface_lm import HfTokenizerVocab
 from transduction.util import set_memory_limit
 set_memory_limit(8)
 

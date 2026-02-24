@@ -34,7 +34,7 @@ os.environ['TRANSFORMERS_OFFLINE'] = '1'
 from transformers import AutoTokenizer
 from transduction.fst import FST
 from transduction.fsa import EPSILON
-from transduction.lm.statelm import HfTokenizerVocab
+from transduction.lm.huggingface_lm import HfTokenizerVocab
 from transduction.lm.ngram import CharNgramLM
 
 tokenizer = AutoTokenizer.from_pretrained('gpt2', use_fast=False, local_files_only=True)

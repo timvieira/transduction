@@ -95,7 +95,7 @@ class NgramState(LMState[int]):
 class ByteNgramLM(LM[int]):
     """Byte-level n-gram language model with Laplace smoothing.
 
-    Compatible with the StateLM/TokenizedLLM interface used by
+    Compatible with the StateLM/HuggingFaceLM interface used by
     transduction.enumeration.
     """
 

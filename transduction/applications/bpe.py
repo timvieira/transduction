@@ -1,7 +1,7 @@
 from transduction.lazy import EPSILON
 from transduction.fst import FST
 
-from transduction.lm.statelm import HfTokenizerVocab
+from transduction.lm.huggingface_lm import HfTokenizerVocab
 
 
 

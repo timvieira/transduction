@@ -173,7 +173,7 @@ def build_subsampled_bpe(vocab_size, _cache={}):
     if vocab_size in _cache:
         return _cache[vocab_size]
     from transformers import AutoTokenizer
-    from transduction.lm.statelm import HfTokenizerVocab
+    from transduction.lm.huggingface_lm import HfTokenizerVocab
     if '_tok' not in _cache:
         tokenizer = AutoTokenizer.from_pretrained('gpt2', use_fast=False)
         _decode = HfTokenizerVocab(tokenizer).decode

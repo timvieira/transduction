@@ -113,82 +113,75 @@ def unflatten(ys: tuple[Any, ...]) -> tuple[Any, ...]:
     return xs
 
 
-class LazyProb:
-    """Efficiently maps token bytes/ids to their probabilities in an LLM's
-    next-token distribution without materializing a full dictionary."""
-
-    def __init__(self, _p: np.ndarray, encode: dict[bytes, int],
-                 decode: list[bytes | None]) -> None:
-        self._p = _p
-        self._encode = encode
-        self._decode = decode
-
-    def keys(self) -> list[bytes | None]:
-        return self._decode
-
-    def values(self) -> np.ndarray:
-        return self._p
-
-    def items(self) -> zip[tuple[bytes | None, Any]]:
-        return zip(self._decode, self._p)
-
-    def __contains__(self, token: bytes | int) -> bool:
-        if isinstance(token, int):
-            return 0 <= token < len(self._decode)
-        return token in self._encode
-
-    def __getitem__(self, token: bytes | int) -> float:
-        if isinstance(token, int):
-            i = token
-        else:
-            i = self._encode.get(token)
-        return self._p[i] if i is not None else 0
-
-    def materialize(self, top: int | None = None) -> dict[bytes | None, Any]:
-        _p = self._p
-        _decode = self._decode
-        top_p = _p.argsort() if top is None else _p.argsort()[-int(top):]
-        pp: dict[bytes | None, Any] = {}
-        for i in reversed(top_p):
-            pp[_decode[i]] = _p[i]
-        return pp
-
-    def top(self, K: int) -> dict[bytes | None, Any]:
-        return self.materialize(top=K)
-
-    def __repr__(self) -> str:
-        return repr(self.materialize())
-
-    def argmax(self) -> bytes | None:
-        """Return the token with the highest log-probability."""
-        return self._decode[self._p.argmax()]
-
-    def sample(self) -> bytes | None:
-        """Sample a token from the distribution."""
-        logps = self._p.copy().astype(np.float64)
-        logps -= logps.max()
-        probs = np.exp(logps)
-        probs /= probs.sum()
-        return self._decode[np.random.choice(len(probs), p=probs)]
-
-    def apply(self, f: Any) -> LazyProb:
-        return LazyProb(
-            _p=f(self._p),
-            encode=self._encode,
-            decode=self._decode,
-        )
-
-    def copy(self) -> LazyProb:
-        return self.apply(lambda x: x.copy())
-
-
 # ---------------------------------------------------------------------------
 # LM classes
 # ---------------------------------------------------------------------------
 
+class TokenLogProbs:
+    """Log-probability distribution over token IDs (backed by a numpy array).
+
+    Supports ``logp_next[token_id]``, ``token_id in logp_next``,
+    ``argmax()``, ``sample()``, ``top(K)``, and ``relabel(keys)``
+    to produce a dict with arbitrary key types.
+    """
+
+    def __init__(self, _p: np.ndarray, decode: list[bytes | None]) -> None:
+        self._p = _p
+        self._decode = decode
+
+    def __getitem__(self, token_id: int) -> float:
+        return self._p[token_id]
+
+    def __contains__(self, token_id: int) -> bool:
+        return 0 <= token_id < len(self._p) and self._decode[token_id] is not None
+
+    def keys(self) -> range:
+        return range(len(self._p))
+
+    def values(self) -> np.ndarray:
+        return self._p
+
+    def items(self) -> enumerate:
+        return enumerate(self._p)
+
+    def argmax(self) -> int:
+        return int(self._p.argmax())
+
+    def sample(self) -> int:
+        logps = self._p.copy().astype(np.float64)
+        logps -= logps.max()
+        probs = np.exp(logps)
+        probs /= probs.sum()
+        return int(np.random.choice(len(probs), p=probs))
+
+    def top(self, K: int) -> dict[int, Any]:
+        top_idx = self._p.argsort()[-K:]
+        return {int(i): self._p[i] for i in reversed(top_idx)}
+
+    def relabel(self, keys: list) -> dict:
+        """Return a dict mapping ``keys[i] → logp[i]``, skipping None keys.
+
+        Example: ``state.logp_next.relabel(lm._decode)`` returns a
+        ``dict[bytes, float]`` keyed on token byte strings.
+        """
+        top_idx = self._p.argsort()
+        return {keys[i]: self._p[i] for i in reversed(top_idx) if keys[i] is not None}
+
+    def __repr__(self) -> str:
+        return repr(self.top(10))
+
+
 # TODO: This class will encounter issues when its token vocabulary has multiple
 # token_ids that map to the same string of bytes.
-class TokenizedLLM(LM[bytes]):
+class HuggingFaceLM(LM[int]):
+    """LM[int] wrapping a HuggingFace causal LM.
+
+    Owns the model, tokenizer, and byte-level vocabulary tables.
+    ``initial()`` returns a ``TokenIDState`` keyed on int token IDs.
+
+    Directly compatible with callers that work with integer source symbols
+    (e.g., ``CharacterBeam``, ``GeneralizedBeam``, ``FusedTransducedLM``).
+    """
 
     def __init__(self, tokenizer: Any, model: Any, byte_level: bool = True) -> None:
         self.tokenizer = tokenizer
@@ -199,25 +192,34 @@ class TokenizedLLM(LM[bytes]):
         vocab = HfTokenizerVocab(tokenizer)
         self._encode = vocab.encode
         self._decode = vocab.decode
-        self.eos: bytes = self.tokenizer.eos_token.encode()
 
         self._calls: int = 0
         self.V: set[bytes | None] = set(self._decode)
+        self.eos: int = self._encode[self.tokenizer.eos_token.encode()]
 
-    def initial(self) -> StateLM:
-        return StateLM.initial(self)
+    def initial(self) -> TokenIDState:
+        return TokenIDState(
+            lm=self,
+            logp=0,
+            context=(),
+            parent=None,
+        )
 
     def encode_prompt(self, prompt: str) -> tuple[Any, ...]:
         "Encode ``prompt`` as a tuple of tokens (each a bytes object)."
         return unflatten(tuple(self._decode[i] for i in self.tokenizer.encode(prompt)))
 
+    @classmethod
+    def from_name(cls, model_name: str, **kw: Any) -> HuggingFaceLM:
+        return load_model_by_name(model_name, **kw)
+
 
 def load_model_by_name(model_name: str, device: torch.device | None = None,
-                       **kwargs: Any) -> TokenizedLLM:
-    """Load an LLM from HuggingFace into a ``TokenizedLLM``."""
+                       **kwargs: Any) -> HuggingFaceLM:
+    """Load a HuggingFace causal LM into a ``HuggingFaceLM``."""
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    return TokenizedLLM(
+    return HuggingFaceLM(
         tokenizer=transformers.AutoTokenizer.from_pretrained(model_name, use_fast=False),
         model=(
             transformers.AutoModelForCausalLM.from_pretrained(model_name)
@@ -228,79 +230,61 @@ def load_model_by_name(model_name: str, device: torch.device | None = None,
     )
 
 
-class StateLM(LMState[bytes]):
-    """Immutable LM state for incremental decoding with KV cache sharing.
+class TokenIDState(LMState[int]):
+    """Immutable LM state keyed on integer token IDs.
 
-    ``state >> token`` returns a new state; the parent's cache is reused.
-    Multiple children can branch from the same parent (e.g., in
-    ``prioritized_enumeration``).  Linear chains (``importance_sampling``)
-    create one child per state.
+    Stores int token IDs in ``context``; the model forward pass uses
+    them directly with no encode/decode round-trip.
 
     KV Cache Safety
     ---------------
     Modern transformers (>=4.40) returns ``DynamicCache`` objects that
     ``model.forward()`` **mutates in-place** via ``cache.update()``.  If two
     children share a parent's cache directly, the first child's forward pass
-    corrupts it for the second.
-
-    Rejected alternatives:
-    - ``copy.deepcopy``: slow, opaque, bad with CUDA tensors.
-    - Recompute from scratch: defeats the purpose of incremental decoding.
-    - Refcount / lazy clone: fragile — ``>>`` can be called *after* an earlier
-      child already evaluated ``.out``, so the refcount at creation time doesn't
-      predict future children.
-
-    Chosen fix (TODO — not yet implemented):
-    Store each state's KV tensors as **immutable tuples**.  Before each forward
-    call, wrap the parent's tuples in a **fresh ``DynamicCache``** (just
-    ``list.append`` of references — no tensor cloning).  The model's
-    ``torch.cat`` inside ``cache.update()`` creates new tensors, leaving the
-    parent's originals untouched.  Zero tensor clones, negligible overhead
-    vs. forward pass, safe regardless of ``>>`` ordering.
+    corrupts it for the second.  We detect ``DynamicCache`` and raise rather
+    than silently produce wrong results.
     """
 
-    def __init__(self, lm: TokenizedLLM, logp: float,
-                 context: tuple[Any, ...], parent: StateLM | None) -> None:
+    def __init__(self, lm: HuggingFaceLM, logp: float,
+                 context: tuple[Any, ...], parent: TokenIDState | None) -> None:
         self.lm = lm
         self.eos = lm.eos
         self.logp = logp
         self.context = context
         self.parent = parent
 
-    def __rshift__(self, x: bytes) -> StateLM:
-        if x not in self.logp_next or x == self.eos:
-            raise ValueError(f"Out of vocabulary: {x!r}")
-        return StateLM(
+    def __rshift__(self, token_id: int) -> TokenIDState:
+        if token_id not in self.logp_next or token_id == self.eos:
+            raise ValueError(f"Out of vocabulary: {token_id!r}")
+        return TokenIDState(
             lm=self.lm,
-            logp=self.logp + self.logp_next[x],
-            context=(self.context, x),
+            logp=self.logp + self.logp_next[token_id],
+            context=(self.context, token_id),
             parent=self,
         )
 
     @cached_property
-    def logp_next(self) -> LazyProb:  # type: ignore[override]
+    def logp_next(self) -> TokenLogProbs:  # type: ignore[override]
         with torch.no_grad():
-            return LazyProb(
+            return TokenLogProbs(
                 torch.nn.functional.log_softmax(self.out.logits, dim=-1).squeeze().detach().numpy(),
-                self.lm._encode, self.lm._decode,
+                self.lm._decode,
             )
 
     @cached_property
     def out(self) -> Any:
         self.lm._calls += 1
-        lm = self.lm
         with torch.no_grad():
             if self.context == ():
-                input_ids = torch.LongTensor([[lm.tokenizer.bos_token_id]], device=lm.device)
-                return lm.model(input_ids=input_ids, past_key_values=None, use_cache=True)
+                input_ids = torch.LongTensor([[self.lm.tokenizer.bos_token_id]], device=self.lm.device)
+                return self.lm.model(input_ids=input_ids, past_key_values=None, use_cache=True)
             else:
-                (_, x) = self.context
-                i = lm._encode[x]
-                input_ids = torch.LongTensor([[i]], device=lm.device)
+                (_, token_id) = self.context
+                input_ids = torch.LongTensor([[token_id]], device=self.lm.device)
                 past_kv = self.parent.out.past_key_values  # type: ignore[union-attr]
                 if isinstance(past_kv, DynamicCache):
                     raise TypeError(
-                        "StateLM does not support DynamicCache (mutates in-place, "
+                        "TokenIDState does not support DynamicCache (mutates in-place, "
                         "breaks tree-structured branching). See: "
                         "https://github.com/timvieira/transduction/issues/1"
                     )
@@ -310,23 +294,8 @@ class StateLM(LMState[bytes]):
                     use_cache=True,
                 )
 
-    @cached_property
-    def p_next(self) -> LazyProb:
-        return self.logp_next.apply(np.exp)
-
     def token_ids(self) -> list[int]:
-        return [self.lm._encode[x] for x in flatten(self.context)]
+        return list(flatten(self.context))
 
     def __repr__(self) -> str:
-        return f'{self.__class__.__name__}({[x for x in flatten(self.context)]})'
-
-    @classmethod
-    def initial(cls, lm: TokenizedLLM | str) -> StateLM:
-        if isinstance(lm, str):
-            lm = load_model_by_name(lm, byte_level=True)
-        return cls(
-            lm=lm,
-            logp=0,
-            context=(),
-            parent=None,
-        )
+        return f'{self.__class__.__name__}({self.token_ids()})'
