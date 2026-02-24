@@ -1,9 +1,10 @@
-"""Test CharacterBeam vs FusedTransducedLM on subsampled BPE FST.
+"""Test CharacterBeam vs FusedTransducedLM and ReferenceTransducedLM.
 
 Both algorithms compute the same quantity: P(next_byte | bytes_so_far),
 marginalizing over all BPE tokenizations.  CharacterBeam exploits the
 strict-prefix-monotone (SPM) property for efficiency; FusedTransducedLM
-is a general-purpose fused decomposition + LM search.
+is a general-purpose fused decomposition + LM search; ReferenceTransducedLM
+enumerates Q/R languages exactly (ground truth for finite-relation FSTs).
 
 We verify they agree by passing a CharNgramLM (token-level) and a vocab
 dict directly to CharacterBeam, then comparing their logp_next
@@ -17,6 +18,7 @@ from transduction.fst import FST
 from transduction.fsa import EPSILON
 from transduction.lm.ngram import CharNgramLM
 from transduction.lm.fused_transduced import FusedTransducedLM
+from transduction.lm.reference_transduced import ReferenceTransducedLM
 from transduction.lm.character_beam import CharacterBeam
 from transduction.lm.statelm import HfTokenizerVocab
 from transduction.util import LogDistr
@@ -184,3 +186,136 @@ def test_cb_self_consistency(setup):
         have = logp[k]
         want = (state >> k).logp - Z
         assert abs(have - want) < 1e-3, f"key={k!r}: {have:.6f} vs {want:.6f}"
+
+
+# ---------------------------------------------------------------------------
+# CharacterBeam vs ReferenceTransducedLM (exact ground truth)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope='module')
+def small_setup():
+    """Build a small BPE FST (~20 tokens) for exact reference comparison."""
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained('gpt2', use_fast=False,
+                                              local_files_only=True)
+    hf_vocab = HfTokenizerVocab(tokenizer)
+
+    drop = {x.encode() for x in tokenizer.all_special_tokens}
+
+    # Training data (small)
+    train_sentences = [
+        "The cat sat on the mat.",
+        "The dog ran fast.",
+    ] * 3
+    train_ids = [tokenizer.encode(s) for s in train_sentences]
+    train_used = sorted(set(tid for seq in train_ids for tid in seq))
+
+    # Keep only the tokens that appear in training data (~20 tokens)
+    used = sorted(
+        tid for tid in train_used
+        if hf_vocab.decode[tid] not in drop
+    )
+
+    # Build FST
+    fst = subsampled_bpe_fst(hf_vocab.decode, used, drop)
+
+    # Inner LM
+    source_alpha = fst.A - {EPSILON}
+    inner_lm = CharNgramLM.train(train_ids, n=2, alpha=0.5,
+                                 alphabet=source_alpha)
+
+    # EOS
+    eos_bytes = tokenizer.eos_token.encode()
+    eos_id = hf_vocab.encode[eos_bytes]
+
+    # Vocab for CharacterBeam
+    cb_vocab: dict = {}
+    for tid in used:
+        word = hf_vocab.decode[tid]
+        if word is not None:
+            cb_vocab[tid] = word
+    if eos_id not in cb_vocab:
+        cb_vocab[eos_id] = eos_bytes
+
+    # CharacterBeam with large K (effectively exact for small vocab)
+    cb = CharacterBeam(inner_lm, cb_vocab, K=500, eos_token=eos_id)
+
+    # ReferenceTransducedLM (exact)
+    ref = ReferenceTransducedLM(inner_lm, fst)
+
+    return cb, ref, fst, train_ids, set(used)
+
+
+def _renormalize_bytes(logp):
+    """Extract byte keys and renormalize to a conditional distribution."""
+    byte_keys = [k for k in logp.keys() if isinstance(k, int) and logp[k] > -50]
+    if not byte_keys:
+        return {}
+    vals = np.array([logp[k] for k in byte_keys])
+    Z = np.logaddexp.reduce(vals)
+    return {k: logp[k] - Z for k in byte_keys}
+
+
+def test_cb_vs_reference(small_setup):
+    """CharacterBeam matches ReferenceTransducedLM (exact) on small BPE FST.
+
+    ReferenceTransducedLM puts EOS mass under a separate '<EOS>' key, while
+    CharacterBeam encodes EOS as a byte sequence.  We compare the conditional
+    distribution over bytes (renormalized to exclude EOS) so the comparison
+    is apples-to-apples.
+    """
+    cb, ref, fst, train_ids, used_set = small_setup
+
+    # Find a transducible byte context
+    target_bytes = None
+    for seq in train_ids:
+        if all(tid in used_set for tid in seq):
+            try:
+                target_bytes = list(fst.transduce(seq))
+            except ValueError:
+                continue
+            if len(target_bytes) >= 6:
+                target_bytes = target_bytes[:6]
+                break
+    assert target_bytes is not None, "Could not find transducible sequence"
+
+    context = bytes(target_bytes)
+
+    ref_state = ref.initial()
+    max_diffs = []
+
+    for i in range(len(context)):
+        byte_prefix = context[:i]
+
+        # CharacterBeam logp_next (renormalized over bytes)
+        cb_norm = _renormalize_bytes(cb(byte_prefix).logp_next)
+
+        # ReferenceTransducedLM logp_next (renormalized over bytes)
+        ref_norm = _renormalize_bytes(ref_state.logp_next)
+
+        # Compare on common byte keys
+        common = set(cb_norm.keys()) & set(ref_norm.keys())
+        assert len(common) > 0, f"No common keys at position {i}"
+
+        diffs = []
+        for k in common:
+            diffs.append(abs(cb_norm[k] - ref_norm[k]))
+
+        if diffs:
+            max_diff = max(diffs)
+            max_diffs.append(max_diff)
+            print(f"  pos {i} byte={context[i]!r}: "
+                  f"{len(common)} common keys, max|diff|={max_diff:.6f}")
+
+        # Advance reference state
+        y = context[i]
+        ref_logp = ref_state.logp_next
+        if y in ref_logp:
+            ref_state = ref_state >> y
+
+    assert max_diffs, "No comparisons were made"
+    worst = max(max_diffs)
+    print(f"\n  Worst max|diff| across all positions: {worst:.6f}")
+    # With large K and small vocab, CharacterBeam should be near-exact
+    assert worst < 0.01, f"Distributions differ too much: max|diff| = {worst:.6f}"
