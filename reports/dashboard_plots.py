@@ -25,6 +25,7 @@ C_TRANSDUCED = '#6BBF6B'
 C_PTB = '#D4A843'
 C_EXTRAPOLATE = '#999999'
 C_CHARBEAM = '#9B59B6'   # character beam (purple)
+C_GENBEAM = '#2ECC71'    # generalized beam (green)
 C_FLAT = '#B85B5B'       # flat arena (old)
 C_FACTORED = '#5BB88D'   # factored arena (new)
 
@@ -60,6 +61,18 @@ primary = method_keys[0]
 vs_ok, ms_ok = method_data[primary]
 rss_ok = [r['peak_rss_mb'] for r in rows if r.get(f'{primary}_avg_ms') is not None]
 
+# Load GeneralizedBeam data from its separate JSON (if available)
+GB_FILE = os.path.join(os.path.dirname(__file__), 'bench_generalized_beam_results.json')
+gb_method_data = None
+if os.path.exists(GB_FILE):
+    with open(GB_FILE) as f:
+        gb_data_for_plot1 = json.load(f)
+    gb_rows_p1 = gb_data_for_plot1.get('bpe_rows', [])
+    gb_vs_p1 = [r['vocab_size'] for r in gb_rows_p1 if r.get('GeneralizedBeam_avg_ms') is not None]
+    gb_ms_p1 = [r['GeneralizedBeam_avg_ms'] for r in gb_rows_p1 if r.get('GeneralizedBeam_avg_ms') is not None]
+    if gb_vs_p1:
+        gb_method_data = (gb_vs_p1, gb_ms_p1)
+
 
 # ── Plot 1: BPE Vocab Scaling — time + memory (side by side) ──
 
@@ -85,15 +98,19 @@ fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
 
 # Left panel: time — all methods
 method_styles = {
-    'FusedLM_rust':       ('o-', C_FUSED, 2.5, 8, 'helper="rust"'),
-    'FusedLM_rust_token': ('s-', C_RUST_TOKEN, 2, 7, 'helper="rust_token"'),
-    'CharacterBeam':      ('D-', C_CHARBEAM, 2, 7, 'CharacterBeam (K=10)'),
+    'FusedLM_rust':       ('o-', C_FUSED, 2.5, 8, 'FusedTransducedLM'),
+    'FusedLM_rust_token': ('s-', C_RUST_TOKEN, 2, 7, 'FusedLM (rust_token)'),
+    'CharacterBeam':      ('D-', C_CHARBEAM, 2, 7, 'CharacterBeam'),
 }
 for key in method_keys:
     vs, ms = method_data[key]
     style = method_styles.get(key, ('o-', C_EXTRAPOLATE, 1.5, 6, key))
     ax1.plot(vs, ms, style[0], color=style[1], linewidth=style[2],
              markersize=style[3], label=style[4], zorder=5)
+
+if gb_method_data is not None:
+    ax1.plot(gb_method_data[0], gb_method_data[1], '^-', color=C_GENBEAM,
+             linewidth=2.5, markersize=8, label='GeneralizedBeam (K=10)', zorder=6)
 
 if len(extrap_vs) > 0:
     ax1.plot(extrap_vs, extrap_ts, 'x--', color=C_EXTRAPOLATE, linewidth=1.5,
@@ -111,18 +128,22 @@ ax1.set_xlim(200, 100000)
 ax1.set_ylim(3, 50000)
 
 # Right panel: memory (delta above baseline)
-ax2.plot(vs_ok, delta_mb, 's-', color=C_FUSED_MEM, linewidth=2.5,
-         markersize=8, label='FusedLM (peak RSS - baseline)', zorder=5)
+ax2.plot(vs_ok, delta_mb, 'o-', color=C_FUSED_MEM, linewidth=2.5,
+         markersize=8, label='FusedTransducedLM', zorder=5)
 if len(extrap_vs) > 0:
     ax2.plot(extrap_vs, extrap_dm, 'x--', color=C_EXTRAPOLATE, linewidth=1.5,
              markersize=10, label=f'Extrapolation (|V|$^{{{mem_slope:.2f}}}$)', zorder=2)
 
-# CharacterBeam memory (tracemalloc peak allocation)
-cb_mem_vs = [r['vocab_size'] for r in rows if r.get('CharacterBeam_peak_mb') is not None]
-cb_mem_mb = [r['CharacterBeam_peak_mb'] for r in rows if r.get('CharacterBeam_peak_mb') is not None]
-if cb_mem_vs:
-    ax2.plot(cb_mem_vs, cb_mem_mb, 'D-', color=C_CHARBEAM, linewidth=2,
-             markersize=7, label='CharacterBeam (tracemalloc)', zorder=5)
+# GeneralizedBeam memory (from separate process run)
+if gb_method_data is not None:
+    gb_baseline = gb_data_for_plot1.get('baseline_rss_mb', baseline_rss)
+    gb_mem_vs = [r['vocab_size'] for r in gb_rows_p1
+                 if r.get('peak_rss_mb') is not None and r['peak_rss_mb'] - gb_baseline > 0]
+    gb_mem_delta = [r['peak_rss_mb'] - gb_baseline for r in gb_rows_p1
+                    if r.get('peak_rss_mb') is not None and r['peak_rss_mb'] - gb_baseline > 0]
+    if gb_mem_vs:
+        ax2.plot(gb_mem_vs, gb_mem_delta, '^-', color=C_GENBEAM, linewidth=2,
+                 markersize=7, label='GeneralizedBeam', zorder=5)
 mem_limit_mb = bench_data['config']['memory_limit_gb'] * 1024
 ax2.axhline(mem_limit_mb - baseline_rss, color='orange', linestyle=':', alpha=0.6, linewidth=1.5)
 ax2.text(250, (mem_limit_mb - baseline_rss) * 1.1,
@@ -140,7 +161,7 @@ ax2.grid(True, alpha=0.3, which='both')
 ax2.set_xlim(200, 100000)
 ax2.set_ylim(1, 100000)
 
-fig.suptitle('BPE Vocab Scaling: FusedTransducedLM (8 decode steps, CharNgramLM)',
+fig.suptitle('BPE Vocab Scaling (8 decode steps, CharNgramLM, K=10)',
              fontsize=11, y=1.02)
 fig.tight_layout()
 save(fig, 'bpe_vocab_scaling.png')
