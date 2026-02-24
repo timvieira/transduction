@@ -12,6 +12,7 @@ Tests cover:
 import pytest
 import numpy as np
 
+from transformers.cache_utils import DynamicCache
 from transduction.util import set_memory_limit
 
 set_memory_limit(10)
@@ -100,12 +101,11 @@ class TestDynamicCacheFix:
         assert np.isfinite(child_a.logp_next[enc[b' is']])
         assert np.isfinite(child_b.logp_next[enc[b' is']])
 
-    def test_cache_is_tuple_format(self, lm, enc):
-        """After forward pass, past_key_values should be tuple-of-tuples."""
+    def test_cache_is_dynamic_cache(self, lm, enc):
+        """After forward pass, past_key_values should be DynamicCache."""
         state = lm.initial() >> enc[b' the']
         kv = state.out.past_key_values
-        assert isinstance(kv, tuple), f"Expected tuple, got {type(kv)}"
-        assert isinstance(kv[0], tuple), f"Expected tuple layer, got {type(kv[0])}"
+        assert isinstance(kv, DynamicCache), f"Expected DynamicCache, got {type(kv)}"
 
 
 # ---------------------------------------------------------------------------

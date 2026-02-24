@@ -1,0 +1,87 @@
+{
+  "description": "GPT-2 + WikiText benchmark (200 bytes)",
+  "config": {
+    "num_bytes": 200,
+    "K": 10,
+    "device": "cpu"
+  },
+  "results": [
+    {
+      "name": "CharacterBeam (prefetch, threshold=0.1)",
+      "init_ms": 474,
+      "steps": 200,
+      "total_ms": 1700,
+      "avg_ms": 8.6,
+      "lm_calls": 53,
+      "calls_per_step": 0.27
+    },
+    {
+      "name": "CharacterBeam (no prefetch, threshold=0.1)",
+      "init_ms": 379,
+      "steps": 200,
+      "total_ms": 1700,
+      "avg_ms": 8.6,
+      "lm_calls": 53,
+      "calls_per_step": 0.27
+    },
+    {
+      "name": "GeneralizedBeam (prefetch)",
+      "init_ms": 781,
+      "steps": 200,
+      "total_ms": 58000,
+      "avg_ms": 290.1,
+      "lm_calls": 1750,
+      "calls_per_step": 8.75
+    },
+    {
+      "name": "GeneralizedBeam (no prefetch)",
+      "init_ms": 590,
+      "steps": 200,
+      "total_ms": 59300,
+      "avg_ms": 296.5,
+      "lm_calls": 1750,
+      "calls_per_step": 8.75
+    }
+  ],
+  "previous_results": {
+    "description": "Before sparse matvec optimization (logaddexp.at COO scatter)",
+    "results": [
+      {
+        "name": "CharacterBeam (prefetch, threshold=0.1)",
+        "avg_ms": 28.0,
+        "total_ms": 5600,
+        "calls_per_step": 0.27
+      },
+      {
+        "name": "CharacterBeam (no prefetch, threshold=0.1)",
+        "avg_ms": 32.0,
+        "total_ms": 6400,
+        "calls_per_step": 0.27
+      },
+      {
+        "name": "CharacterBeam (prefetch, no threshold)",
+        "avg_ms": 1459.7,
+        "total_ms": 291944,
+        "calls_per_step": 7.68
+      },
+      {
+        "name": "CharacterBeam (no prefetch, no threshold)",
+        "avg_ms": 1298.7,
+        "total_ms": 259732,
+        "calls_per_step": 7.68
+      },
+      {
+        "name": "GeneralizedBeam (prefetch)",
+        "avg_ms": 1168.9,
+        "total_ms": 233786,
+        "calls_per_step": 8.75
+      },
+      {
+        "name": "GeneralizedBeam (no prefetch)",
+        "avg_ms": 1304.6,
+        "total_ms": 260921,
+        "calls_per_step": 8.75
+      }
+    ]
+  }
+}

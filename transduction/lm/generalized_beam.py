@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import heapq
 import numpy as np
+import scipy.sparse as sp
 from collections import defaultdict, deque
 from functools import cached_property
 from typing import Any
@@ -107,11 +108,34 @@ class OutputTrie:
         self._coo_src_ids = np.array(coo_src_ids, dtype=np.intp)
         self._inner_eos = inner_eos
 
+        # Pre-compute integer source-sym array for fast numpy indexing
+        # when logp_next is a TokenLogProbs (backed by a numpy array).
+        try:
+            self._source_sym_ids_np = np.array(self._source_syms, dtype=np.intp)
+        except (TypeError, ValueError):
+            self._source_sym_ids_np = None
+
+        # Sparse reachability matrix for fast log_mass_sum via matvec.
+        n_nodes = len(children)
+        n_tokens = len(self._source_syms)
+        self._reach = sp.csr_matrix(
+            (np.ones(len(coo_nodes), dtype=np.float64),
+             (coo_nodes, coo_src_ids)),
+            shape=(n_nodes, n_tokens),
+        )
+
     def log_mass_sum(self, logp_next: LogDistr) -> np.ndarray:
-        """Bottom-up log-probability mass at each trie node via logaddexp scatter."""
-        logp = np.array([logp_next[tok] for tok in self._source_syms])
-        log_mass = np.full(len(self.children), -np.inf, dtype=np.float64)
-        np.logaddexp.at(log_mass, self._coo_nodes, logp[self._coo_src_ids])
+        """Bottom-up log-probability mass at each trie node via sparse matvec."""
+        p = getattr(logp_next, '_p', None)
+        if p is not None and self._source_sym_ids_np is not None:
+            logp = p[self._source_sym_ids_np]
+        else:
+            logp = np.array([logp_next[tok] for tok in self._source_syms])
+        logp_max = logp.max()
+        prob = np.exp(logp - logp_max)
+        mass = self._reach @ prob
+        with np.errstate(divide='ignore'):
+            log_mass = np.log(mass) + logp_max
         return log_mass
 
     @property
