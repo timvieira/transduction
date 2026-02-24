@@ -50,6 +50,11 @@ Self-contained language model interface for use with enumeration/sampling:
   - `TokenLogProbs`: lazy log-prob distribution; `relabel(lm._decode)` for bytes-keyed dict
   - Includes inlined dependencies: `HfTokenizerVocab`, `flatten`/`unflatten`
   - External deps: `torch`, `transformers`
+- `transduction/lm/llama_cpp_lm.py` — `LlamaCppLM`, `LlamaCppState` (CPU inference via llama-cpp-python with GGUF models)
+  - Wraps `llama-cpp-python` `Llama` with memory-efficient KV-cache snapshots (scores stripped)
+  - `LlamaCppLM` (`LM[int]`): model owner; `LlamaCppLM.from_file('model.gguf')` or pass a `Llama` instance
+  - `LlamaCppState` (`LMState[int]`): same cons-cell context / lazy eval pattern as `TokenIDState`
+  - External deps: `llama-cpp-python`
 - `transduction/lm/transduced.py` — `TransducedLM`, `TransducedState` (pushforward of an inner LM through an FST; defaults to Rust backend)
 - `transduction/lm/fused_transduced.py` — `FusedTransducedLM`, `FusedTransducedState` (single-pass interleaved decomposition + LM search; `helper=` for pluggable backends: `"rust"`, `"python"`)
 - `transduction/lm/reference_transduced.py` — `ReferenceTransducedLM` (ground-truth transduced LM via Precover; enumerates Q/R languages exactly; finite-relation FSTs only)
@@ -77,6 +82,7 @@ Core library (`transduction/`):
 
 LM integration (`transduction/lm/`):
 - `torch`, `transformers` — HuggingFace causal LM wrappers
+- `llama-cpp-python` — CPU inference with GGUF models (`LlamaCppLM`)
 
 Visualization / benchmarking (notebooks, `notes/`):
 - `matplotlib` — plotting
