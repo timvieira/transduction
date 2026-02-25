@@ -343,7 +343,7 @@ class FusedTransducedLM(LM[Token]):
                  max_steps: int = 1000, max_beam: int = 100,
                  eos: Token = '<EOS>', helper: str = "rust",
                  top_k: int | None = None,
-                 use_factored: bool = True) -> None:  # type: ignore[assignment]
+                 ) -> None:  # type: ignore[assignment]
 
         self.inner_lm = inner_lm
         self.fst = fst
@@ -355,7 +355,7 @@ class FusedTransducedLM(LM[Token]):
         if helper == "rust":
             import transduction_core
             rust_fst, sym_map, state_map = to_rust_fst(fst)
-            self._rust_helper = transduction_core.RustLazyPeekabooDFA(rust_fst, use_factored)
+            self._rust_helper = transduction_core.RustLazyPeekabooDFA(rust_fst)
             self._sym_map = {k: v for k, v in sym_map.items()}
             self._inv_sym_map = {v: k for k, v in sym_map.items()}
             self._state_map = state_map

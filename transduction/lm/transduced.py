@@ -395,23 +395,18 @@ class TransducedLM(LM[Token]):
                  max_expansions: int = 1000, eos: Token = '<EOS>',  # type: ignore[assignment]
                  decomp_state_cls: type | None = None,
                  univ_cls: type = _DefaultUniv,
-                 use_factored: bool = True) -> None:
+                 ) -> None:
         self.inner_lm = inner_lm
         self.fst = fst
         self.max_expansions = max_expansions
         self.K = K
         self.eos = eos
-        self._use_factored = use_factored
         self._decomp_state_cls = decomp_state_cls or _DefaultDecompState
         self._univ = univ_cls(fst)
 
     def initial(self) -> TransducedState:
         """Return the initial TransducedState (empty target prefix)."""
-        kwargs = {}
-        if self._use_factored is not True:
-            kwargs['use_factored'] = self._use_factored
-        peekaboo = self._decomp_state_cls(self.fst, '', parent=None, univ=self._univ,
-                                          **kwargs)
+        peekaboo = self._decomp_state_cls(self.fst, '', parent=None, univ=self._univ)
         inner_initial = self.inner_lm.initial()
         return TransducedState(
             self,

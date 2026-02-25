@@ -353,12 +353,11 @@ class RustPeekabooState:
     })
 
     def __init__(self, fst, target=(), parent=None, *, univ=None,
-                 _rust_state=None, use_factored=True):
+                 _rust_state=None):
         self.fst = fst
         self.target = tuple(target) if not isinstance(target, tuple) else target
         self.target_alphabet = fst.B - {EPSILON}
         self.source_alphabet = fst.A - {EPSILON}
-        self._use_factored = use_factored
         oov = set(self.target) - self.target_alphabet
         if oov:
             raise ValueError(f"Out of vocabulary target symbols: {oov}")
@@ -368,7 +367,7 @@ class RustPeekabooState:
         else:
             import transduction_core
             rust_fst, sym_map, state_map = to_rust_fst(fst)
-            rust_decomp = transduction_core.RustDirtyPeekabooDecomp(rust_fst, use_factored)
+            rust_decomp = transduction_core.RustDirtyPeekabooDecomp(rust_fst)
             self._rust_state = (rust_decomp, sym_map, state_map)
 
         self._bfs_done = False
@@ -506,7 +505,6 @@ class RustPeekabooState:
         return RustPeekabooState(
             self.fst, self.target + (y,),
             _rust_state=self._rust_state,
-            use_factored=self._use_factored,
         )
 
 

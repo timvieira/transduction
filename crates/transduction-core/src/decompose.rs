@@ -87,11 +87,6 @@ pub struct UniversalityFilter {
 }
 
 impl UniversalityFilter {
-    fn new(fst: &Fst, target_len: u32) -> Self {
-        let ip_univ = compute_ip_universal_states(fst);
-        Self::with_ip_univ(&ip_univ, target_len, target_len as u64 + 1)
-    }
-
     /// Create a UniversalityFilter with pre-computed ip_univ states for a fixed stride.
     pub fn with_ip_univ(ip_univ: &[bool], target_len: u32, stride: u64) -> Self {
         let mut witnesses = FxHashSet::default();

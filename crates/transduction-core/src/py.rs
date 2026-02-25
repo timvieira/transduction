@@ -508,9 +508,8 @@ pub struct RustDirtyPeekabooDecomp {
 #[pymethods]
 impl RustDirtyPeekabooDecomp {
     #[new]
-    #[pyo3(signature = (fst, use_factored=true))]
-    fn new(py: Python<'_>, fst: Py<RustFst>, use_factored: bool) -> Self {
-        let persistent = peekaboo::DirtyPeekaboo::new(&fst.borrow(py).inner, use_factored);
+    fn new(py: Python<'_>, fst: Py<RustFst>) -> Self {
+        let persistent = peekaboo::DirtyPeekaboo::new(&fst.borrow(py).inner);
         RustDirtyPeekabooDecomp { fst, persistent }
     }
 
@@ -591,7 +590,7 @@ impl RustDirtyPeekabooDecomp {
     /// Decode a DFA state ID to its NFA constituents.
     /// Returns list of (fst_state, buf_len, extra_sym_idx, truncated) tuples.
     fn decode_state(&self, state_id: u32) -> Vec<(u32, u16, u16, bool)> {
-        self.persistent.arena_sets(state_id).iter_all_unpacked()
+        peekaboo::flat_iter_all_unpacked(self.persistent.arena_sets(state_id))
     }
 
     /// Return the idx→symbol mapping for decoding extra_sym_idx values.
@@ -724,15 +723,13 @@ pub struct RustLazyPeekabooDFA {
     ip_universal_states: Vec<bool>,
     all_final_universal: bool,
     num_source_symbols: usize,
-    use_factored: bool,
     lazy_dfa: Option<peekaboo::LazyPeekabooDFA>,
 }
 
 #[pymethods]
 impl RustLazyPeekabooDFA {
     #[new]
-    #[pyo3(signature = (fst, use_factored=true))]
-    fn new(py: Python<'_>, fst: Py<RustFst>, use_factored: bool) -> Self {
+    fn new(py: Python<'_>, fst: Py<RustFst>) -> Self {
         use rustc_hash::{FxHashMap, FxHashSet};
         use crate::fst::EPSILON;
 
@@ -775,7 +772,6 @@ impl RustLazyPeekabooDFA {
             ip_universal_states,
             all_final_universal,
             num_source_symbols,
-            use_factored,
             lazy_dfa: None,
         }
     }
@@ -791,7 +787,6 @@ impl RustLazyPeekabooDFA {
                 self.ip_universal_states.clone(),
                 self.all_final_universal,
                 self.num_source_symbols,
-                self.use_factored,
             ));
         }
         self.lazy_dfa.as_mut().unwrap().new_step(inner, target);
@@ -861,7 +856,7 @@ impl RustLazyPeekabooDFA {
     /// Returns list of (fst_state, buf_len, extra_sym_idx, truncated) tuples.
     fn decode_state(&self, state_id: u32) -> Vec<(u32, u16, u16, bool)> {
         let dfa = self.lazy_dfa.as_ref().expect("call new_step first");
-        dfa.arena_sets(state_id).iter_all_unpacked()
+        peekaboo::flat_iter_all_unpacked(dfa.arena_sets(state_id))
     }
 
     /// Return the idx→symbol mapping for decoding extra_sym_idx values.

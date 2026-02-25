@@ -61,8 +61,7 @@
 //! baseline without this optimization.
 
 use crate::fst::{compute_ip_universal_states, Fst, EPSILON};
-// PowersetArena still used by lazy_precover.rs, decompose.rs; not used here.
-// use crate::powerset::PowersetArena;
+use crate::powerset::PowersetArena;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -124,14 +123,6 @@ impl FstBitset {
         let was_set = self.words[word] & mask != 0;
         self.words[word] |= mask;
         !was_set
-    }
-
-    /// Test membership.
-    #[inline]
-    fn contains(&self, state: u32) -> bool {
-        let word = (state / 64) as usize;
-        let bit = state % 64;
-        self.words[word] & (1u64 << bit) != 0
     }
 
     /// Iterate set bits in ascending order.
@@ -678,188 +669,27 @@ impl<'a> PeekabooNFAMapped<'a> {
         visited.to_sorted_vec()
     }
 
-    /// Batch-compute all non-epsilon arcs from a factored NFA state set.
+    /// Compute the successor flat NFA set for a single input symbol.
     ///
-    /// Returns factored successor sets instead of flat Vec<u64>.
-    /// Core elements are processed via eps_closure_single (same as compute_all_arcs_cached).
-    /// Group elements are processed at the FST level, extending deferred maps with
-    /// the group's params rather than materializing the cartesian product.
-    pub(crate) fn compute_all_arcs_factored(
+    /// Only processes transitions labeled with the given symbol `x`,
+    /// returning a sorted, deduplicated Vec<u64> or None if no successors.
+    ///
+    /// Cost: O(|NFA_set| × arcs_per_state) instead of O(|V| × |closure|)
+    /// for compute_all_arcs_cached.
+    pub(crate) fn compute_single_arc(
         &self,
-        factored: &FactoredNfaSet,
-        cache: &mut FxHashMap<u64, (Vec<u64>, u16)>,
-        fst_full_cache: &mut FxHashMap<u32, (Vec<u32>, Vec<u32>)>,
-        fst_trunc_cache: &mut FxHashMap<u32, Vec<u32>>,
-    ) -> Vec<(u32, FactoredNfaSet)> {
-        let mut by_symbol_core: FxHashMap<u32, Vec<u64>> = FxHashMap::default();
-        let step_n = self.step_n;
-
-        // Deferred off-target groups: (input_sym, dest_fst) → (bl, es) params.
-        let mut deferred_full: FxHashMap<(u32, u32), Vec<(u16, u16)>> = FxHashMap::default();
-        let mut deferred_trunc: FxHashMap<(u32, u32), Vec<(u16, u16)>> = FxHashMap::default();
-
-        // Phase 1: Process core elements (same as compute_all_arcs_cached)
-        for &packed in &factored.core {
-            for (x, dest) in self.arcs(packed) {
-                if x != EPSILON {
-                    let (dest_fst, dest_bl, dest_es, dest_trunc) = unpack_peekaboo(dest);
-
-                    if dest_es != NO_EXTRA && dest_bl > step_n {
-                        if !dest_trunc {
-                            fst_full_cache
-                                .entry(dest_fst)
-                                .or_insert_with(|| self.fst_full_closure(dest_fst));
-                            deferred_full
-                                .entry((x, dest_fst))
-                                .or_default()
-                                .push((dest_bl, dest_es));
-                        } else {
-                            fst_trunc_cache
-                                .entry(dest_fst)
-                                .or_insert_with(|| self.fst_trunc_closure(dest_fst));
-                            deferred_trunc
-                                .entry((x, dest_fst))
-                                .or_default()
-                                .push((dest_bl, dest_es));
-                        }
-                    } else {
-                        let closure = self.eps_closure_single(dest, cache);
-                        let bucket = by_symbol_core.entry(x).or_default();
-                        bucket.extend_from_slice(&closure);
-                    }
-                }
-            }
-        }
-
-        // Phase 2: Process off-target groups at FST level
-        for group in &factored.groups {
-            // Collect unique (x, dest_fst) → (goes_to_full, goes_to_trunc)
-            let mut group_deferred: FxHashMap<(u32, u32), (bool, bool)> = FxHashMap::default();
-
-            for &f in &group.fst_nontrunc {
-                for arc in self.fst.arcs_from(f) {
-                    if arc.input == EPSILON { continue; }
-                    let entry = group_deferred.entry((arc.input, arc.dest)).or_insert((false, false));
-                    if arc.output == EPSILON {
-                        entry.0 = true; // non-truncated dest → deferred_full
-                    } else {
-                        entry.1 = true; // truncated dest → deferred_trunc
-                    }
-                }
-            }
-
-            for &f in &group.fst_trunc {
-                for arc in self.fst.arcs_from(f) {
-                    if arc.input == EPSILON { continue; }
-                    group_deferred.entry((arc.input, arc.dest)).or_insert((false, false)).1 = true;
-                }
-            }
-
-            // Extend deferred maps once per unique (x, dest_fst) with this group's params
-            for ((x, dest_fst), (goes_full, goes_trunc)) in group_deferred {
-                if goes_full {
-                    fst_full_cache
-                        .entry(dest_fst)
-                        .or_insert_with(|| self.fst_full_closure(dest_fst));
-                    deferred_full
-                        .entry((x, dest_fst))
-                        .or_default()
-                        .extend_from_slice(&group.params);
-                }
-                if goes_trunc {
-                    fst_trunc_cache
-                        .entry(dest_fst)
-                        .or_insert_with(|| self.fst_trunc_closure(dest_fst));
-                    deferred_trunc
-                        .entry((x, dest_fst))
-                        .or_default()
-                        .extend_from_slice(&group.params);
-                }
-            }
-        }
-
-        // Phase 3: Assemble factored successors
-        // Group deferred entries by input symbol
-        let mut full_by_sym: FxHashMap<u32, Vec<(u32, Vec<(u16, u16)>)>> = FxHashMap::default();
-        for ((x, dest_fst), mut params) in deferred_full {
-            params.sort_unstable();
-            params.dedup();
-            full_by_sym.entry(x).or_default().push((dest_fst, params));
-        }
-
-        let mut trunc_by_sym: FxHashMap<u32, Vec<(u32, Vec<(u16, u16)>)>> = FxHashMap::default();
-        for ((x, dest_fst), mut params) in deferred_trunc {
-            params.sort_unstable();
-            params.dedup();
-            trunc_by_sym.entry(x).or_default().push((dest_fst, params));
-        }
-
-        // Collect all input symbols
-        let mut all_symbols: FxHashSet<u32> = FxHashSet::default();
-        for &sym in by_symbol_core.keys() { all_symbols.insert(sym); }
-        for &sym in full_by_sym.keys() { all_symbols.insert(sym); }
-        for &sym in trunc_by_sym.keys() { all_symbols.insert(sym); }
-
-        let mut result: Vec<(u32, FactoredNfaSet)> = Vec::with_capacity(all_symbols.len());
-        for sym in all_symbols {
-            let mut core = by_symbol_core.remove(&sym).unwrap_or_default();
-            core.sort_unstable();
-            core.dedup();
-
-            let mut groups = Vec::new();
-
-            if let Some(entries) = full_by_sym.get(&sym) {
-                for (dest_fst, params) in entries {
-                    let (nontrunc, trunc) = fst_full_cache.get(dest_fst).unwrap();
-                    groups.push(OffTargetGroup {
-                        fst_nontrunc: nontrunc.clone(),
-                        fst_trunc: trunc.clone(),
-                        params: params.clone(),
-                    });
-                }
-            }
-
-            if let Some(entries) = trunc_by_sym.get(&sym) {
-                for (dest_fst, params) in entries {
-                    let trunc = fst_trunc_cache.get(dest_fst).unwrap();
-                    groups.push(OffTargetGroup {
-                        fst_nontrunc: vec![],
-                        fst_trunc: trunc.clone(),
-                        params: params.clone(),
-                    });
-                }
-            }
-
-            groups.sort(); // canonical order for fingerprint/equality
-            result.push((sym, FactoredNfaSet { core, groups }));
-        }
-        result
-    }
-
-    /// Compute the successor factored NFA set for a single input symbol.
-    ///
-    /// This is the single-symbol version of `compute_all_arcs_factored`:
-    /// instead of iterating all input symbols and building successors for each,
-    /// it only processes transitions labeled with the given symbol `x`.
-    ///
-    /// Cost: O(|core| × arcs_per_state + |groups| × fst_arcs) instead of
-    /// O(|V| × |closure|) for the full expansion.  For BPE FSTs with V=50K,
-    /// this reduces per-symbol work from ~5M operations to ~400.
-    pub(crate) fn compute_single_arc_factored(
-        &self,
-        factored: &FactoredNfaSet,
+        states: &[u64],
         x: u32,
         cache: &mut FxHashMap<u64, (Vec<u64>, u16)>,
         fst_full_cache: &mut FxHashMap<u32, (Vec<u32>, Vec<u32>)>,
         fst_trunc_cache: &mut FxHashMap<u32, Vec<u32>>,
-    ) -> Option<FactoredNfaSet> {
+    ) -> Option<Vec<u64>> {
         let step_n = self.step_n;
-        let mut core_dests: Vec<u64> = Vec::new();
+        let mut dests: Vec<u64> = Vec::new();
         let mut deferred_full: FxHashMap<u32, Vec<(u16, u16)>> = FxHashMap::default();
         let mut deferred_trunc: FxHashMap<u32, Vec<(u16, u16)>> = FxHashMap::default();
 
-        // Phase 1: Process core elements — filter to arcs with input == x
-        for &packed in &factored.core {
+        for &packed in states {
             for (inp, dest) in self.arcs(packed) {
                 if inp != x { continue; }
                 let (dest_fst, dest_bl, dest_es, dest_trunc) = unpack_peekaboo(dest);
@@ -877,76 +707,45 @@ impl<'a> PeekabooNFAMapped<'a> {
                     }
                 } else {
                     let closure = self.eps_closure_single(dest, cache);
-                    core_dests.extend_from_slice(&closure);
+                    dests.extend_from_slice(&closure);
                 }
             }
         }
 
-        // Phase 2: Process off-target groups — only arcs with input == x
-        for group in &factored.groups {
-            for &f in &group.fst_nontrunc {
-                for arc in self.fst.arcs_from(f) {
-                    if arc.input != x { continue; }
-                    if arc.output == EPSILON {
-                        fst_full_cache
-                            .entry(arc.dest)
-                            .or_insert_with(|| self.fst_full_closure(arc.dest));
-                        deferred_full.entry(arc.dest).or_default()
-                            .extend_from_slice(&group.params);
-                    } else {
-                        fst_trunc_cache
-                            .entry(arc.dest)
-                            .or_insert_with(|| self.fst_trunc_closure(arc.dest));
-                        deferred_trunc.entry(arc.dest).or_default()
-                            .extend_from_slice(&group.params);
-                    }
-                }
-            }
-            for &f in &group.fst_trunc {
-                for arc in self.fst.arcs_from(f) {
-                    if arc.input != x { continue; }
-                    fst_trunc_cache
-                        .entry(arc.dest)
-                        .or_insert_with(|| self.fst_trunc_closure(arc.dest));
-                    deferred_trunc.entry(arc.dest).or_default()
-                        .extend_from_slice(&group.params);
-                }
-            }
-        }
-
-        // Check if anything was produced
-        if core_dests.is_empty() && deferred_full.is_empty() && deferred_trunc.is_empty() {
+        if dests.is_empty() && deferred_full.is_empty() && deferred_trunc.is_empty() {
             return None;
         }
 
-        core_dests.sort_unstable();
-        core_dests.dedup();
-
-        // Phase 3: Build factored successor set
-        let mut groups = Vec::new();
+        // Expand deferred non-truncated off-target groups
         for (dest_fst, mut params) in deferred_full {
             params.sort_unstable();
             params.dedup();
-            let (nontrunc, trunc) = fst_full_cache.get(&dest_fst).unwrap();
-            groups.push(OffTargetGroup {
-                fst_nontrunc: nontrunc.clone(),
-                fst_trunc: trunc.clone(),
-                params,
-            });
+            let entry = fst_full_cache.get(&dest_fst).unwrap();
+            for &(bl, es) in &params {
+                for &r in entry.0.iter() {
+                    dests.push(pack_peekaboo(r, bl, es, false));
+                }
+                for &t in entry.1.iter() {
+                    dests.push(pack_peekaboo(t, bl, es, true));
+                }
+            }
         }
+
+        // Expand deferred truncated off-target groups
         for (dest_fst, mut params) in deferred_trunc {
             params.sort_unstable();
             params.dedup();
-            let trunc = fst_trunc_cache.get(&dest_fst).unwrap();
-            groups.push(OffTargetGroup {
-                fst_nontrunc: vec![],
-                fst_trunc: trunc.clone(),
-                params,
-            });
+            let entry = fst_trunc_cache.get(&dest_fst).unwrap();
+            for &(bl, es) in &params {
+                for &t in entry.iter() {
+                    dests.push(pack_peekaboo(t, bl, es, true));
+                }
+            }
         }
-        groups.sort();
 
-        Some(FactoredNfaSet { core: core_dests, groups })
+        dests.sort_unstable();
+        dests.dedup();
+        Some(dests)
     }
 }
 
@@ -990,451 +789,100 @@ impl SymbolIndex {
         SymbolIndex { on_target, by_extra }
     }
 
-    /// Relevant output symbols at the given step: those with at least one
-    /// element having `buf_len > step_n` (frontier elements).
-    ///
-    /// For off-target elements with `buf_len > step_n`, effective_state
-    /// always returns `(buf_len, extra_sym, true)`, so relevance reduces
-    /// to the simple `buf_len > step_n` check.
-    pub fn relevant_symbols(&self, step_n: u16) -> Vec<u16> {
-        let mut result = Vec::with_capacity(self.by_extra.len());
-        for (&extra_sym, elements) in &self.by_extra {
-            for &packed in elements {
-                let buf_len = ((packed >> 17) & 0x7FFF) as u16;
-                if buf_len > step_n {
-                    result.push(extra_sym);
-                    break;
-                }
-            }
-        }
-        result
-    }
 }
 
 // ---------------------------------------------------------------------------
-// Factored NFA state sets: O(|closure| + |V|) representation
+// Flat NFA state set helper functions
 // ---------------------------------------------------------------------------
 
-/// A group of off-target NFA elements sharing the same FST closure.
-/// Represents: {pack(f, bl, es, false) | f in fst_nontrunc, (bl,es) in params}
-///           ∪ {pack(f, bl, es, true)  | f in fst_trunc, (bl,es) in params}
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct OffTargetGroup {
-    pub fst_nontrunc: Vec<u32>,   // sorted FST states (non-truncated)
-    pub fst_trunc: Vec<u32>,      // sorted FST states (truncated)
-    pub params: Vec<(u16, u16)>,  // sorted (buf_len, extra_sym)
+/// Max buf_len across all packed elements.
+fn flat_max_bufpos(set: &[u64]) -> u16 {
+    set.iter()
+        .map(|&e| ((e >> 17) & 0x7FFF) as u16)
+        .max()
+        .unwrap_or(0)
 }
 
-/// Factored NFA state set. Boundary states store off-target elements
-/// as (closure, params) groups instead of the full cartesian product.
-#[derive(Clone, Debug)]
-pub(crate) struct FactoredNfaSet {
-    /// On-target elements + small off-target below frontier.
-    /// Sorted, deduplicated packed u64.
-    pub core: Vec<u64>,
-    /// Off-target groups sharing FST closures, in canonical order.
-    pub groups: Vec<OffTargetGroup>,
+/// Relevant output symbols: those with extra_sym != NO_EXTRA and buf_len > step_n.
+fn flat_relevant_symbols(set: &[u64], step_n: u16) -> Vec<u16> {
+    let mut seen = FxHashSet::default();
+    let mut result = Vec::new();
+    for &packed in set {
+        let extra_sym = ((packed >> 1) & 0xFFFF) as u16;
+        let buf_len = ((packed >> 17) & 0x7FFF) as u16;
+        if extra_sym != NO_EXTRA && buf_len > step_n && seen.insert(extra_sym) {
+            result.push(extra_sym);
+        }
+    }
+    result
 }
 
-impl FactoredNfaSet {
-    /// True if no groups (flat set, e.g. from sub-BFS projection).
-    pub fn is_simple(&self) -> bool {
-        self.groups.is_empty()
-    }
+/// Check if any element has the truncated flag set.
+fn flat_has_truncated(set: &[u64]) -> bool {
+    set.iter().any(|&packed| (packed & 1) != 0)
+}
 
-    /// Max buf_len across core and groups.
-    pub fn max_bufpos(&self) -> u16 {
-        let core_max = self.core.iter()
-            .map(|&e| ((e >> 17) & 0x7FFF) as u16)
-            .max()
-            .unwrap_or(0);
-        let group_max = self.groups.iter()
-            .flat_map(|g| g.params.iter())
-            .map(|&(bl, _)| bl)
-            .max()
-            .unwrap_or(0);
-        core_max.max(group_max)
-    }
+/// Check if any element is a preimage element.
+fn flat_is_preimage(set: &[u64], fst: &Fst, step_n: u16, target: &[u32], sym_to_idx: &FxHashMap<u32, u16>) -> bool {
+    let non_canonical_extra: Option<u16> = if step_n > 0 && (step_n - 1) < target.len() as u16 {
+        sym_to_idx.get(&target[(step_n - 1) as usize]).copied()
+    } else {
+        None
+    };
 
-    /// Check if any NFA element is final.
-    pub fn any_final(&self, nfa: &PeekabooNFAMapped) -> bool {
-        for &packed in &self.core {
-            if nfa.is_final(packed) {
-                return true;
-            }
-        }
-        let target_bl = nfa.step_n + 1;
-        for group in &self.groups {
-            let has_matching_buf = group.params.iter().any(|&(bl, _)| bl == target_bl);
-            if has_matching_buf {
-                if group.fst_nontrunc.iter().any(|&f| nfa.fst.is_final[f as usize])
-                    || group.fst_trunc.iter().any(|&f| nfa.fst.is_final[f as usize])
-                {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    /// Relevant output symbols: those with buf_len > step_n.
-    pub fn relevant_symbols(&self, step_n: u16) -> Vec<u16> {
-        let mut seen = FxHashSet::default();
-        let mut result = Vec::new();
-        for &packed in &self.core {
-            let extra_sym = ((packed >> 1) & 0xFFFF) as u16;
-            let buf_len = ((packed >> 17) & 0x7FFF) as u16;
-            if extra_sym != NO_EXTRA && buf_len > step_n && seen.insert(extra_sym) {
-                result.push(extra_sym);
-            }
-        }
-        for group in &self.groups {
-            for &(bl, es) in &group.params {
-                if bl > step_n && seen.insert(es) {
-                    result.push(es);
-                }
-            }
-        }
-        result
-    }
-
-    /// Hash for arena interning.
-    pub fn fingerprint(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = rustc_hash::FxHasher::default();
-        self.core.hash(&mut hasher);
-        self.groups.len().hash(&mut hasher);
-        for g in &self.groups {
-            g.fst_nontrunc.hash(&mut hasher);
-            g.fst_trunc.hash(&mut hasher);
-            g.params.hash(&mut hasher);
-        }
-        hasher.finish()
-    }
-
-    /// Canonical equality.
-    pub fn eq_factored(&self, other: &Self) -> bool {
-        self.core == other.core && self.groups == other.groups
-    }
-
-    /// Project to a single output symbol, returning a flat Vec<u64>.
-    /// Replaces project_and_refine_indexed for factored sets.
-    pub fn project_for_symbol(&self, y_idx: u16, step_n: u16) -> Vec<u64> {
-        let target_len = step_n + 1;
-        let mut projected = Vec::new();
-        for &packed in &self.core {
-            let (fst_state, buf_len, extra_sym, truncated) = unpack_peekaboo(packed);
+    for &packed in set {
+        let (fst_state, buf_len, extra_sym, _truncated) = unpack_peekaboo(packed);
+        if buf_len == step_n && fst.is_final[fst_state as usize] {
             if extra_sym == NO_EXTRA {
-                let clipped = buf_len.min(target_len);
-                projected.push(pack_peekaboo(fst_state, clipped, NO_EXTRA, truncated));
-            } else if extra_sym == y_idx {
-                let clipped = buf_len.min(target_len);
-                projected.push(pack_peekaboo(fst_state, clipped, y_idx, truncated));
-            }
-        }
-        for group in &self.groups {
-            // Only include group elements that are truly off-target boundary
-            // (bl > step_n). Stale params with bl <= step_n are handled by
-            // normalize_for_step moving them to core before the BFS.
-            let has_match = group.params.iter().any(|&(bl, es)| bl > step_n && es == y_idx);
-            if has_match {
-                for &f in &group.fst_nontrunc {
-                    projected.push(pack_peekaboo(f, target_len, y_idx, false));
-                }
-                for &f in &group.fst_trunc {
-                    projected.push(pack_peekaboo(f, target_len, y_idx, true));
-                }
-            }
-        }
-        projected.sort_unstable();
-        projected.dedup();
-        projected
-    }
-
-    /// Check if projection for y_idx contains any final NFA element.
-    pub fn is_projected_final(&self, y_idx: u16, fst: &Fst, step_n: u16) -> bool {
-        for &packed in &self.core {
-            let fst_state = (packed >> 32) as u32;
-            let buf_len = ((packed >> 17) & 0x7FFF) as u16;
-            let extra_sym = ((packed >> 1) & 0xFFFF) as u16;
-            if extra_sym == y_idx && fst.is_final[fst_state as usize] && buf_len == step_n + 1 {
                 return true;
             }
-        }
-        for group in &self.groups {
-            let has_match = group.params.iter().any(|&(bl, es)| bl == step_n + 1 && es == y_idx);
-            if has_match {
-                if group.fst_nontrunc.iter().any(|&f| fst.is_final[f as usize])
-                    || group.fst_trunc.iter().any(|&f| fst.is_final[f as usize])
-                {
+            if let Some(expected) = non_canonical_extra {
+                if extra_sym == expected {
                     return true;
                 }
             }
         }
-        false
     }
+    false
+}
 
-    /// Check if any element has the truncated flag set.
-    pub fn has_truncated(&self) -> bool {
-        for &packed in &self.core {
-            if (packed & 1) != 0 {
-                return true;
-            }
+/// Collect all extra_sym values with buf_len == step_n + 1 and final FST state.
+fn flat_final_symbols(set: &[u64], fst: &Fst, step_n: u16) -> Vec<u16> {
+    let mut seen = FxHashSet::default();
+    let mut result = Vec::new();
+    let target_bl = step_n + 1;
+    for &packed in set {
+        let fst_state = (packed >> 32) as u32;
+        let buf_len = ((packed >> 17) & 0x7FFF) as u16;
+        let extra_sym = ((packed >> 1) & 0xFFFF) as u16;
+        if extra_sym != NO_EXTRA && buf_len == target_bl
+            && fst.is_final[fst_state as usize] && seen.insert(extra_sym)
+        {
+            result.push(extra_sym);
         }
-        for group in &self.groups {
-            if !group.fst_trunc.is_empty() {
-                return true;
-            }
-        }
-        false
     }
+    result
+}
 
-    /// Check if any element is a preimage element.
-    ///
-    /// After normalize_for_step(), only core can contain preimage elements.
-    /// But when called on un-normalized arena sets (e.g. from DirtyPeekaboo's
-    /// compute_preimage_stops), groups may have stale params with bl == step_n
-    /// that are also preimage candidates.
-    pub fn is_preimage(&self, fst: &Fst, step_n: u16, target: &[u32], sym_to_idx: &FxHashMap<u32, u16>) -> bool {
-        // Pre-compute the non-canonical extra_sym that also matches preimage.
-        let non_canonical_extra: Option<u16> = if step_n > 0 && (step_n - 1) < target.len() as u16 {
-            sym_to_idx.get(&target[(step_n - 1) as usize]).copied()
-        } else {
-            None
-        };
-
-        // Check core elements
-        for &packed in &self.core {
-            let (fst_state, buf_len, extra_sym, _truncated) = unpack_peekaboo(packed);
-            if buf_len == step_n && fst.is_final[fst_state as usize] {
-                if extra_sym == NO_EXTRA {
-                    return true;
-                }
-                if let Some(expected) = non_canonical_extra {
-                    if extra_sym == expected {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        // Check groups: stale params with bl == step_n may be preimage candidates.
-        // Group elements always have extra_sym != NO_EXTRA, so only the
-        // non-canonical match applies.
-        if let Some(expected) = non_canonical_extra {
-            for group in &self.groups {
-                let has_matching_param = group.params.iter().any(|&(bl, es)| bl == step_n && es == expected);
-                if has_matching_param {
-                    let has_final_fst = group.fst_nontrunc.iter().any(|&f| fst.is_final[f as usize])
-                        || group.fst_trunc.iter().any(|&f| fst.is_final[f as usize]);
-                    if has_final_fst {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        false
-    }
-
-    /// Iterate core elements unpacked (for diagnostic/py.rs).
-    pub fn iter_all_unpacked(&self) -> Vec<(u32, u16, u16, bool)> {
-        let mut result: Vec<(u32, u16, u16, bool)> = Vec::new();
-        for &packed in &self.core {
-            result.push(unpack_peekaboo(packed));
-        }
-        for group in &self.groups {
-            for &(bl, es) in &group.params {
-                for &f in &group.fst_nontrunc {
-                    result.push((f, bl, es, false));
-                }
-                for &f in &group.fst_trunc {
-                    result.push((f, bl, es, true));
-                }
-            }
-        }
-        result
-    }
-
-    /// Flatten all elements (core + groups) into packed u64s.
-    pub fn flatten(&self) -> Vec<u64> {
-        let mut result = self.core.clone();
-        for group in &self.groups {
-            for &(bl, es) in &group.params {
-                for &f in &group.fst_nontrunc {
-                    result.push(pack_peekaboo(f, bl, es, false));
-                }
-                for &f in &group.fst_trunc {
-                    result.push(pack_peekaboo(f, bl, es, true));
-                }
-            }
-        }
-        result
-    }
-
-    /// Collect all extra_sym values from truncated elements with prefix_len >= step_n.
-    pub fn trunc_output_syms(&self, step_n: u16) -> Vec<u16> {
-        let mut seen = FxHashSet::default();
-        let mut result = Vec::new();
-        for &packed in &self.core {
-            let (_fst_state, buf_len, extra_sym, truncated) = unpack_peekaboo(packed);
-            if truncated && extra_sym != NO_EXTRA {
-                let prefix_len = buf_len - 1;
-                if prefix_len >= step_n && seen.insert(extra_sym) {
-                    result.push(extra_sym);
-                }
-            }
-        }
-        for group in &self.groups {
-            if !group.fst_trunc.is_empty() {
-                for &(bl, es) in &group.params {
-                    // Only include params that are truly off-target boundary
-                    let prefix_len = bl - 1;
-                    if prefix_len >= step_n && seen.insert(es) {
-                        result.push(es);
-                    }
-                }
-            }
-        }
-        result
-    }
-
-    /// Collect all extra_sym values with buf_len == step_n + 1 and final FST state.
-    pub fn final_symbols(&self, fst: &Fst, step_n: u16) -> Vec<u16> {
-        let mut seen = FxHashSet::default();
-        let mut result = Vec::new();
-        let target_bl = step_n + 1;
-        for &packed in &self.core {
-            let fst_state = (packed >> 32) as u32;
-            let buf_len = ((packed >> 17) & 0x7FFF) as u16;
-            let extra_sym = ((packed >> 1) & 0xFFFF) as u16;
-            if extra_sym != NO_EXTRA && buf_len == target_bl
-                && fst.is_final[fst_state as usize] && seen.insert(extra_sym)
-            {
+/// Collect all extra_sym values from truncated elements with prefix_len >= step_n.
+fn flat_trunc_output_syms(set: &[u64], step_n: u16) -> Vec<u16> {
+    let mut seen = FxHashSet::default();
+    let mut result = Vec::new();
+    for &packed in set {
+        let (_fst_state, buf_len, extra_sym, truncated) = unpack_peekaboo(packed);
+        if truncated && extra_sym != NO_EXTRA {
+            let prefix_len = buf_len - 1;
+            if prefix_len >= step_n && seen.insert(extra_sym) {
                 result.push(extra_sym);
             }
         }
-        for group in &self.groups {
-            let has_matching_buf = group.params.iter().any(|&(bl, _)| bl == target_bl);
-            if has_matching_buf {
-                let has_final_fst = group.fst_nontrunc.iter().any(|&f| fst.is_final[f as usize])
-                    || group.fst_trunc.iter().any(|&f| fst.is_final[f as usize]);
-                if has_final_fst {
-                    for &(bl, es) in &group.params {
-                        if bl == target_bl && seen.insert(es) {
-                            result.push(es);
-                        }
-                    }
-                }
-            }
-        }
-        result
     }
+    result
 }
 
-impl FactoredNfaSet {
-    /// Move stale group params (bl <= step_n) back to core elements.
-    ///
-    /// Groups assume all params have bl > step_n (off-target boundary).
-    /// When step_n increases (dirty-state incremental), some params become
-    /// stale. These need NFA-level re-interpretation (via effective_state),
-    /// which only happens for core elements in compute_all_arcs_factored.
-    pub fn normalize_for_step(&mut self, step_n: u16) {
-        let mut new_groups = Vec::with_capacity(self.groups.len());
-        for group in self.groups.drain(..) {
-            let mut fresh_params = Vec::new();
-            let mut stale_params = Vec::new();
-            for (bl, es) in group.params {
-                if bl > step_n {
-                    fresh_params.push((bl, es));
-                } else {
-                    stale_params.push((bl, es));
-                }
-            }
-            // Materialize stale params back into core
-            for (bl, es) in stale_params {
-                for &f in &group.fst_nontrunc {
-                    self.core.push(pack_peekaboo(f, bl, es, false));
-                }
-                for &f in &group.fst_trunc {
-                    self.core.push(pack_peekaboo(f, bl, es, true));
-                }
-            }
-            // Keep group only if it has fresh params
-            if !fresh_params.is_empty() {
-                new_groups.push(OffTargetGroup {
-                    fst_nontrunc: group.fst_nontrunc,
-                    fst_trunc: group.fst_trunc,
-                    params: fresh_params,
-                });
-            }
-        }
-        self.groups = new_groups;
-        if !self.core.is_empty() {
-            self.core.sort_unstable();
-            self.core.dedup();
-        }
-    }
-}
-
-/// Interns factored NFA state sets as u32 IDs.
-pub(crate) struct FactoredArena {
-    single_map: FxHashMap<u64, u32>,
-    fingerprint_map: FxHashMap<u64, Vec<u32>>,
-    pub sets: Vec<FactoredNfaSet>,
-    pub is_final: Vec<bool>,
-}
-
-impl FactoredArena {
-    pub fn new() -> Self {
-        FactoredArena {
-            single_map: FxHashMap::default(),
-            fingerprint_map: FxHashMap::default(),
-            sets: Vec::new(),
-            is_final: Vec::new(),
-        }
-    }
-
-    /// Intern a factored NFA set. Returns the u32 ID.
-    pub fn intern(&mut self, set: FactoredNfaSet, any_final: bool) -> u32 {
-        if set.core.len() == 1 && set.groups.is_empty() {
-            let key = set.core[0];
-            if let Some(&id) = self.single_map.get(&key) {
-                self.is_final[id as usize] = any_final;
-                return id;
-            }
-            let id = self.sets.len() as u32;
-            self.sets.push(set);
-            self.is_final.push(any_final);
-            self.single_map.insert(key, id);
-            return id;
-        }
-
-        let fp = set.fingerprint();
-        if let Some(candidates) = self.fingerprint_map.get(&fp) {
-            for &cid in candidates {
-                if self.sets[cid as usize].eq_factored(&set) {
-                    self.is_final[cid as usize] = any_final;
-                    return cid;
-                }
-            }
-        }
-
-        let id = self.sets.len() as u32;
-        self.sets.push(set);
-        self.is_final.push(any_final);
-        self.fingerprint_map.entry(fp).or_default().push(id);
-        id
-    }
-
-    /// Intern a flat (no groups) sorted set.
-    pub fn intern_flat(&mut self, sorted_set: Vec<u64>, any_final: bool) -> u32 {
-        self.intern(FactoredNfaSet { core: sorted_set, groups: vec![] }, any_final)
-    }
-
-    pub fn len(&self) -> usize {
-        self.sets.len()
-    }
+/// Iterate all packed elements unpacked (for diagnostic/py.rs).
+pub(crate) fn flat_iter_all_unpacked(set: &[u64]) -> Vec<(u32, u16, u16, bool)> {
+    set.iter().map(|&packed| unpack_peekaboo(packed)).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1582,112 +1030,6 @@ impl PeekabooUniversalityFilter {
         projected
     }
 
-    pub(crate) fn is_universal(
-        &mut self,
-        full_nfa_set: &[u64],
-        y_idx: u16,
-        nfa: &PeekabooNFAMapped,
-        arena: &mut FactoredArena,
-        eps_cache: &mut FxHashMap<u64, (Vec<u64>, u16)>,
-        num_source_symbols: usize,
-        step_n: u16,
-    ) -> bool {
-        let projected = self.project_and_refine(full_nfa_set, y_idx, step_n);
-
-        if projected.is_empty() {
-            return false;
-        }
-
-        let any_final = projected.iter().any(|&s| {
-            let (fst_state, buf_len, extra_sym, _) = unpack_peekaboo(s);
-            nfa.fst.is_final[fst_state as usize]
-                && buf_len == step_n + 1
-                && extra_sym == y_idx
-        });
-
-        if !any_final {
-            return false;
-        }
-
-        if projected.iter().any(|e| self.witnesses.contains(e)) {
-            self.add_pos(&projected);
-            return true;
-        }
-
-        if self.has_pos_subset(&projected) {
-            return true;
-        }
-
-        if self.has_neg_superset(&projected) {
-            return false;
-        }
-
-        let result = self.bfs_universal(
-            &projected, y_idx, nfa, arena, eps_cache, num_source_symbols, step_n,
-        );
-        if result {
-            self.add_pos(&projected);
-        } else {
-            self.add_neg(&projected);
-        }
-        result
-    }
-
-    /// Indexed universality check: uses SymbolIndex for O(|closure|) initial
-    /// projection instead of O(V × |closure|). The sub-BFS (bfs_universal)
-    /// continues to use flat project_and_refine since projected sets are small.
-    pub(crate) fn is_universal_indexed(
-        &mut self,
-        index: &SymbolIndex,
-        y_idx: u16,
-        nfa: &PeekabooNFAMapped,
-        arena: &mut FactoredArena,
-        eps_cache: &mut FxHashMap<u64, (Vec<u64>, u16)>,
-        num_source_symbols: usize,
-        step_n: u16,
-    ) -> bool {
-        let projected = self.project_and_refine_indexed(index, y_idx, step_n);
-
-        if projected.is_empty() {
-            return false;
-        }
-
-        let any_final = projected.iter().any(|&s| {
-            let (fst_state, buf_len, extra_sym, _) = unpack_peekaboo(s);
-            nfa.fst.is_final[fst_state as usize]
-                && buf_len == step_n + 1
-                && extra_sym == y_idx
-        });
-
-        if !any_final {
-            return false;
-        }
-
-        if projected.iter().any(|e| self.witnesses.contains(e)) {
-            self.add_pos(&projected);
-            return true;
-        }
-
-        if self.has_pos_subset(&projected) {
-            return true;
-        }
-
-        if self.has_neg_superset(&projected) {
-            return false;
-        }
-
-        // Sub-BFS uses flat project_and_refine (projected sets are small)
-        let result = self.bfs_universal(
-            &projected, y_idx, nfa, arena, eps_cache, num_source_symbols, step_n,
-        );
-        if result {
-            self.add_pos(&projected);
-        } else {
-            self.add_neg(&projected);
-        }
-        result
-    }
-
     /// Indexed finality check: O(|matching|) instead of O(|total_set|).
     pub(crate) fn is_projected_final_indexed(
         &self,
@@ -1712,13 +1054,13 @@ impl PeekabooUniversalityFilter {
         projected_set: &[u64],
         y_idx: u16,
         nfa: &PeekabooNFAMapped,
-        arena: &mut FactoredArena,
+        arena: &mut PowersetArena,
         eps_cache: &mut FxHashMap<u64, (Vec<u64>, u16)>,
         num_source_symbols: usize,
         step_n: u16,
     ) -> bool {
         let any_final = projected_set.iter().any(|&s| nfa.is_final(s));
-        let start_id = arena.intern_flat(projected_set.to_vec(), any_final);
+        let start_id = arena.intern(projected_set.to_vec(), any_final);
 
         // Use directly computed finality, not arena.is_final, which may be
         // stale when the same NFA set was interned under a different step_n.
@@ -1734,7 +1076,7 @@ impl PeekabooUniversalityFilter {
 
         while let Some(cur) = sub_worklist.pop_front() {
             // Sub-BFS states are always flat (projected, no groups)
-            let cur_core = arena.sets[cur as usize].core.clone();
+            let cur_core = arena.sets[cur as usize].clone();
 
             // Compute finality directly from NFA set rather than arena.is_final
             let cur_final = cur_core.iter().any(|&s| nfa.is_final(s));
@@ -1756,7 +1098,7 @@ impl PeekabooUniversalityFilter {
                 }
 
                 let succ_final = projected_succ.iter().any(|&s| nfa.is_final(s));
-                let dest_id = arena.intern_flat(projected_succ, succ_final);
+                let dest_id = arena.intern(projected_succ, succ_final);
 
                 if sub_visited.insert(dest_id) {
                     sub_worklist.push_back(dest_id);
@@ -1768,14 +1110,14 @@ impl PeekabooUniversalityFilter {
     }
 
     /// Universality check with a pre-computed projected set.
-    /// Used with FactoredNfaSet.project_for_symbol() which does the projection
-    /// externally instead of using SymbolIndex.
+    /// The caller provides an already-projected Vec<u64> instead of using
+    /// SymbolIndex.
     pub(crate) fn is_universal_from_projected(
         &mut self,
         projected: Vec<u64>,
         y_idx: u16,
         nfa: &PeekabooNFAMapped,
-        arena: &mut FactoredArena,
+        arena: &mut PowersetArena,
         eps_cache: &mut FxHashMap<u64, (Vec<u64>, u16)>,
         num_source_symbols: usize,
         step_n: u16,
@@ -1819,20 +1161,6 @@ impl PeekabooUniversalityFilter {
         result
     }
 
-    pub(crate) fn is_projected_final(
-        &self,
-        full_nfa_set: &[u64],
-        y_idx: u16,
-        fst: &Fst,
-        step_n: u16,
-    ) -> bool {
-        full_nfa_set.iter().any(|&packed| {
-            let (fst_state, buf_len, extra_sym, _) = unpack_peekaboo(packed);
-            fst.is_final[fst_state as usize]
-                && buf_len == step_n + 1
-                && extra_sym == y_idx
-        })
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1920,7 +1248,7 @@ pub struct DirtyPeekaboo {
     num_source_symbols: usize,
 
     // Persistent DFA structure
-    arena: FactoredArena,
+    arena: PowersetArena,
     global_start_id: u32,
     arcs_from: Vec<Vec<(u32, u32)>>,       // [sid] → [(label, dest_sid)]
     state_status: Vec<u8>,                  // [sid] → STATUS_*
@@ -1944,13 +1272,10 @@ pub struct DirtyPeekaboo {
     // Generation counter: incremented on every full_reset() so callers can
     // detect when DFA state IDs have been invalidated.
     generation: u64,
-
-    // Arena mode: true = factored (groups), false = flat (intern_flat only)
-    use_factored: bool,
 }
 
 impl DirtyPeekaboo {
-    pub fn new(fst: &Fst, use_factored: bool) -> Self {
+    pub fn new(fst: &Fst) -> Self {
         // Build the output alphabet.
         let mut output_alphabet: Vec<u32> = Vec::new();
         {
@@ -1986,7 +1311,7 @@ impl DirtyPeekaboo {
             idx_to_sym,
             ip_universal_states,
             num_source_symbols,
-            arena: FactoredArena::new(),
+            arena: PowersetArena::new(),
             global_start_id: 0,
             arcs_from: Vec::new(),
             state_status: Vec::new(),
@@ -2001,7 +1326,6 @@ impl DirtyPeekaboo {
             fst_univ_cache: FxHashMap::default(),
             prev_target: Vec::new(),
             generation: 0,
-            use_factored,
         }
     }
 
@@ -2014,7 +1338,7 @@ impl DirtyPeekaboo {
 
     fn full_reset(&mut self) {
         self.generation += 1;
-        self.arena = FactoredArena::new();
+        self.arena = PowersetArena::new();
         self.global_start_id = 0;
         self.arcs_from.clear();
         self.state_status.clear();
@@ -2039,7 +1363,7 @@ impl DirtyPeekaboo {
             self.reverse_arcs.resize_with(needed, Vec::new);
             self.max_bufpos.resize(needed, 0);
             for sid in old_len..needed {
-                self.max_bufpos[sid] = self.arena.sets[sid].max_bufpos();
+                self.max_bufpos[sid] = flat_max_bufpos(&self.arena.sets[sid]);
             }
         }
     }
@@ -2219,7 +1543,7 @@ impl DirtyPeekaboo {
         &self.reachable_flags
     }
 
-    pub fn arena_sets(&self, sid: u32) -> &FactoredNfaSet {
+    pub fn arena_sets(&self, sid: u32) -> &Vec<u64> {
         &self.arena.sets[sid as usize]
     }
 
@@ -2237,7 +1561,7 @@ impl DirtyPeekaboo {
     /// now matches the extended target.
     pub fn compute_preimage_stops(&self, fst: &Fst, step_n: u16) -> Vec<u32> {
         // Pre-compute the non-canonical extra_sym that also matches preimage.
-        let non_canonical_extra: Option<u16> = if step_n > 0 {
+        let _non_canonical_extra: Option<u16> = if step_n > 0 {
             let last_target_sym = self.prev_target[(step_n - 1) as usize];
             self.sym_to_idx.get(&last_target_sym).copied()
         } else {
@@ -2250,8 +1574,8 @@ impl DirtyPeekaboo {
             if sid_usize >= self.reachable_flags.len() || !self.reachable_flags[sid_usize] {
                 continue;
             }
-            let factored = &self.arena.sets[sid_usize];
-            if factored.is_preimage(fst, step_n, &self.prev_target, &self.sym_to_idx) {
+            let nfa_set = &self.arena.sets[sid_usize];
+            if flat_is_preimage(nfa_set, fst, step_n, &self.prev_target, &self.sym_to_idx) {
                 stops.push(sid);
             }
         }
@@ -2273,10 +1597,10 @@ impl DirtyPeekaboo {
             if sid_usize >= self.reachable_flags.len() || !self.reachable_flags[sid_usize] {
                 continue;
             }
-            let factored = &self.arena.sets[sid_usize];
+            let nfa_set = &self.arena.sets[sid_usize];
 
             // Check if this state has any truncated NFA element
-            if factored.has_truncated() {
+            if flat_has_truncated(nfa_set) {
                 continue;  // Only non-truncated states can be resume frontiers
             }
 
@@ -2285,21 +1609,12 @@ impl DirtyPeekaboo {
             for &(_lbl, dst) in &self.arcs_from[sid_usize] {
                 let dst_usize = dst as usize;
                 if dst_usize < self.arena.sets.len() {
-                    let dst_factored = &self.arena.sets[dst_usize];
-                    // Check core for truncated elements
-                    for &packed in &dst_factored.core {
+                    let dst_set = &self.arena.sets[dst_usize];
+                    for &packed in dst_set {
                         let extra_sym = ((packed >> 1) & 0xFFFF) as u16;
                         let truncated = (packed & 1) != 0;
                         if truncated && extra_sym != NO_EXTRA {
                             frontier_syms.insert(extra_sym);
-                        }
-                    }
-                    // Check groups: truncated FST states carry truncated elements
-                    for group in &dst_factored.groups {
-                        if !group.fst_trunc.is_empty() {
-                            for &(_bl, es) in &group.params {
-                                frontier_syms.insert(es);
-                            }
                         }
                     }
                 }
@@ -2450,7 +1765,7 @@ impl DirtyPeekaboo {
         let raw_starts = nfa.start_states();
         let init_closed = nfa.eps_closure_set(&raw_starts, &mut self.eps_cache);
         let any_final = init_closed.iter().any(|&s| nfa.is_final(s));
-        let start_id = self.arena.intern_flat(init_closed, any_final);
+        let start_id = self.arena.intern(init_closed, any_final);
         self.global_start_id = start_id;
 
         // Ensure capacity for all arena entries
@@ -2499,17 +1814,16 @@ impl DirtyPeekaboo {
                 continue;
             }
 
-            let mut factored = self.arena.sets[sid as usize].clone();
+            let nfa_set = self.arena.sets[sid as usize].clone();
 
-            // Move stale group params (bl <= step_n) back to core so they
-            // get correct NFA-level re-interpretation via effective_state.
-            factored.normalize_for_step(step_n);
-
-            // Use factored methods for relevant symbols and projection
-            let relevant_syms = factored.relevant_symbols(step_n);
+            // Flat sets don't need normalize_for_step (no groups to drain)
+            let relevant_syms = flat_relevant_symbols(&nfa_set, step_n);
 
             let mut continuous: Option<u16> = None;
             let mut has_final_syms = false;
+
+            // Build SymbolIndex for efficient per-symbol projection
+            let index = SymbolIndex::new(&nfa_set);
 
             for &y_idx in &relevant_syms {
                 if !univ_filters.contains_key(&y_idx) {
@@ -2522,8 +1836,8 @@ impl DirtyPeekaboo {
                 }
 
                 {
-                    // Project using factored set: O(|core| + |closure|) per symbol
-                    let projected = factored.project_for_symbol(y_idx, step_n);
+                    let projected = univ_filters.get(&y_idx).unwrap()
+                        .project_and_refine_indexed(&index, y_idx, step_n);
                     let cache_hit = if !projected.is_empty() {
                         let all_frontier = projected.iter().all(|&packed| {
                             let (_, buf_len, extra_sym, _) = unpack_peekaboo(packed);
@@ -2604,7 +1918,8 @@ impl DirtyPeekaboo {
                     }
                 }
 
-                if factored.is_projected_final(y_idx, fst, step_n) {
+                if univ_filters.get(&y_idx).unwrap()
+                    .is_projected_final_indexed(&index, y_idx, fst, step_n) {
                     self.decomp_r.entry(y_idx).or_default().push(sid);
                     has_final_syms = true;
                 }
@@ -2615,50 +1930,29 @@ impl DirtyPeekaboo {
                 continue;
             }
 
-            // Expand arcs: factored mode uses grouped sets, flat mode uses plain sorted vecs
-            let mut interned_arcs: Vec<(u32, u32)>;
+            // Expand arcs using flat compute_all_arcs_cached
+            let all_arcs = nfa.compute_all_arcs_cached(
+                &nfa_set, &mut self.eps_cache,
+                &mut fst_full_cache, &mut fst_trunc_cache,
+            );
+            let mut interned_arcs: Vec<(u32, u32)> = Vec::with_capacity(all_arcs.len());
             let mut unique_dests: FxHashSet<u32> = FxHashSet::default();
-
-            if self.use_factored {
-                let all_arcs = nfa.compute_all_arcs_factored(
-                    &factored, &mut self.eps_cache,
-                    &mut fst_full_cache, &mut fst_trunc_cache,
-                );
-                interned_arcs = Vec::with_capacity(all_arcs.len());
-                for (x, succ_factored) in all_arcs {
-                    let any_final = succ_factored.any_final(&nfa);
-                    let dest_id = self.arena.intern(succ_factored, any_final);
-                    let needed = dest_id as usize + 1;
-                    self.ensure_capacity(needed);
-                    if needed > self.reachable_flags.len() {
-                        self.reachable_flags.resize(needed, false);
-                    }
-                    interned_arcs.push((x, dest_id));
-                    unique_dests.insert(dest_id);
+            for (x, succ_flat) in all_arcs {
+                let mut sorted = succ_flat;
+                sorted.sort_unstable();
+                sorted.dedup();
+                let any_final = sorted.iter().any(|&p| {
+                    let (fst_state, _, _, _) = unpack_peekaboo(p);
+                    nfa.fst.is_final[fst_state as usize]
+                });
+                let dest_id = self.arena.intern(sorted, any_final);
+                let needed = dest_id as usize + 1;
+                self.ensure_capacity(needed);
+                if needed > self.reachable_flags.len() {
+                    self.reachable_flags.resize(needed, false);
                 }
-            } else {
-                let all_arcs = nfa.compute_all_arcs_cached(
-                    &factored.core, &mut self.eps_cache,
-                    &mut fst_full_cache, &mut fst_trunc_cache,
-                );
-                interned_arcs = Vec::with_capacity(all_arcs.len());
-                for (x, succ_flat) in all_arcs {
-                    let mut sorted = succ_flat;
-                    sorted.sort_unstable();
-                    sorted.dedup();
-                    let any_final = sorted.iter().any(|&p| {
-                        let (fst_state, _, _, _) = unpack_peekaboo(p);
-                        nfa.fst.is_final[fst_state as usize]
-                    });
-                    let dest_id = self.arena.intern_flat(sorted, any_final);
-                    let needed = dest_id as usize + 1;
-                    self.ensure_capacity(needed);
-                    if needed > self.reachable_flags.len() {
-                        self.reachable_flags.resize(needed, false);
-                    }
-                    interned_arcs.push((x, dest_id));
-                    unique_dests.insert(dest_id);
-                }
+                interned_arcs.push((x, dest_id));
+                unique_dests.insert(dest_id);
             }
 
             // Store all arcs explicitly
@@ -2782,14 +2076,12 @@ pub struct LazyPeekabooDFA {
     ip_universal_states: Vec<bool>,
     all_final_universal: bool,
     num_source_symbols: usize,
-    use_factored: bool,
-
     // Per-step (cleared on new_step)
     target: Vec<u32>,
     step_n: u16,
 
     // Persistent across steps
-    arena: FactoredArena,
+    arena: PowersetArena,
     pub fst_univ_cache: FxHashMap<Vec<u32>, bool>,
     // FST-level closure caches: persistent across steps and states since
     // closures depend only on FST structure, not target or step.
@@ -2818,7 +2110,6 @@ impl LazyPeekabooDFA {
         ip_universal_states: Vec<bool>,
         all_final_universal: bool,
         num_source_symbols: usize,
-        use_factored: bool,
     ) -> Self {
         LazyPeekabooDFA {
             sym_to_idx,
@@ -2826,10 +2117,9 @@ impl LazyPeekabooDFA {
             ip_universal_states,
             all_final_universal,
             num_source_symbols,
-            use_factored,
             target: Vec::new(),
             step_n: 0,
-            arena: FactoredArena::new(),
+            arena: PowersetArena::new(),
             fst_univ_cache: FxHashMap::default(),
             fst_full_cache: FxHashMap::default(),
             fst_trunc_cache: FxHashMap::default(),
@@ -2878,7 +2168,7 @@ impl LazyPeekabooDFA {
         let raw_starts = nfa.start_states();
         let init_closed = nfa.eps_closure_set(&raw_starts, &mut self.eps_cache);
         let any_final = init_closed.iter().any(|&s| nfa.is_final(s));
-        let start_id = self.arena.intern_flat(init_closed, any_final);
+        let start_id = self.arena.intern(init_closed, any_final);
         self.start_ids = vec![start_id];
 
         // Ensure capacity for any new arena entries
@@ -2913,15 +2203,15 @@ impl LazyPeekabooDFA {
         }
         self.ensure_capacity(sid_usize + 1);
 
-        let mut factored = self.arena.sets[sid_usize].clone();
+        let nfa_set = &self.arena.sets[sid_usize];
         let step_n = self.step_n;
-        factored.normalize_for_step(step_n);
+        // Flat sets don't need normalize_for_step (no groups to drain)
 
-        let relevant_symbols = factored.relevant_symbols(step_n);
-        let final_symbols = factored.final_symbols(fst, step_n);
-        let is_preimage = factored.is_preimage(fst, step_n, &self.target, &self.sym_to_idx);
-        let has_truncated = factored.has_truncated();
-        let trunc_output_syms = factored.trunc_output_syms(step_n);
+        let relevant_symbols = flat_relevant_symbols(nfa_set, step_n);
+        let final_symbols = flat_final_symbols(nfa_set, fst, step_n);
+        let is_preimage = flat_is_preimage(nfa_set, fst, step_n, &self.target, &self.sym_to_idx);
+        let has_truncated = flat_has_truncated(nfa_set);
+        let trunc_output_syms = flat_trunc_output_syms(nfa_set, step_n);
 
         self.meta[sid_usize] = StateMeta {
             relevant_symbols,
@@ -2966,9 +2256,9 @@ impl LazyPeekabooDFA {
         let relevant = self.meta[sid_usize].relevant_symbols.clone();
         let final_syms_set: FxHashSet<u16> =
             self.meta[sid_usize].final_symbols.iter().copied().collect();
-        let mut factored = self.arena.sets[sid_usize].clone();
+        let nfa_set = self.arena.sets[sid_usize].clone();
         let step_n = self.step_n;
-        factored.normalize_for_step(step_n);
+        // Flat sets don't need normalize_for_step (no groups to drain)
 
         let sym_to_idx = self.sym_to_idx.clone();
         let target = self.target.clone();
@@ -2990,6 +2280,9 @@ impl LazyPeekabooDFA {
         let mut univ_filters = std::mem::take(&mut self.univ_filters);
         let nfa = PeekabooNFAMapped::new(fst, &target, step_n, &sym_to_idx);
 
+        // Build SymbolIndex for efficient per-symbol projection
+        let index = SymbolIndex::new(&nfa_set);
+
         let mut quotient_sym: Option<u16> = None;
         let mut remainder_syms = Vec::new();
 
@@ -3001,8 +2294,8 @@ impl LazyPeekabooDFA {
                 continue;
             }
 
-            // Use factored projection: O(|core| + |closure|) per symbol
-            let projected = factored.project_for_symbol(y_idx, step_n);
+            let projected = univ_filters.get(&y_idx).unwrap()
+                .project_and_refine_indexed(&index, y_idx, step_n);
 
             let cache_hit = if !projected.is_empty() {
                 let all_frontier = projected.iter().all(|&packed| {
@@ -3083,45 +2376,30 @@ impl LazyPeekabooDFA {
         }
         self.ensure_capacity(sid_usize + 1);
 
-        let mut factored = self.arena.sets[sid_usize].clone();
+        let nfa_set = self.arena.sets[sid_usize].clone();
         let sym_to_idx = self.sym_to_idx.clone();
         let target = self.target.clone();
         let step_n = self.step_n;
-        factored.normalize_for_step(step_n);
+        // Flat sets don't need normalize_for_step (no groups to drain)
 
         let nfa = PeekabooNFAMapped::new(fst, &target, step_n, &sym_to_idx);
 
-        let mut interned_arcs: Vec<(u32, u32)>;
-        if self.use_factored {
-            let all_arcs = nfa.compute_all_arcs_factored(
-                &factored, &mut self.eps_cache,
-                &mut self.fst_full_cache, &mut self.fst_trunc_cache,
-            );
-            interned_arcs = Vec::with_capacity(all_arcs.len());
-            for (x, succ_factored) in all_arcs {
-                let any_final = succ_factored.any_final(&nfa);
-                let dest_id = self.arena.intern(succ_factored, any_final);
-                self.ensure_capacity(self.arena.len());
-                interned_arcs.push((x, dest_id));
-            }
-        } else {
-            let all_arcs = nfa.compute_all_arcs_cached(
-                &factored.core, &mut self.eps_cache,
-                &mut self.fst_full_cache, &mut self.fst_trunc_cache,
-            );
-            interned_arcs = Vec::with_capacity(all_arcs.len());
-            for (x, succ_flat) in all_arcs {
-                let mut sorted = succ_flat;
-                sorted.sort_unstable();
-                sorted.dedup();
-                let any_final = sorted.iter().any(|&p| {
-                    let (fst_state, _, _, _) = unpack_peekaboo(p);
-                    nfa.fst.is_final[fst_state as usize]
-                });
-                let dest_id = self.arena.intern_flat(sorted, any_final);
-                self.ensure_capacity(self.arena.len());
-                interned_arcs.push((x, dest_id));
-            }
+        let all_arcs = nfa.compute_all_arcs_cached(
+            &nfa_set, &mut self.eps_cache,
+            &mut self.fst_full_cache, &mut self.fst_trunc_cache,
+        );
+        let mut interned_arcs: Vec<(u32, u32)> = Vec::with_capacity(all_arcs.len());
+        for (x, succ_flat) in all_arcs {
+            let mut sorted = succ_flat;
+            sorted.sort_unstable();
+            sorted.dedup();
+            let any_final = sorted.iter().any(|&p| {
+                let (fst_state, _, _, _) = unpack_peekaboo(p);
+                nfa.fst.is_final[fst_state as usize]
+            });
+            let dest_id = self.arena.intern(sorted, any_final);
+            self.ensure_capacity(self.arena.len());
+            interned_arcs.push((x, dest_id));
         }
 
         self.arcs_from[sid_usize] = interned_arcs;
@@ -3182,30 +2460,26 @@ impl LazyPeekabooDFA {
         self.ensure_capacity(sid_usize + 1);
 
         // Slow path: compute single arc from NFA set
-        let mut factored = self.arena.sets[sid_usize].clone();
+        let nfa_set = self.arena.sets[sid_usize].clone();
         let sym_to_idx = self.sym_to_idx.clone();
         let target = self.target.clone();
         let step_n = self.step_n;
-        factored.normalize_for_step(step_n);
+        // Flat sets don't need normalize_for_step (no groups to drain)
 
         let nfa = PeekabooNFAMapped::new(fst, &target, step_n, &sym_to_idx);
-        let result = nfa.compute_single_arc_factored(
-            &factored, x, &mut self.eps_cache,
+        let result = nfa.compute_single_arc(
+            &nfa_set, x, &mut self.eps_cache,
             &mut self.fst_full_cache, &mut self.fst_trunc_cache,
         );
 
         match result {
             None => None,
-            Some(succ_factored) => {
-                let any_final = succ_factored.any_final(&nfa);
-                let dest_id = if self.use_factored {
-                    self.arena.intern(succ_factored, any_final)
-                } else {
-                    let mut flat = succ_factored.flatten();
-                    flat.sort_unstable();
-                    flat.dedup();
-                    self.arena.intern_flat(flat, any_final)
-                };
+            Some(sorted) => {
+                let any_final = sorted.iter().any(|&p| {
+                    let (fst_state, _, _, _) = unpack_peekaboo(p);
+                    nfa.fst.is_final[fst_state as usize]
+                });
+                let dest_id = self.arena.intern(sorted, any_final);
                 self.ensure_capacity(self.arena.len());
                 Some(dest_id)
             }
@@ -3222,7 +2496,7 @@ impl LazyPeekabooDFA {
         &self.meta[sid as usize]
     }
 
-    pub fn arena_sets(&self, sid: u32) -> &FactoredNfaSet {
+    pub fn arena_sets(&self, sid: u32) -> &Vec<u64> {
         &self.arena.sets[sid as usize]
     }
 }
