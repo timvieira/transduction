@@ -49,7 +49,7 @@ from collections import deque
 from typing import Any
 
 from transduction.lazy import Lazy, EPSILON
-from transduction.util import Integerizer, State
+from transduction.util import Integerizer
 
 
 # ═══════════════════════════════════════════════════════════════════════
