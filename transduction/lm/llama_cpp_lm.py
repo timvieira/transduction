@@ -9,6 +9,7 @@ import numpy as np
 import numpy.typing as npt
 
 from transduction.lm.base import LM, LMState
+import torch
 from transduction.lm.huggingface_lm import TokenLogProbs, flatten
 
 
@@ -181,7 +182,7 @@ class LlamaCppState(LMState[int]):
         logits = self._forward_result.last_logits.astype(np.float64)
         logits -= logits.max()
         log_probs = logits - np.log(np.exp(logits).sum())
-        return TokenLogProbs(log_probs.astype(np.float32), self.lm._decode)
+        return TokenLogProbs(torch.from_numpy(log_probs.astype(np.float32)), self.lm._decode)
 
     def token_ids(self) -> list[int]:
         return list(flatten(self.context))
