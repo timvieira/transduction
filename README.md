@@ -131,11 +131,11 @@ decomps = dirty.decompose_next()  # first call builds DFA
 Combine decomposition with a language model to enumerate or sample valid source strings:
 
 ```python
-from transduction.lm import StateLM
+from transduction.lm import HuggingFaceLM
 from transduction.enumeration import prioritized_enumeration, importance_sampling
 
 # Load GPT-2 (or any HuggingFace causal LM)
-lm = StateLM.initial('gpt2')
+lm = HuggingFaceLM.from_name('gpt2')
 
 # Best-first search weighted by LM log-probabilities
 pe = prioritized_enumeration(lm, fst, target='the', max_steps=20)

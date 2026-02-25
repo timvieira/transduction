@@ -1,7 +1,8 @@
+import warnings
 from transduction.base import IncrementalDecomposition
 from transduction.fst import EPSILON
 from transduction.fsa import FSA
-from transduction.util import colors, validate_target
+from transduction.util import validate_target
 from collections import deque
 
 
@@ -75,7 +76,7 @@ class LazyIncremental(IncrementalDecomposition):
             xs = worklist.popleft()
             t += 1
             if t > self.max_steps:
-                print(colors.light.red % '~~~~ stopped early ~~~~')
+                warnings.warn('stopped early: exceeded max_steps')
                 break
 
             if self.continuity(xs, self.target):

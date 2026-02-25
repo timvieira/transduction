@@ -56,6 +56,7 @@ Terminology
 
 from __future__ import annotations
 
+import warnings
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Iterable
@@ -63,7 +64,7 @@ from typing import Any, Generic, TypeVar, cast
 
 from transduction.fsa import FSA
 from transduction.fst import FST, EPSILON  # type: ignore[attr-defined]
-from transduction.util import Str, colors
+from transduction.util import Str
 
 A = TypeVar('A')  # source alphabet symbol type
 B = TypeVar('B')  # target alphabet symbol type
@@ -203,7 +204,7 @@ class AbstractAlgorithm(DecompositionFunction[A, B]):
             xs = worklist.popleft()
             t += 1
             if t > self.max_steps:
-                print(colors.light.red % 'stopped early')
+                warnings.warn('stopped early: exceeded max_steps')
                 break
             if self.continuity(xs, target):
                 quotient.add(xs)

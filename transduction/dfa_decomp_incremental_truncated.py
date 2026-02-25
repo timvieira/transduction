@@ -1,4 +1,4 @@
-from transduction import FSA, EPSILON
+from transduction import EPSILON
 from transduction.base import IncrementalDecomposition
 from transduction.precover_nfa import PrecoverNFA
 from transduction.universality import (

@@ -18,10 +18,11 @@ from transduction import Precover, LazyPrecoverNFA
 
 import heapq
 import math
+import warnings
 import numpy as np
 from dataclasses import dataclass
 
-from transduction.util import colors, sample, logsumexp
+from transduction.util import sample, logsumexp
 
 
 @dataclass(frozen=False, eq=True, unsafe_hash=True)
@@ -81,7 +82,7 @@ class prioritized_enumeration:
         while self.queue:
             t += 1
             if t > max_steps:
-                print(colors.light.red % 'stopped early')
+                warnings.warn('stopped early: exceeded max_steps')
                 break
             item = heapq.heappop(self.queue)
             if verbosity > 0: print('pop:', item)
@@ -105,7 +106,6 @@ class prioritized_enumeration:
                     state = next_state,
                     source = item.source >> x,
                 )
-                #print('push:', next_item)
                 heapq.heappush(self.queue, next_item)
 
 
@@ -171,7 +171,7 @@ class importance_sampling:
         while True:
             t += 1
             if t > max_length:
-                print(colors.light.red % 'stopped early')
+                warnings.warn('stopped early: exceeded max_length')
                 break
 
             lm_logp_next = item.source.logp_next
@@ -216,7 +216,7 @@ class crude_importance_sampling:
         while True:
             t += 1
             if t > max_length:
-                print(colors.light.red % 'stopped early')
+                warnings.warn('stopped early: exceeded max_length')
                 break
 
             lm_logp_next = item.source.logp_next

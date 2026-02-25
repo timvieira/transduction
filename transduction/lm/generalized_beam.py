@@ -36,9 +36,9 @@ from typing import Any
 from transduction.fst import FST, EPSILON
 from transduction.lm.base import LM, LMState, Token
 from transduction.lm.transduced import Particle, _select_top_k
-from transduction.lm.fused_transduced import _FusedSearch, FusedTransducedLM
+from transduction.lm.fused_transduced import _FusedSearch
 from transduction.universality import compute_ip_universal_states
-from transduction.util import LogDistr, LogVector, State, Str, logsumexp
+from transduction.util import LogDistr, LogVector, Str
 
 
 # ---------------------------------------------------------------------------
@@ -586,8 +586,8 @@ class GeneralizedBeam(LM):
                 return True
 
         # If any hub's vocab entries go to non-hub destinations, need particles
-        for hub, trie in self._hub_tries.items():
-            for leaf_node, (src_sym, dest) in trie.leaf_info.items():
+        for _hub, trie in self._hub_tries.items():
+            for _leaf_node, (_src_sym, dest) in trie.leaf_info.items():
                 if dest not in self._deterministic_hubs:
                     return True
 
@@ -605,7 +605,7 @@ class GeneralizedBeam(LM):
             self._sym_map = {k: v for k, v in sym_map.items()}
             self._inv_sym_map = {v: k for k, v in sym_map.items()}
         elif helper == "python":
-            from transduction.trie_dispatch import PythonLazyPeekabooDFAHelper
+            from transduction.python_lazy_peekaboo_dfa import PythonLazyPeekabooDFAHelper
             helper_obj = PythonLazyPeekabooDFAHelper(fst)
             self._fused_helper = helper_obj
             self._sym_map = {k: v for k, v in helper_obj._sym_map.items()}

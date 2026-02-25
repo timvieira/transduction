@@ -1,5 +1,5 @@
 """
-N-gram language models compatible with the StateLM interface.
+N-gram language models compatible with the LM/LMState interface.
 
 Provides two variants:
 - ByteNgramLM: byte-level (alphabet = 0..255), uses numpy arrays
@@ -33,7 +33,7 @@ from transduction.util import LogDistr, Str
 # ===========================================================================
 
 class NgramState(LMState[int]):
-    """Immutable n-gram LM state, compatible with StateLM interface.
+    """Immutable n-gram LM state, compatible with LM/LMState interface.
 
     Supports:
         state >> token     -> new state  (token is int 0-255)
@@ -48,7 +48,7 @@ class NgramState(LMState[int]):
         self.eos = lm.eos
         self._context = context      # last (n-1) bytes as tuple of ints
         self.logp = logp
-        self.history = history        # full path as nested tuple (like StateLM.context)
+        self.history = history        # full path as nested tuple (like LM/LMState.context)
 
     def __rshift__(self, token: int) -> NgramState:
         if not isinstance(token, int):
@@ -95,7 +95,7 @@ class NgramState(LMState[int]):
 class ByteNgramLM(LM[int]):
     """Byte-level n-gram language model with Laplace smoothing.
 
-    Compatible with the StateLM/HuggingFaceLM interface used by
+    Compatible with the LM/LMState/HuggingFaceLM interface used by
     transduction.enumeration.
     """
 
@@ -195,7 +195,7 @@ class ByteNgramLM(LM[int]):
 # ===========================================================================
 
 class CharNgramState(LMState[Token]):
-    """Immutable char-level n-gram LM state, compatible with StateLM interface.
+    """Immutable char-level n-gram LM state, compatible with LM/LMState interface.
 
     Supports:
         state >> token     -> new state
@@ -247,7 +247,7 @@ class CharNgramLM(LM[Token]):
     """Character-level n-gram language model with Laplace smoothing.
 
     Works with arbitrary symbol alphabets (strings, characters, etc.).
-    Compatible with the StateLM interface used by transduction.enumeration
+    Compatible with the LM/LMState interface used by transduction.enumeration
     and transduction.lm.transduced.
 
     Usage:

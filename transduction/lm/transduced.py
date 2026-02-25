@@ -372,7 +372,7 @@ class TransducedLM(LM[Token]):
     counting against the budget.
 
     Args:
-        inner_lm: LM with StateLM interface (has .initial(), state >> x,
+        inner_lm: LM with LM/LMState interface (has .initial(), state >> x,
             state.logp_next).
         fst: FST instance mapping source -> target.
         K: Carry-forward budget -- maximum number of particles retained across
