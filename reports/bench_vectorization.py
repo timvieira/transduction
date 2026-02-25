@@ -28,7 +28,7 @@ from transduction.lm.fused_transduced import FusedTransducedLM
 from transduction.lm.character_beam import CharacterBeam
 from transduction.util import Timeout, timelimit, set_memory_limit
 
-set_memory_limit(12)
+set_memory_limit(16)
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument('--quick', action='store_true', help='Fast run: fewer vocab sizes, 1 run, skip quality check')
@@ -79,6 +79,13 @@ def peak_rss_mb():
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
 
 
+def current_rss_mb():
+    """Current RSS in MB (not high-water mark) via /proc/self/statm."""
+    with open('/proc/self/statm') as f:
+        pages = int(f.read().split()[1])  # second field = resident pages
+    return pages * resource.getpagesize() / (1024 * 1024)
+
+
 # Target byte sequence: generated per vocab size (must be transducible)
 text_short = "The quick brown fox"
 token_ids_short = tokenizer.encode(text_short)
@@ -106,8 +113,8 @@ def make_character_beam(lm, used):
     return CharacterBeam(lm, vocab, K=10, eos_token=eos_id)
 
 methods = [
-    ('FusedLM_rust', lambda lm, fst, used: FusedTransducedLM(lm, fst, max_steps=200, max_beam=10, helper='rust')),
     ('CharacterBeam', lambda lm, fst, used: make_character_beam(lm, used)),
+    ('FusedLM_rust', lambda lm, fst, used: FusedTransducedLM(lm, fst, max_steps=200, max_beam=10, helper='rust')),
 ]
 
 rows = []  # collected for JSON output
@@ -156,7 +163,11 @@ for vs in VOCAB_SIZES:
     print(f"V={len(used):>5d}  ({len(fst_v.states)} FST states, {len(target_bytes)} target bytes)")
 
     for method_name, make_tlm in methods:
+        gc.collect()
+        rss_before = current_rss_mb()
         run_avgs = []
+        tlm_v = None
+        state_v = None
         for run in range(N_RUNS):
             step_times = []
             try:
@@ -174,22 +185,28 @@ for vs in VOCAB_SIZES:
 
             if step_times:
                 run_avgs.append(np.mean(step_times) * 1000)
-            gc.collect()
 
-        rss_after = peak_rss_mb()
+        rss_after = current_rss_mb()
 
         key = method_name
         if run_avgs:
             avg = np.median(run_avgs)
             row[f'{key}_avg_ms'] = round(float(avg))
             row[f'{key}_runs_ms'] = [round(float(r)) for r in run_avgs]
-            print(f"  {method_name:<35s}  avg={avg:7.0f} ms/step  (runs: {', '.join(f'{r:.0f}' for r in run_avgs)})")
+            row[f'{key}_rss_mb'] = round(rss_after)
+            print(f"  {method_name:<35s}  avg={avg:7.0f} ms/step  RSS={rss_after:.0f} MB (delta={rss_after - rss_before:.0f} MB)")
         else:
             row[f'{key}_avg_ms'] = None
             row[f'{key}_runs_ms'] = []
-            print(f"  {method_name:<35s}  TIMEOUT/OOM")
+            row[f'{key}_rss_mb'] = round(rss_after) if rss_after > rss_before else None
+            print(f"  {method_name:<35s}  TIMEOUT/OOM  RSS={rss_after:.0f} MB")
 
-        row['peak_rss_mb'] = round(rss_after)
+        # Clean up method objects before next method
+        del tlm_v, state_v
+        gc.collect()
+
+        # Backward compat: still record process peak
+        row['peak_rss_mb'] = round(peak_rss_mb())
 
     rows.append(row)
     print()
@@ -202,7 +219,7 @@ output = {
         'n_target_bytes': NUM_TARGET_BYTES,
         'scale_timeout_s': SCALE_TIMEOUT,
         'text': text_short,
-        'memory_limit_gb': 12,
+        'memory_limit_gb': 16,
     },
     'baseline_rss_mb': round(baseline_rss),
     'rows': rows,
@@ -220,17 +237,16 @@ print(f"{'='*70}\n")
 method_keys = [name for name, _ in methods]
 header = f"{'|V|':>6s}"
 for key in method_keys:
-    header += f"  {key:>20s}"
-header += f"  {'Peak RSS (MB)':>14s}"
+    header += f"  {key + ' (ms)':>20s}  {key + ' RSS':>10s}"
 print(header)
 print("-" * len(header))
 for row in rows:
     line = f"{row['vocab_size']:>6d}"
     for key in method_keys:
         avg = row.get(f'{key}_avg_ms')
-        line += f"  {(f'{avg} ms' if avg is not None else 'TIMEOUT/OOM'):>20s}"
-    rss = row.get('peak_rss_mb', '')
-    line += f"  {rss:>14}"
+        rss = row.get(f'{key}_rss_mb')
+        line += f"  {(f'{avg}' if avg is not None else 'TIMEOUT'):>20s}"
+        line += f"  {(f'{rss} MB' if rss is not None else ''):>10s}"
     print(line)
 
 # ---- Quality check: logp agreement at V=5000 (skip in --quick mode) ----

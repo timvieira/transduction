@@ -77,8 +77,8 @@ quotients. Tested separately in `test_finite.py`.
 |-------|------|-------------|
 | `LM` / `LMState` / `LogDistr` | `lm/base.py`, `util.py` | ABCs: `logp_next`, `eos`, `>>`, `__call__`, `greedy_decode`, `sample_decode`; `LogDistr` is the immutable log-probability distribution |
 | `ByteNgramLM` / `CharNgramLM` | `lm/ngram.py` | Lightweight n-gram LMs for testing |
-| `StateLM` / `TokenizedLLM` | `lm/statelm.py` | Incremental LM state with KV-cache; wraps HuggingFace causal LMs |
-| `load_model_by_name` | `lm/statelm.py` | Load `'gpt2'`, `'meta-llama/...'`, etc. |
+| `HuggingFaceLM` / `TokenIDState` | `lm/huggingface_lm.py` | Incremental LM state with KV-cache; wraps HuggingFace causal LMs |
+| `load_model_by_name` | `lm/huggingface_lm.py` | Load `'gpt2'`, `'meta-llama/...'`, etc. |
 | `TransducedLM` | `lm/transduced.py` | Pushforward of an inner LM through an FST (beam-sum inference; defaults to Rust backend) |
 | `FusedTransducedLM` | `lm/fused_transduced.py` | Single-pass interleaved decomposition + LM search |
 | `RustPeekabooState` | `rust_bridge.py` | Rust-backed incremental peekaboo state (default for TransducedLM) |
@@ -87,9 +87,9 @@ quotients. Tested separately in `test_finite.py`.
 
 Self-contained (no external tokenization deps). Example:
 ```python
-from transduction.lm import StateLM
+from transduction.lm import HuggingFaceLM
 from transduction.enumeration import prioritized_enumeration
-lm = StateLM.initial('gpt2')
+lm = HuggingFaceLM.from_name('gpt2')
 pe = prioritized_enumeration(lm, fst, target, max_steps=20)
 ```
 
@@ -187,13 +187,14 @@ FSTs.
    43-token toy FST and 1,000-token scaling run. FusedTransducedLM is 6.8x
    faster at 1k vocab.
 
-### Open Questions
+### Resolved Questions
 
-1. **Real LM profiling**: What is the decomposition vs LM-forward-pass cost
-   split with a real neural LM? All benchmarks use CharNgramLM (O(1) per call).
+3. ~~**Real LM profiling**~~ — **DONE.** GPT-2 WikiText benchmark (200 bytes,
+   CPU): CharacterBeam achieves 12 ms/step with `extend_threshold=0.1`.
 
-2. **Batched LM inference**: How much speedup can batched `lm_state >> x`
-   calls provide on GPU? This is the single most impactful unstarted optimization.
+4. ~~**Batched LM inference**~~ — **DONE.** `HuggingFaceLM.prefetch()` batches
+   forward passes. CharacterBeam: 0.27 LM calls/step. GeneralizedBeam: 2x
+   speedup from prefetch (42.3 → 0.99 calls/step).
 
 ---
 
@@ -243,22 +244,25 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 
 ## Test Status
 
-- **`test_general.py`**: 470 passed (10 implementations × 47 test cases)
+- **`test_general.py`**: 423 passed (9 implementations × 47 test cases)
 - **`test_finite.py`**: 119 passed
-- **`test_transduced.py`**: 106 passed
 - **`test_lazy.py`**: 100 passed
+- **`test_transduced.py`**: 90 passed
 - **`test_fst.py`**: 56 passed
 - **`test_enumeration.py`**: 55 passed
 - **`test_push_labels.py`**: 35 passed
-- **`test_fsa.py`**: 28 passed
+- **`test_generalized_beam.py`**: 33 passed
+- **`test_fsa.py`**: 33 passed
 - **`test_lazy_precover_dfa.py`**: 26 passed
 - **`test_is_functional.py`**: 26 passed
 - **`test_lazy_peekaboo_dfa.py`**: 23 passed
 - **`test_ngram.py`**: 22 passed
+- **`test_gpt2_integration.py`**: 15 (GPU-dependent)
+- **`test_statelm_kv_cache.py`**: 12 passed
 - **`test_ptb_nltk.py`**: 4 passed
 - **`test_make_total.py`**: 3 passed
-- **`test_statelm_kv_cache.py`**: 3 passed
-- **Total**: 1191 tests across 16 files (1189 passed, 2 xfailed)
+- **`test_character_beam.py`**: 3 passed
+- **Total**: 1078 tests across 18 files (1059 passed, excluding GPU-dependent)
 
 ---
 
@@ -272,4 +276,4 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 
 **Optional:** `pynini` (PTB FST construction), `nltk` (PTB testing), `datasets` (WikiText), `matplotlib` (notebooks/benchmarks)
 
-**Eliminated:** `arsenal` (inlined into `util.py`), `genlm` (replaced with local `decode_hf_tokenizer`), `tokenization` (inlined into `lm/statelm.py`)
+**Eliminated:** `arsenal` (inlined into `util.py`), `genlm` (replaced with local `HfTokenizerVocab`), `tokenization` (removed; functionality inlined into `transduction/`), `scipy` (replaced with `torch.sparse`)

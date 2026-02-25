@@ -5,175 +5,199 @@
     "n_target_bytes": 8,
     "scale_timeout_s": 300,
     "text": "The quick brown fox",
-    "memory_limit_gb": 12
+    "memory_limit_gb": 16
   },
-  "baseline_rss_mb": 742,
+  "baseline_rss_mb": 774,
   "rows": [
     {
       "vocab_size": 297,
       "fst_states": 387,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 2,
-      "FusedLM_rust_runs_ms": [
-        2
-      ],
-      "peak_rss_mb": 742,
-      "CharacterBeam_avg_ms": 0,
+      "CharacterBeam_avg_ms": 5,
       "CharacterBeam_runs_ms": [
-        0
-      ]
+        5
+      ],
+      "CharacterBeam_rss_mb": 755,
+      "peak_rss_mb": 774,
+      "FusedLM_rust_avg_ms": 4,
+      "FusedLM_rust_runs_ms": [
+        4
+      ],
+      "FusedLM_rust_rss_mb": 757
     },
     {
       "vocab_size": 529,
       "fst_states": 623,
       "n_target_bytes": 8,
+      "CharacterBeam_avg_ms": 6,
+      "CharacterBeam_runs_ms": [
+        6
+      ],
+      "CharacterBeam_rss_mb": 757,
+      "peak_rss_mb": 774,
       "FusedLM_rust_avg_ms": 3,
       "FusedLM_rust_runs_ms": [
         3
       ],
-      "peak_rss_mb": 744,
-      "CharacterBeam_avg_ms": 3,
-      "CharacterBeam_runs_ms": [
-        3
-      ]
+      "FusedLM_rust_rss_mb": 758
     },
     {
       "vocab_size": 1023,
       "fst_states": 1313,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 13,
-      "FusedLM_rust_runs_ms": [
-        13
-      ],
-      "peak_rss_mb": 757,
-      "CharacterBeam_avg_ms": 2,
+      "CharacterBeam_avg_ms": 5,
       "CharacterBeam_runs_ms": [
-        2
-      ]
+        5
+      ],
+      "CharacterBeam_rss_mb": 761,
+      "peak_rss_mb": 774,
+      "FusedLM_rust_avg_ms": 5,
+      "FusedLM_rust_runs_ms": [
+        5
+      ],
+      "FusedLM_rust_rss_mb": 769
     },
     {
       "vocab_size": 2020,
       "fst_states": 3010,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 22,
-      "FusedLM_rust_runs_ms": [
-        22
-      ],
-      "peak_rss_mb": 793,
-      "CharacterBeam_avg_ms": 4,
+      "CharacterBeam_avg_ms": 6,
       "CharacterBeam_runs_ms": [
-        4
-      ]
+        6
+      ],
+      "CharacterBeam_rss_mb": 774,
+      "peak_rss_mb": 804,
+      "FusedLM_rust_avg_ms": 15,
+      "FusedLM_rust_runs_ms": [
+        15
+      ],
+      "FusedLM_rust_rss_mb": 804
     },
     {
       "vocab_size": 5011,
       "fst_states": 8694,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 70,
-      "FusedLM_rust_runs_ms": [
-        70
-      ],
-      "peak_rss_mb": 990,
-      "CharacterBeam_avg_ms": 9,
+      "CharacterBeam_avg_ms": 14,
       "CharacterBeam_runs_ms": [
-        9
-      ]
+        14
+      ],
+      "CharacterBeam_rss_mb": 815,
+      "peak_rss_mb": 1001,
+      "FusedLM_rust_avg_ms": 56,
+      "FusedLM_rust_runs_ms": [
+        56
+      ],
+      "FusedLM_rust_rss_mb": 1002
     },
     {
       "vocab_size": 7010,
       "fst_states": 12408,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 57,
-      "FusedLM_rust_runs_ms": [
-        57
-      ],
-      "peak_rss_mb": 1170,
-      "CharacterBeam_avg_ms": 11,
+      "CharacterBeam_avg_ms": 23,
       "CharacterBeam_runs_ms": [
-        11
-      ]
+        23
+      ],
+      "CharacterBeam_rss_mb": 990,
+      "peak_rss_mb": 1179,
+      "FusedLM_rust_avg_ms": 49,
+      "FusedLM_rust_runs_ms": [
+        49
+      ],
+      "FusedLM_rust_rss_mb": 1180
     },
     {
       "vocab_size": 10008,
       "fst_states": 18203,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 179,
-      "FusedLM_rust_runs_ms": [
-        179
-      ],
-      "peak_rss_mb": 1599,
-      "CharacterBeam_avg_ms": 17,
+      "CharacterBeam_avg_ms": 20,
       "CharacterBeam_runs_ms": [
-        17
-      ]
+        20
+      ],
+      "CharacterBeam_rss_mb": 1172,
+      "peak_rss_mb": 1605,
+      "FusedLM_rust_avg_ms": 140,
+      "FusedLM_rust_runs_ms": [
+        140
+      ],
+      "FusedLM_rust_rss_mb": 1605
     },
     {
       "vocab_size": 12008,
       "fst_states": 22172,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 158,
-      "FusedLM_rust_runs_ms": [
-        158
-      ],
-      "peak_rss_mb": 1953,
-      "CharacterBeam_avg_ms": 25,
+      "CharacterBeam_avg_ms": 32,
       "CharacterBeam_runs_ms": [
-        25
-      ]
+        32
+      ],
+      "CharacterBeam_rss_mb": 1366,
+      "peak_rss_mb": 1955,
+      "FusedLM_rust_avg_ms": 167,
+      "FusedLM_rust_runs_ms": [
+        167
+      ],
+      "FusedLM_rust_rss_mb": 1956
     },
     {
       "vocab_size": 15008,
       "fst_states": 28005,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 200,
-      "FusedLM_rust_runs_ms": [
-        200
-      ],
-      "peak_rss_mb": 2578,
-      "CharacterBeam_avg_ms": 31,
+      "CharacterBeam_avg_ms": 45,
       "CharacterBeam_runs_ms": [
-        31
-      ]
+        45
+      ],
+      "CharacterBeam_rss_mb": 1924,
+      "peak_rss_mb": 2579,
+      "FusedLM_rust_avg_ms": 226,
+      "FusedLM_rust_runs_ms": [
+        226
+      ],
+      "FusedLM_rust_rss_mb": 2571
     },
     {
       "vocab_size": 20005,
       "fst_states": 37786,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 367,
-      "FusedLM_rust_runs_ms": [
-        367
-      ],
-      "peak_rss_mb": 3924,
-      "CharacterBeam_avg_ms": 44,
+      "CharacterBeam_avg_ms": 72,
       "CharacterBeam_runs_ms": [
-        44
-      ]
+        72
+      ],
+      "CharacterBeam_rss_mb": 2316,
+      "peak_rss_mb": 3919,
+      "FusedLM_rust_avg_ms": 413,
+      "FusedLM_rust_runs_ms": [
+        413
+      ],
+      "FusedLM_rust_rss_mb": 3920
     },
     {
       "vocab_size": 30002,
       "fst_states": 57401,
       "n_target_bytes": 8,
-      "FusedLM_rust_avg_ms": 867,
-      "FusedLM_rust_runs_ms": [
-        867
-      ],
-      "peak_rss_mb": 7801,
-      "CharacterBeam_avg_ms": 57,
+      "CharacterBeam_avg_ms": 88,
       "CharacterBeam_runs_ms": [
-        57
-      ]
+        88
+      ],
+      "CharacterBeam_rss_mb": 3444,
+      "peak_rss_mb": 7785,
+      "FusedLM_rust_avg_ms": 852,
+      "FusedLM_rust_runs_ms": [
+        852
+      ],
+      "FusedLM_rust_rss_mb": 7736
     },
     {
       "vocab_size": 50256,
       "fst_states": 98024,
       "n_target_bytes": 8,
+      "CharacterBeam_avg_ms": 137,
+      "CharacterBeam_runs_ms": [
+        137
+      ],
+      "CharacterBeam_rss_mb": 5764,
+      "peak_rss_mb": 7785,
       "FusedLM_rust_avg_ms": null,
       "FusedLM_rust_runs_ms": [],
-      "peak_rss_mb": 7801,
-      "CharacterBeam_avg_ms": 106,
-      "CharacterBeam_runs_ms": [
-        106
-      ]
+      "FusedLM_rust_rss_mb": null
     }
   ]
 }

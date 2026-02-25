@@ -32,7 +32,7 @@ Do not auto-commit after finishing work.
 - `transduction/applications/bpe.py` — BPE WFST builder (`bpe_wfst`)
 - `transduction/applications/ptb.py` — PTB tokenizer FST built with pynini
 - `transduction/applications/wikitext.py` — WikiText data loading (`load_wikitext`, `wikitext_detokenize`)
-- `transduction/rust_bridge.py` — Python ↔ Rust conversion layer; also provides `RustPeekabooState`, `RustLazyPeekabooDFA`
+- `transduction/rust_bridge.py` — Python ↔ Rust conversion layer; also provides `RustPeekabooState`, `RustLazyPrecoverDFA`
 - `transduction/util.py` — Shared utilities: `Integerizer`, `logsumexp`, `LogVector` (mutable log-space accumulator), `LogDistr` (immutable log-probability distribution), `memoize`, `timelimit`, `set_memory_limit`, `memory_limit`, `sample`, `colors`
 - `transduction/examples.py` — Example FSTs for testing
 
@@ -58,11 +58,12 @@ Self-contained language model interface for use with enumeration/sampling:
 - `transduction/lm/transduced.py` — `TransducedLM`, `TransducedState` (pushforward of an inner LM through an FST; defaults to Rust backend)
 - `transduction/lm/fused_transduced.py` — `FusedTransducedLM`, `FusedTransducedState` (single-pass interleaved decomposition + LM search; `helper=` for pluggable backends: `"rust"`, `"python"`)
 - `transduction/lm/reference_transduced.py` — `ReferenceTransducedLM` (ground-truth transduced LM via Precover; enumerates Q/R languages exactly; finite-relation FSTs only)
-- `transduction/lm/character_beam.py` — `CharacterBeam`, `TokenCharacterTrie`, `TrieState`, `CharacterBeamState` (character-level beam search exploiting SPM property; fast for BPE; optional `numba` JIT for trie mass updates)
+- `transduction/lm/character_beam.py` — `CharacterBeam`, `TokenCharacterTrie`, `TrieState`, `CharacterBeamState` (character-level beam search exploiting SPM property; fast for BPE; torch sparse matvec for trie mass updates)
 - `transduction/lm/generalized_beam.py` — `GeneralizedBeam`, `GeneralizedBeamState`, `OutputTrie`, `HubHyp` (hybrid trie-mass / particle beam search; trie-mass at IP-universal accepting hubs, particle expansion elsewhere; unifies CharacterBeam and FusedTransducedLM)
 
 ### Rust Acceleration (`crates/transduction-core/`)
 
+- `lib.rs` — Crate root and PyO3 module initialization
 - `decompose.rs` — Generic FST decomposition (powerset det + universality)
 - `peekaboo.rs` — DirtyPeekaboo (dirty-state incremental per-symbol Q/R via single-pass BFS)
 - `incremental.rs` — DirtyDecomp (dirty-state incremental decomposition)
@@ -107,21 +108,23 @@ Eliminated deps (previously external, now inlined):
 
 - `test_general.py`: 423 passed (9 implementations × 47 test cases)
 - `test_finite.py`: 119 passed
-- `test_transduced.py`: 90 passed
 - `test_lazy.py`: 100 passed
+- `test_transduced.py`: 90 passed
 - `test_fst.py`: 56 passed
 - `test_enumeration.py`: 55 passed
 - `test_push_labels.py`: 35 passed
-- `test_fsa.py`: 28 passed
+- `test_generalized_beam.py`: 33 passed
+- `test_fsa.py`: 33 passed
 - `test_lazy_precover_dfa.py`: 26 passed
 - `test_is_functional.py`: 26 passed
 - `test_lazy_peekaboo_dfa.py`: 23 passed
 - `test_ngram.py`: 22 passed
+- `test_gpt2_integration.py`: 15 (GPU-dependent)
+- `test_statelm_kv_cache.py`: 12 passed
 - `test_ptb_nltk.py`: 4 passed
 - `test_make_total.py`: 3 passed
-- `test_generalized_beam.py`: 33 passed
-- `test_statelm_kv_cache.py`: 12 passed
-- **Total: 1055 tests across 16 files (1055 passed)**
+- `test_character_beam.py`: 3 passed
+- **Total: 1078 tests across 18 files (1059 passed, excluding GPU-dependent)**
 - `test_general.py` tests the **general-case** algorithms (handle infinite quotients/remainders):
   NonrecursiveDFADecomp, TruncatedIncrementalDFADecomp, TrieDispatchDFADecomp,
   PeekabooState, PeekabooNonrecursive, DirtyPeekaboo, RustDecomp, RustDirtyState,

@@ -1,6 +1,6 @@
 # Project Assessment: Delivering on the Transduced LM Mission
 
-## 2026-02-21
+## 2026-02-24
 
 ---
 
@@ -24,12 +24,14 @@ replacing ad-hoc patterns. Recent additions include lazy precover DFA
 decomposition (position-set DFA states for BPE-like FSTs), pluggable
 `FusedTransducedLM` backends via `helper=` parameter, and a critical bug fix
 for PeekabooState on epsilon-output chains (#9). Test coverage is
-comprehensive: 1191 tests across 16 files (1189 passed, 2 xfailed).
+comprehensive: 1078 tests across 18 files (1059 passed, excluding
+GPU-dependent tests).
 Documentation now covers all public modules (module docstrings), constructors,
 abstract interfaces, and the Rust bridge classes; a tutorial notebook
 (`examples/tutorial.ipynb`) provides an end-to-end walkthrough with rich
-Graphviz and HTML display. The remaining path to production readiness: batch
-LM calls for GPU utilization.
+Graphviz and HTML display. Batched LM inference is now implemented via
+`HuggingFaceLM.prefetch()`, enabling interactive-speed decoding (12 ms/step
+on GPT-2 CPU with CharacterBeam).
 
 ---
 
@@ -52,7 +54,7 @@ Each variant serves a distinct niche:
 | Rust | `RustDecomp`, `RustDirtyState`, `RustDirtyPeekaboo` | 3-25x over Python |
 | Finite-only | `LazyIncremental`, `LazyNonrecursive`, `PrioritizedLazy` | Finite-language FSTs |
 
-The parametrized test suite (`test_general.py`: 380 tests) ensures all
+The parametrized test suite (`test_general.py`: 423 tests) ensures all
 general-case algorithms agree.
 
 ### 2. Optimizations With Measured Impact
@@ -86,9 +88,9 @@ is self-contained with no pollution of core algorithms.
 
 ### 4. Solid Test Infrastructure
 
-- **1191 tests** across 16 test files (1189 passed, 2 xfailed)
+- **1078 tests** across 18 test files (1059 passed, excluding GPU-dependent tests)
 - Parametrized cross-algorithm validation catches disagreements automatically
-  (10 implementations × 47 test cases = 470 tests in `test_general.py` alone)
+  (9 implementations × 47 test cases = 423 tests in `test_general.py`)
 - Reference implementations (`Precover`) serve as correctness oracles
 - Real-model integration tests (GPT-2 + BPE FST in `test_enumeration.py`)
 - TransducedLM tests: multi-state FSTs, brute-force comparison, consistency
@@ -96,7 +98,9 @@ is self-contained with no pollution of core algorithms.
 - `test_fst.py`: 56 tests covering FST methods (99% coverage)
 - `test_lazy_peekaboo_dfa.py`: 23 tests for Rust lazy DFA integration
 - `test_lazy_precover_dfa.py`: 26 tests for lazy precover DFA (Python + Rust)
-- `test_fsa.py`: 28 tests for FSA operations
+- `test_fsa.py`: 33 tests for FSA operations
+- `test_gpt2_integration.py`: 15 tests for GPT-2 cross-parent batching
+- `test_character_beam.py`: 3 tests for CharacterBeam
 - Recent additions: 9 new parametrized test cases for epsilon chains,
   nonproductive cycles, delayed output, multichar output symbols, OOV symbols
 - Clear general vs. finite-only test separation
@@ -190,12 +194,12 @@ and carry-forward prefix-domination regression tests.
 
 ## Open Issues
 
-### Medium: No Batched LM Inference ([#7](https://github.com/timvieira/transduction/issues/7))
+### ~~Medium: No Batched LM Inference~~ ([#7](https://github.com/timvieira/transduction/issues/7)) — Resolved
 
-`TransducedLM` processes one sequence at a time. The LM state advance
-(`lm_state >> x`) consumes 30-40% of `_compute_logp_next` time. Batching
-multiple source-symbol expansions into a single forward pass would improve
-GPU utilization for neural LMs.
+`HuggingFaceLM.prefetch()` batches forward passes across multiple LM states.
+CharacterBeam and GeneralizedBeam both exploit this. With `extend_threshold=0.1`,
+CharacterBeam achieves 12 ms/step on GPT-2 (CPU) with only 0.27 LM calls/step.
+GeneralizedBeam sees a 2x speedup from prefetch (42.3 → 0.99 calls/step).
 
 ### Medium: DirtyPeekaboo Non-Monotonic Target Sequences ([#5](https://github.com/timvieira/transduction/issues/5))
 
@@ -208,16 +212,16 @@ cause stale state to corrupt the decomposition.
 
 Now documented in the `TransducedLM` docstring (Note section).
 
-### Low: StateLM KV Cache Sharing with DynamicCache ([#1](https://github.com/timvieira/transduction/issues/1))
+### Low: HuggingFaceLM KV Cache Sharing with DynamicCache ([#1](https://github.com/timvieira/transduction/issues/1))
 
-`StateLM` shares `past_key_values` between parent and child states. Works
+`HuggingFaceLM` shares `past_key_values` between parent and child states. Works
 with GPT-2's tuple caches but will silently corrupt results with modern
 `DynamicCache`-based models (transformers >= 4.40).
 
 ### ~~Low: No Type Annotations on Public API~~ — Resolved
 
 All public API modules now have type annotations: `base.py`, `fst.py`,
-`lm/base.py`, `lm/transduced.py`, `lm/ngram.py`, `lm/statelm.py`,
+`lm/base.py`, `lm/transduced.py`, `lm/ngram.py`, `lm/huggingface_lm.py`,
 `lm/fused_transduced.py`, `lm/reference_transduced.py`.
 
 ---
@@ -228,14 +232,14 @@ All public API modules now have type annotations: `base.py`, `fst.py`,
 
 | Component | Files | Lines | Notes |
 |-----------|-------|-------|-------|
-| Core (FST/FSA/base) | 4 | ~1,920 | Stable, well-tested (precover.py split out) |
+| Core (FST/FSA/base) | 4 | ~2,400 | Stable, well-tested |
 | Algorithms | 14 | ~4,800 | +lazy_precover_dfa, trie_dispatch |
-| LM integration | 7 | ~2,200 | +FusedTransducedLM `helper=` backends |
-| Rust backend | 10 | ~6,200 | +lazy_precover |
-| Applications | 3 | ~580 | BPE, PTB, WikiText |
-| Utilities | 8 | ~3,950 | viz, examples, lazy, util, rust_bridge (+257 lines), enumeration |
-| **Total Python** | **38** | **~15,200** | |
-| Tests | 16 | ~7,200 | 1191 tests (1189 passed, 2 xfailed) |
+| LM integration | 10 | ~3,300 | +HuggingFaceLM, LlamaCppLM, GeneralizedBeam, CharacterBeam |
+| Rust backend | 10 | ~7,500 | +lazy_precover |
+| Applications | 4 | ~580 | BPE, PTB, WikiText |
+| Utilities | 6 | ~3,900 | viz, examples, lazy, util, rust_bridge, enumeration |
+| **Total Python** | **38** | **~15,000** | |
+| Tests | 18 | ~7,500 | 1078 tests (1059 passed, excluding GPU-dependent) |
 
 ### Technical Debt
 
@@ -243,7 +247,7 @@ All public API modules now have type annotations: `base.py`, `fst.py`,
 |------|----------|----------|--------|
 | DirtyPeekaboo non-monotonic targets ([#5](https://github.com/timvieira/transduction/issues/5)) | Medium | `rust_bridge.py`, `peekaboo.rs` | Medium |
 | No batched LM calls ([#7](https://github.com/timvieira/transduction/issues/7)) | Medium | `lm/transduced.py` | Medium |
-| StateLM KV cache with DynamicCache ([#1](https://github.com/timvieira/transduction/issues/1)) | Low | `lm/statelm.py` | Small |
+| HuggingFaceLM KV cache with DynamicCache ([#1](https://github.com/timvieira/transduction/issues/1)) | Low | `lm/huggingface_lm.py` | Small |
 | ~~FusedTransducedLM logp disagreement~~ | ~~Medium~~ | ~~`lm/fused_transduced.py`~~ | ~~Resolved (max diff 0.000287)~~ |
 | ~~K/max_expansions coupling undocumented~~ | ~~Low~~ | ~~`lm/transduced.py`~~ | ~~Resolved~~ |
 | ~~No type annotations~~ | ~~Medium~~ | ~~Public API modules~~ | ~~Resolved~~ |
@@ -253,16 +257,15 @@ All public API modules now have type annotations: `base.py`, `fst.py`,
 
 ## Roadmap
 
-### Phase 1: Make It Fast for Real LMs
+### ~~Phase 1: Make It Fast for Real LMs~~ — Done
 
 **Goal:** TransducedLM with GPT-2 + BPE FST runs at interactive speed.
 
-1. **Profile the TransducedLM hot loop with a neural LM.** Establish a
-   baseline and identify the current bottleneck.
+1. ~~**Profile the TransducedLM hot loop with a neural LM.**~~ — Done.
+   GPT-2 WikiText benchmark established (200 bytes, CPU).
 
-2. **Batch source-symbol expansions.** Group particles by DFA state, batch
-   `lm_state >> x` calls into a single forward pass. This is the biggest
-   remaining performance win for GPU-backed LMs.
+2. ~~**Batch source-symbol expansions.**~~ — Done. `HuggingFaceLM.prefetch()`
+   batches forward passes. CharacterBeam achieves 12 ms/step on GPT-2 (CPU).
 
 ### Phase 2: Make It Usable by Others
 
@@ -294,7 +297,7 @@ All public API modules now have type annotations: `base.py`, `fst.py`,
 | **Algorithms** | A+ | 15+ implementations across 5 strategy families; token-level decomposition; lazy DFA; pluggable backends |
 | **Performance** | A | 25x Rust acceleration, 0.1ms per-step dirty-state; token decomposition O(N) scaling for BPE |
 | **Architecture** | A- | Clean layering, no circular deps, optional Rust, self-contained LM module |
-| **Testing** | A+ | 1191 tests across 16 files; 10-way parametrized cross-validation; regression tests |
+| **Testing** | A+ | 1078 tests across 18 files; 9-way parametrized cross-validation; regression tests |
 | **End-to-End Product** | A- | Particle-based beam-sum inference; quotient exact marginalization; rich notebook display |
 | **API/Packaging** | A- | Exports correct; Rust default; `_repr_html_`; all impls support `>>`; `helper=` for FusedLM |
 | **Documentation** | A- | Module, class, and method docstrings across public API; tutorial notebook with rich display |
@@ -303,9 +306,10 @@ All public API modules now have type annotations: `base.py`, `fst.py`,
 `TransducedLM` with particle-based approximate inference — are done. Recent
 work has significantly expanded the optimization toolkit: lazy precover DFA
 (Python + Rust) with integer packing and hash-consing, token-level
-decomposition with position-set DFA states for BPE-like FSTs, and pluggable
-`FusedTransducedLM` backends. The FusedTransducedLM logp disagreement has been
-fixed (max diff 0.000287, was 2.03). A critical bug in PeekabooState on
-BPE-style epsilon-output chains was identified and fixed (#9). Test coverage
-stands at 1191 tests across 16 files. The remaining work is performance
-(batched LM calls).
+decomposition with position-set DFA states for BPE-like FSTs, pluggable
+`FusedTransducedLM` backends, and batched LM inference via
+`HuggingFaceLM.prefetch()`. CharacterBeam with GPT-2 achieves 12 ms/step
+(interactive speed) on CPU. The `scipy` dependency has been eliminated
+(replaced with `torch.sparse`), and the `tokenization/` package has been
+removed (functionality inlined). Test coverage stands at 1078 tests across
+18 files.

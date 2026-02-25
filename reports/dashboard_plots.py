@@ -50,15 +50,26 @@ baseline_rss = bench_data['baseline_rss_mb']
 method_keys = [k.replace('_avg_ms', '') for k in rows[0] if k.endswith('_avg_ms')]
 
 method_data = {}  # key -> (vs, ms)
+method_rss = {}   # key -> (vs, rss_mb)
 for key in method_keys:
     vs = [r['vocab_size'] for r in rows if r.get(f'{key}_avg_ms') is not None]
     ms = [r[f'{key}_avg_ms'] for r in rows if r.get(f'{key}_avg_ms') is not None]
     method_data[key] = (vs, ms)
+    # Per-method RSS (new: from {method}_rss_mb fields)
+    rss_vs = [r['vocab_size'] for r in rows if r.get(f'{key}_rss_mb') is not None]
+    rss_vals = [r[f'{key}_rss_mb'] for r in rows if r.get(f'{key}_rss_mb') is not None]
+    if rss_vs:
+        method_rss[key] = (rss_vs, rss_vals)
 
-# Primary method (rust) for memory + extrapolation
-primary = method_keys[0]
+# Primary method for FusedLM memory + extrapolation
+# Find FusedLM key (may be first or second depending on method order)
+primary = next((k for k in method_keys if 'Fused' in k), method_keys[0])
 vs_ok, ms_ok = method_data[primary]
-rss_ok = [r['peak_rss_mb'] for r in rows if r.get(f'{primary}_avg_ms') is not None]
+# Use per-method RSS if available, else fall back to peak_rss_mb
+if primary in method_rss:
+    rss_ok = method_rss[primary][1]
+else:
+    rss_ok = [r['peak_rss_mb'] for r in rows if r.get(f'{primary}_avg_ms') is not None]
 
 # Load GeneralizedBeam data from its separate JSON (if available)
 GB_FILE = os.path.join(os.path.dirname(__file__), 'bench_generalized_beam_results.json')
@@ -131,6 +142,16 @@ ax2.plot(vs_ok, delta_mb, 'o-', color=C_FUSED_MEM, linewidth=2.5,
 if len(extrap_vs) > 0:
     ax2.plot(extrap_vs, extrap_dm, 'x--', color=C_EXTRAPOLATE, linewidth=1.5,
              markersize=10, label=f'Extrapolation (|V|$^{{{mem_slope:.2f}}}$)', zorder=2)
+
+# CharacterBeam memory (per-method RSS from same benchmark)
+if 'CharacterBeam' in method_rss:
+    cb_rss_vs, cb_rss_vals = method_rss['CharacterBeam']
+    cb_delta = [rss - baseline_rss for rss in cb_rss_vals]
+    cb_delta_pos = [(v, d) for v, d in zip(cb_rss_vs, cb_delta) if d > 0]
+    if cb_delta_pos:
+        ax2.plot([v for v, d in cb_delta_pos], [d for v, d in cb_delta_pos],
+                 'D-', color=C_CHARBEAM, linewidth=2, markersize=7,
+                 label='CharacterBeam', zorder=5)
 
 # GeneralizedBeam memory (from separate process run)
 if gb_method_data is not None:

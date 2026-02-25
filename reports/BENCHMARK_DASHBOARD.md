@@ -1,7 +1,7 @@
 # Benchmark Dashboard
 
-**Last updated:** 2026-02-23
-**Test suite:** 1224 tests across 17 files (1222 passed, 2 xfailed)
+**Last updated:** 2026-02-24
+**Test suite:** 1078 tests across 18 files (1059 passed, excluding GPU-dependent tests)
 
 ---
 
@@ -35,54 +35,53 @@ under identical conditions.
 
 | Vocab size (\|V\|) | FST states | GeneralizedBeam (ms/step) | CharacterBeam (ms/step) | FusedTransducedLM (ms/step) | GB init (ms) |
 |-------------------:|-----------:|--------------------------:|------------------------:|----------------------------:|-------------:|
-| 297 | 387 | 1 | **0** | 2 | 1 |
-| 529 | 623 | **2** | 3 | 3 | 2 |
-| 1,023 | 1,313 | 3 | **2** | 13 | 4 |
-| 2,020 | 3,010 | **4** | **4** | 22 | 9 |
-| 5,011 | 8,694 | **8** | 9 | 70 | 31 |
-| 7,010 | 12,408 | 12 | **11** | 57 | 46 |
-| 10,008 | 18,203 | **17** | **17** | 179 | 72 |
-| 12,008 | 22,172 | **23** | 25 | 158 | 87 |
-| 15,008 | 28,005 | **31** | **31** | 200 | 138 |
-| 20,005 | 37,786 | **43** | 44 | 367 | 166 |
-| 30,002 | 57,401 | 68 | **57** | 867 | 272 |
-| 50,256 | 98,024 | 136 | **106** | TIMEOUT | 476 |
+| 297 | 387 | 1 | **5** | 4 | 1 |
+| 529 | 623 | **2** | 6 | 3 | 2 |
+| 1,023 | 1,313 | 3 | **5** | 5 | 4 |
+| 2,020 | 3,010 | **4** | 6 | 15 | 9 |
+| 5,011 | 8,694 | **8** | 14 | 56 | 31 |
+| 7,010 | 12,408 | **12** | 23 | 49 | 46 |
+| 10,008 | 18,203 | **17** | 20 | 140 | 72 |
+| 12,008 | 22,172 | **23** | 32 | 167 | 87 |
+| 15,008 | 28,005 | **31** | 45 | 226 | 138 |
+| 20,005 | 37,786 | **43** | 72 | 413 | 166 |
+| 30,002 | 57,401 | **68** | 88 | 852 | 272 |
+| 50,256 | 98,024 | **136** | 137 | TIMEOUT | 476 |
 
-Baseline RSS (Python + tokenizer): 0.7 GB.
+Baseline RSS (Python + tokenizer): 0.8 GB.
 
 ### Scaling exponents
 
-| Method | ~|V|^alpha | At V=50k |
+| Method | ~\|V\|^alpha | At V=50k |
 |--------|----------:|------:|
-| CharacterBeam | **0.55** | 106 ms |
-| GeneralizedBeam | 0.55 | 136 ms |
-| FusedTransducedLM | 1.25 | TIMEOUT |
+| GeneralizedBeam | **0.55** | 136 ms |
+| CharacterBeam | 0.60 | 137 ms |
+| FusedTransducedLM | 1.24 | TIMEOUT |
 
 ### Analysis
 
-**CharacterBeam and GeneralizedBeam are neck-and-neck**, both scaling as
-~|V|^0.55. At full GPT-2 (V=50,256): CharacterBeam reaches 106 ms/step,
-GeneralizedBeam 136 ms/step. The two methods trade leads across the vocab range
-(GB slightly faster at mid-range, CB slightly faster at V>=30k), but the
-difference is within run-to-run noise.
+**GeneralizedBeam and CharacterBeam converge at full scale**: at V=50,256, GB
+reaches 136 ms/step and CB 137 ms/step — essentially identical. GB is
+consistently faster at mid-range vocab sizes (V=2k-30k) due to hub-based
+trie-mass computation. CB is simpler (no init cost, no FST required) and
+closes the gap at large vocabs.
 
-**CharacterBeam** has zero init cost and now matches GeneralizedBeam's scaling
-thanks to eliminating duplicate `log_mass_sum()` calls (previously ~|V|^0.8,
-265 ms/step at V=50k -- a **2.5x improvement**). Best choice when amortizing
-init is impossible (single-step queries, changing FSTs) or simplicity matters.
+**CharacterBeam** has zero init cost. Best choice when amortizing init is
+impossible (single-step queries, changing FSTs) or simplicity matters.
 
 **GeneralizedBeam** pays a one-time init (476 ms at V=50k) for hub detection.
 Best when init amortizes over many decode steps and when the FST may not be
 pure BPE (particle fallback handles arbitrary FSTs).
 
-**FusedTransducedLM** scales super-linearly (~|V|^1.25) due to DFA arena
+**FusedTransducedLM** scales super-linearly (~|V|^1.24) due to DFA arena
 materialization and times out at V=50k. Practical ceiling ~V=30k for BPE. Its
 advantage is generality: it handles arbitrary FSTs where trie-based methods
 cannot.
 
-**Memory:** FusedLM's DFA arena scales as ~|V|^1.8 and dominates RSS (7.8 GB
-at V=30k). CharacterBeam and GeneralizedBeam use negligible extra memory beyond
-the trie (~1.9 GB at V=50k).
+**Memory:** Per-method RSS tracking (right panel of plot) shows FusedLM's DFA
+arena scales as ~|V|^2.0 and dominates memory (7.7 GB at V=30k). CharacterBeam
+adds negligible per-step overhead (0-19 MB delta per vocab size). GeneralizedBeam
+is comparable to CharacterBeam (~1.9 GB at V=50k from its separate process run).
 
 ### GeneralizedBeam init
 
@@ -96,10 +95,9 @@ in O(|arcs|) via a single BFS, bypassing the expensive fixpoint.
 | 30,002 | *timeout* | 204,000 ms | **272 ms** |
 | 50,256 | *timeout* | *timeout* | **476 ms** |
 
-Init amortizes after ~16 steps: at V=50k, 0.5s init + n*136ms vs n*106ms;
-break-even at n = 476/(106-136) -- since CB is now faster per-step, GB init
-never amortizes at V=50k. At V=12k where GB leads (23 vs 25 ms/step),
-break-even is 87/(25-23) = 44 steps.
+At V=50k, GB and CB are neck-and-neck per-step (136 vs 137 ms), so the
+476 ms init cost amortizes after just a few steps. At V=12k where GB leads
+more clearly (23 vs 32 ms/step), break-even is 87/(32-23) = 10 steps.
 
 Source: `reports/bench_vectorization.py`, `reports/bench_generalized_beam.py`
 
@@ -141,9 +139,41 @@ Source: `reports/run_benchmarks.py`
 | Arbitrary FST (PTB, CDRewrite) | FusedTransducedLM |
 | Arbitrary FST, speed-critical | FusedTransducedLM + `top_k=50` |
 
-**Biggest unstarted optimization:** Batched LM inference. All benchmarks use
-CharNgramLM (O(1) per call). With a real GPU LM, batching particle/EOT
-expansions into single forward passes is the highest-impact change.
+**Batched LM inference is now implemented** via `HuggingFaceLM.prefetch()`.
+CharacterBeam and GeneralizedBeam both call `lm.prefetch(states)` to batch
+forward passes. See the GPT-2 WikiText benchmark below for real-LM results.
+
+---
+
+## GPT-2 WikiText (Real LM)
+
+End-to-end benchmark with a real HuggingFace GPT-2 model on WikiText text.
+Full BPE vocab (V=50,256), 200 bytes decoded, K=10, CPU inference.
+
+| Method | ms/step | Total (s) | LM calls/step | Peak RSS (GB) |
+|--------|--------:|----------:|--------------:|--------------:|
+| **CharacterBeam** (prefetch, threshold=0.1) | **12.0** | 2.4 | 0.27 | 1.5 |
+| CharacterBeam (no prefetch, threshold=0.1) | 12.5 | 2.5 | 0.27 | 1.5 |
+| GeneralizedBeam (prefetch) | 1,152 | 230 | 0.99 | 2.6 |
+| GeneralizedBeam (no prefetch) | 2,249 | 450 | 42.3 | 2.6 |
+
+### Analysis
+
+**CharacterBeam dominates** with a real LM. The `extend_threshold=0.1`
+optimization reduces LM calls from ~8/step to 0.27/step by skipping trie
+extensions whose mass is below the threshold. At 12 ms/step on CPU, this is
+already interactive speed.
+
+**Prefetch impact** varies by method: for GeneralizedBeam, batched forward
+passes give a **2.0x speedup** (2,249 → 1,152 ms/step) by reducing 42.3
+sequential LM calls/step to 0.99 batched calls. For CharacterBeam, prefetch
+has minimal effect because `extend_threshold` already reduces calls to <1/step.
+
+**GeneralizedBeam is ~96x slower** than CharacterBeam on this benchmark. The
+particle expansion at non-hub states dominates: GPT-2's BPE FST has many
+non-hub states where GeneralizedBeam falls back to per-particle LM evaluation.
+
+Source: `reports/bench_gpt2_wikitext.py`
 
 ---
 
@@ -179,8 +209,10 @@ O(|total DFA|). Steady-state: 0.02-0.14 ms/step regardless of DFA size
 
 ## Open Issues
 
-- **No batched LM inference** ([#7](https://github.com/timvieira/transduction/issues/7)):
-  Most impactful unstarted optimization for GPU LM deployment.
+- ~~**No batched LM inference**~~ ([#7](https://github.com/timvieira/transduction/issues/7)):
+  **Resolved.** `HuggingFaceLM.prefetch()` batches forward passes. CharacterBeam
+  with `extend_threshold` achieves 12 ms/step on GPT-2 (CPU). GeneralizedBeam
+  sees 2x speedup from prefetch.
 
 - **DirtyPeekaboo non-monotonic targets** ([#5](https://github.com/timvieira/transduction/issues/5)):
   Incorrect results with tree-branching decode (shorter target after longer).
@@ -198,6 +230,7 @@ python reports/run_all.py             # full suite (~60+ min)
 python reports/bench_vectorization.py    # BPE vocab scaling (FusedLM, CharacterBeam)
 python reports/bench_generalized_beam.py # GeneralizedBeam on BPE + PTB
 python reports/run_benchmarks.py         # PTB + BPE end-to-end LM comparison
+python reports/bench_gpt2_wikitext.py    # GPT-2 + WikiText real-LM benchmark
 python reports/dashboard_plots.py        # regenerate plots from JSON results
 ```
 
@@ -207,6 +240,8 @@ python reports/dashboard_plots.py        # regenerate plots from JSON results
 
 | Date | Change |
 |------|--------|
+| 2026-02-24 | Add GPT-2 WikiText benchmark section; update batched LM inference status (now implemented via prefetch); update test counts |
+| 2026-02-24 | scipy.sparse replaced with torch sparse tensors; tokenization/ package removed; StateLM renamed to HuggingFaceLM |
 | 2026-02-23 | CharacterBeam double-extension fix: eliminate duplicate `log_mass_sum()` calls; 265->106 ms/step at V=50k (2.5x) |
 | 2026-02-23 | Dashboard rewrite: unified 3-method comparison, honorable mentions section |
 | 2026-02-23 | CharacterBeam `_logp_next` optimization: read trie mass directly instead of materializing TrieState/Bundle objects |
