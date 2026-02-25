@@ -50,7 +50,6 @@ These optimize decomposition for specific FST topologies or via on-demand constr
 | Algorithm | Language | File | Notes |
 |-----------|----------|------|-------|
 | `LazyPrecoverDFA` | Python+Rust | `lazy_precover_dfa.py`, `lazy_precover.rs` | On-demand DFA with integer packing, hash-consing, eps-closure caching |
-| `TrieDispatchDFADecomp` | Python | `trie_dispatch.py` | Trie-based dispatch for decomposition |
 
 ### Finite-Only Decomposition Algorithms
 

@@ -49,12 +49,11 @@ Each variant serves a distinct niche:
 | Reference | `Precover`, `NonrecursiveDFADecomp` | Correctness oracle |
 | Batched | `PeekabooState`, `Peekaboo` (nonrecursive) | Amortize DFA across all next symbols |
 | Incremental | `DirtyPeekaboo`, `TruncatedIncrementalDFADecomp` | Reuse DFA state across decode steps |
-| Trie dispatch | `TrieDispatchDFADecomp` | Trie-based decomposition dispatch |
 | Lazy DFA | `LazyPrecoverDFA` | On-demand DFA with integer packing + hash-consing |
 | Rust | `RustDecomp`, `RustDirtyState`, `RustDirtyPeekaboo` | 3-25x over Python |
 | Finite-only | `LazyIncremental`, `LazyNonrecursive`, `PrioritizedLazy` | Finite-language FSTs |
 
-The parametrized test suite (`test_general.py`: 423 tests) ensures all
+The parametrized test suite (`test_general.py`: 376 tests) ensures all
 general-case algorithms agree.
 
 ### 2. Optimizations With Measured Impact
@@ -233,13 +232,13 @@ All public API modules now have type annotations: `base.py`, `fst.py`,
 | Component | Files | Lines | Notes |
 |-----------|-------|-------|-------|
 | Core (FST/FSA/base) | 4 | ~2,400 | Stable, well-tested |
-| Algorithms | 14 | ~4,800 | +lazy_precover_dfa, trie_dispatch |
+| Algorithms | 13 | ~4,200 | +lazy_precover_dfa |
 | LM integration | 10 | ~3,300 | +HuggingFaceLM, LlamaCppLM, GeneralizedBeam, CharacterBeam |
 | Rust backend | 10 | ~7,500 | +lazy_precover |
 | Applications | 4 | ~580 | BPE, PTB, WikiText |
 | Utilities | 6 | ~3,900 | viz, examples, lazy, util, rust_bridge, enumeration |
 | **Total Python** | **38** | **~15,000** | |
-| Tests | 18 | ~7,500 | 1078 tests (1059 passed, excluding GPU-dependent) |
+| Tests | 18 | ~7,500 | 1031 tests (1012 passed, excluding GPU-dependent) |
 
 ### Technical Debt
 

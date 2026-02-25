@@ -28,7 +28,7 @@ Do not auto-commit after finishing work.
 - `transduction/enumeration.py` — LM-weighted path enumeration (prioritized_enumeration, importance_sampling)
 - `transduction/lazy.py` — Lazy automaton framework (LazyDeterminize, EpsilonRemove)
 - `transduction/lazy_precover_dfa.py` — LazyPrecoverDFA: on-demand DFA with integer packing, hash-consing, eps-closure caching
-- `transduction/trie_dispatch.py` — TrieDispatchDFADecomp: trie-based dispatch for decomposition
+- `transduction/python_lazy_peekaboo_dfa.py` — PythonLazyPeekabooDFAHelper: Python fallback for RustLazyPeekabooDFA
 - `transduction/applications/bpe.py` — BPE WFST builder (`bpe_wfst`)
 - `transduction/applications/ptb.py` — PTB tokenizer FST built with pynini
 - `transduction/applications/wikitext.py` — WikiText data loading (`load_wikitext`, `wikitext_detokenize`)
@@ -106,7 +106,7 @@ Eliminated deps (previously external, now inlined):
 
 ## Test Status
 
-- `test_general.py`: 423 passed (9 implementations × 47 test cases)
+- `test_general.py`: 369 passed (8 implementations)
 - `test_finite.py`: 119 passed
 - `test_lazy.py`: 100 passed
 - `test_transduced.py`: 90 passed
@@ -124,9 +124,9 @@ Eliminated deps (previously external, now inlined):
 - `test_ptb_nltk.py`: 4 passed
 - `test_make_total.py`: 3 passed
 - `test_character_beam.py`: 3 passed
-- **Total: 1078 tests across 18 files (1059 passed, excluding GPU-dependent)**
+- **Total: 977 tests across 18 files (962 passed, excluding GPU-dependent)**
 - `test_general.py` tests the **general-case** algorithms (handle infinite quotients/remainders):
-  NonrecursiveDFADecomp, TruncatedIncrementalDFADecomp, TrieDispatchDFADecomp,
+  NonrecursiveDFADecomp, TruncatedIncrementalDFADecomp,
   PeekabooState, PeekabooNonrecursive, DirtyPeekaboo, RustDecomp, RustDirtyState,
   RustDirtyPeekaboo.
 - **Finite-only algorithms are excluded from test_general.py** and tested in

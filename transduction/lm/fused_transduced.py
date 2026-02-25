@@ -361,7 +361,7 @@ class FusedTransducedLM(LM[Token]):
             self._state_map = state_map
             self._helper_mode = "rust"
         elif helper == "python":
-            from transduction.trie_dispatch import PythonLazyPeekabooDFAHelper
+            from transduction.python_lazy_peekaboo_dfa import PythonLazyPeekabooDFAHelper
             helper_obj = PythonLazyPeekabooDFAHelper(fst)
             self._rust_helper = helper_obj
             self._sym_map = {k: v for k, v in helper_obj._sym_map.items()}

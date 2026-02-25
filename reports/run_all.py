@@ -12,7 +12,6 @@ Available benchmark names (short aliases):
     vec          bench_vectorization.py        BPE vocab scaling (FusedLM, CharacterBeam)
     run          run_benchmarks.py             PTB + BPE end-to-end LM comparison
     gen          bench_generalized_beam.py     GeneralizedBeam on BPE + PTB
-    trie         bench_trie_dispatch.py        Trie dispatch vs standard decomposition
     bpe_ptb      bpe_ptb_benchmark.py          Backend comparison (Standard/Pynini/Rust)
 """
 
@@ -30,7 +29,6 @@ BENCHMARKS = [
     ('vec',     'bench_vectorization.py',    'BPE vocab scaling (FusedLM, CharacterBeam)'),
     ('run',     'run_benchmarks.py',         'PTB + BPE end-to-end LM comparison'),
     ('gen',     'bench_generalized_beam.py', 'GeneralizedBeam on BPE + PTB'),
-    ('trie',    'bench_trie_dispatch.py',    'Trie dispatch decomposition'),
     ('bpe_ptb', 'bpe_ptb_benchmark.py',      'Backend comparison (Standard/Pynini/Rust)'),
 ]
 

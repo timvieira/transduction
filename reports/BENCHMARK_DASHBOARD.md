@@ -193,12 +193,6 @@ of the full |V| x |closure| cartesian product. Memory reduction 10-79% at
 V=1-10k. Wall-clock roughly neutral (slight overhead from normalization and
 fingerprint interning). Raises the FusedLM feasible vocab ceiling by ~2-4k.
 
-### TrieDispatch Decomposition
-
-Detects trie-like FST structure and dispatches to specialized arc enumeration.
-100% trie detection on BPE/PTB, but no wall-clock speedup in Python (overhead
-cancels savings). The insight validates in Rust but wasn't ported.
-
 ### Incremental DFA Persistence
 
 Dirty-state incremental decomposition pays O(|change|) per step, not

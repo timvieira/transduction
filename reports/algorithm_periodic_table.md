@@ -24,7 +24,7 @@
 | `RustLazyPeekabooDFA` | ✓ | ✓ | ✓ | N+K | ✓ | ✓ | ✓ | ✓ | rust ext; lazy DFA for FusedTransducedLM |
 | **Token-level / Lazy** | | | | | | | | | |
 | `LazyPrecoverDFA` | | | | N | ✓ | ✓ | ✓ | ✓† | on-demand DFA, int packing, hash-consing |
-| `TrieDispatchDFADecomp` | | | | N | ✓ | ✓ | ✓ | | trie-based dispatch |
+
 
 †`TruncatedIncrementalDFADecomp.decompose_next()` creates per-symbol overlay children sharing the parent's clean arcs — batched via overlays, not via a single BFS pass like Peekaboo.
 
