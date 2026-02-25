@@ -69,7 +69,7 @@ general-case algorithms agree.
 
 ### 3. Clean Internal Architecture
 
-~13.4K lines of Python across 38 modules. No circular dependencies. Well-layered:
+~15K lines of Python across 38 modules. No circular dependencies. Well-layered:
 
 ```mermaid
 graph TD
@@ -212,11 +212,11 @@ cause stale state to corrupt the decomposition.
 
 Now documented in the `TransducedLM` docstring (Note section).
 
-### Low: HuggingFaceLM KV Cache Sharing with DynamicCache ([#1](https://github.com/timvieira/transduction/issues/1))
+### ~~Low: HuggingFaceLM KV Cache Sharing with DynamicCache~~ ([#1](https://github.com/timvieira/transduction/issues/1)) — Resolved
 
-`HuggingFaceLM` shares `past_key_values` between parent and child states. Works
-with GPT-2's tuple caches but will silently corrupt results with modern
-`DynamicCache`-based models (transformers >= 4.40).
+`_clone_dynamic_cache()` deep-clones `DynamicCache` objects before tree-branching,
+preventing in-place mutation from corrupting shared caches. Both tuple caches
+(GPT-2) and `DynamicCache` (transformers >= 4.40) are now handled correctly.
 
 ### ~~Low: No Type Annotations on Public API~~ — Resolved
 
@@ -246,8 +246,8 @@ All public API modules now have type annotations: `base.py`, `fst.py`,
 | Item | Severity | Location | Effort |
 |------|----------|----------|--------|
 | DirtyPeekaboo non-monotonic targets ([#5](https://github.com/timvieira/transduction/issues/5)) | Medium | `rust_bridge.py`, `peekaboo.rs` | Medium |
-| No batched LM calls ([#7](https://github.com/timvieira/transduction/issues/7)) | Medium | `lm/transduced.py` | Medium |
-| HuggingFaceLM KV cache with DynamicCache ([#1](https://github.com/timvieira/transduction/issues/1)) | Low | `lm/huggingface_lm.py` | Small |
+| ~~No batched LM calls ([#7](https://github.com/timvieira/transduction/issues/7))~~ | ~~Medium~~ | ~~`lm/transduced.py`~~ | ~~Resolved (prefetch)~~ |
+| ~~HuggingFaceLM KV cache with DynamicCache ([#1](https://github.com/timvieira/transduction/issues/1))~~ | ~~Low~~ | ~~`lm/huggingface_lm.py`~~ | ~~Resolved (`_clone_dynamic_cache`)~~ |
 | ~~FusedTransducedLM logp disagreement~~ | ~~Medium~~ | ~~`lm/fused_transduced.py`~~ | ~~Resolved (max diff 0.000287)~~ |
 | ~~K/max_expansions coupling undocumented~~ | ~~Low~~ | ~~`lm/transduced.py`~~ | ~~Resolved~~ |
 | ~~No type annotations~~ | ~~Medium~~ | ~~Public API modules~~ | ~~Resolved~~ |

@@ -93,16 +93,19 @@ Built **once** at construction time from the BPE vocabulary.
               [Hello]    [ello]     ← leaf (end-of-token sentinel)
 ```
 
-Each leaf corresponds to a complete token.  The trie is annotated with a COO
-reachability index mapping each leaf (token) to all its ancestor nodes.  This
-enables the key operation — `log_mass_sum` — to propagate token-level
-log-probabilities to every ancestor in one `np.logaddexp.at` call:
+Each leaf corresponds to a complete token.  The trie is annotated with a sparse
+reachability matrix (`_reach`) mapping each leaf (token) to all its ancestor
+nodes.  This enables the key operation — `log_mass_sum` — to propagate
+token-level log-probabilities to every ancestor in one sparse matvec:
 
 ```python
-def log_mass_sum(self, logp_next: LogDistr) -> np.ndarray:
-    logp = np.array([logp_next[tok] for tok in self._tokens])    # |V| token probs
-    log_mass = np.full(num_nodes, -np.inf)
-    np.logaddexp.at(log_mass, self._coo_nodes, logp[self._coo_token_ids])
+def log_mass_sum(self, logp_next: LogDistr) -> torch.Tensor:
+    logp = torch.tensor([logp_next[tok] for tok in self._tokens],
+                        dtype=torch.float64)
+    logp_max = logp.max()
+    prob = torch.exp(logp - logp_max)
+    mass = torch.mv(self._reach, prob)      # sparse CSR matvec
+    log_mass = torch.log(mass) + logp_max
     return log_mass
 ```
 
@@ -536,7 +539,7 @@ Three specific advantages flow from this replacement:
    all set operations, hashing, and Q/R/preimage classification overhead.
 
 3. **O(1) scoring via the mass array.**  Each trie node's score is precomputed
-   by `log_mass_sum` — a single `np.logaddexp.at` scatter.  FusedTransducedLM
+   by `log_mass_sum` — a single sparse `torch.mv` matvec.  FusedTransducedLM
    scores by expanding particles through the DFA one source symbol at a time,
    pushing each onto a heap, classifying each DFA state.  The trie replaces all
    of that with an array subtraction.
@@ -553,10 +556,10 @@ onto the heap, eventually pop and Q-absorb.  That's O(|V|) or O(`top_k`)
 particles.
 
 **CharacterBeam**: For each hypothesis at the root, call
-`trie.log_mass_sum(lm_state.logp_next)` — one vectorized `np.logaddexp.at`
-scatter over the COO index.  This does the same O(|V|) summation but as a
-single NumPy operation over contiguous arrays.  Then read off
-`log_mass[child] - log_mass[root]` for each byte — O(256) array lookups.
+`trie.log_mass_sum(lm_state.logp_next)` — one sparse `torch.mv` matvec.
+This does the same O(|V|) summation but as a single vectorized operation over
+contiguous arrays.  Then read off `log_mass[child] - log_mass[root]` for each
+byte — O(256) array lookups.
 
 Critically, the mass array is **reused for all subsequent byte positions** until
 the next token boundary ($\bar{L} \approx 4$ bytes on average for GPT-2), so
@@ -613,15 +616,15 @@ Measured on BPE tokenizer FSTs with a bigram inner LM, K=10 beam / max_steps=100
 
 | Vocab Size | FusedTransducedLM (ms/step) | CharacterBeam (ms/step) |
 |-----------:|----------------------------:|------------------------:|
-|        297 |                           2 |                       7 |
-|      1,023 |                           9 |                      14 |
-|      5,011 |                          70 |                      33 |
-|     10,008 |                         171 |                      69 |
-|     15,008 |                         213 |                     103 |
+|        297 |                           4 |                       5 |
+|      1,023 |                           5 |                       5 |
+|      5,011 |                          56 |                      14 |
+|     10,008 |                         140 |                      20 |
+|     15,008 |                         226 |                      45 |
 
-At small vocab, FusedTransducedLM's all-final-universal fast path is faster.
-At V > ~2000, CharacterBeam's vectorized trie-mass scatter dominates.
-CharacterBeam scales as ~|V|^0.7 while FusedTransducedLM scales more steeply.
+At small vocab, FusedTransducedLM and CharacterBeam are comparable.
+At V > ~2000, CharacterBeam's vectorized trie-mass matvec dominates.
+CharacterBeam scales as ~|V|^0.60 while FusedTransducedLM scales as ~|V|^1.24.
 
 ---
 
@@ -653,11 +656,11 @@ Special cases:
 
 | Vocab Size | FusedTransducedLM | CharacterBeam | GeneralizedBeam |
 |-----------:|------------------:|---------------:|----------------:|
-|        297 |              2 ms |           7 ms |            1 ms |
-|      1,023 |              9 ms |          14 ms |            3 ms |
-|      5,011 |             70 ms |          33 ms |            8 ms |
-|     10,008 |            171 ms |          69 ms |           18 ms |
-|     15,008 |            213 ms |         103 ms |           30 ms |
+|        297 |              4 ms |           5 ms |            1 ms |
+|      1,023 |              5 ms |           5 ms |            3 ms |
+|      5,011 |             56 ms |          14 ms |            8 ms |
+|     10,008 |            140 ms |          20 ms |           17 ms |
+|     15,008 |            226 ms |          45 ms |           31 ms |
 
 GeneralizedBeam is fastest at all vocab sizes, with scaling ~|V|^0.55.
 
@@ -673,7 +676,7 @@ GeneralizedBeam is fastest at all vocab sizes, with scaling ~|V|^0.55.
 | **LM calls** | At token boundaries only | At every expansion |
 | **Carry-forward** | Beam = carry (no dedup) | Per-symbol dict (with dedup) |
 | **EOS/remainder** | Not needed (all-Q) | Required (general FSTs have R) |
-| **Scaling** | ~|V|^0.7 | Steeper (DFA + heap overhead) |
+| **Scaling** | ~|V|^0.60 | ~|V|^1.24 (DFA + heap overhead) |
 | **Advantage** | Fast for large BPE vocabs | Works for arbitrary FSTs |
 
 CharacterBeam is FusedTransducedLM specialized to monoid-homomorphism FSTs

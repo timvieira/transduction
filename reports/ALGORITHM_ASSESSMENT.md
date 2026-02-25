@@ -61,6 +61,7 @@ quotients. Tested separately in `test_finite.py`.
 |-----------|----------|------|:-----------:|-------|
 | `LazyIncremental` | Python | `lazy_incremental.py` | Yes | Finite-language FSTs only |
 | `LazyNonrecursive` | Python | `lazy_nonrecursive.py` | No | Finite-language FSTs only |
+| `EagerNonrecursive` | Python | `eager_nonrecursive.py` | No | Finite-language FSTs only |
 | `PrioritizedLazyIncremental` | Python | `prioritized_lazy_incremental.py` | Yes | Heuristic-guided BFS; finite only |
 
 ### Inference Algorithms
@@ -82,7 +83,7 @@ quotients. Tested separately in `test_finite.py`.
 | `TransducedLM` | `lm/transduced.py` | Pushforward of an inner LM through an FST (beam-sum inference; defaults to Rust backend) |
 | `FusedTransducedLM` | `lm/fused_transduced.py` | Single-pass interleaved decomposition + LM search |
 | `RustPeekabooState` | `rust_bridge.py` | Rust-backed incremental peekaboo state (default for TransducedLM) |
-| `RustLazyPeekabooDFA` | `rust_bridge.py` | Rust-backed lazy DFA interface for FusedTransducedLM beam search |
+| `RustLazyPrecoverDFA` | `rust_bridge.py` | Rust-backed lazy DFA interface for FusedTransducedLM beam search |
 | `ReferenceTransducedLM` | `lm/reference_transduced.py` | Ground-truth transduced LM via Precover (finite-relation FSTs only) |
 
 Self-contained (no external tokenization deps). Example:
@@ -151,8 +152,7 @@ print(state.logp_next['e'])  # log P(next='e' | target='h')
 **`FusedTransducedLM`** interleaves decomposition and LM search in a single pass
 (2.0x faster than `TransducedLM` on PTB at 66 ms/step) with excellent logp
 agreement (max |diff| = 0.000287). The `helper=` parameter enables pluggable
-backends: `"rust"` (default), `"python"`, or `"token"` (position-set-quotiented
-for BPE-like FSTs).
+backends: `"rust"` (default) or `"python"`.
 
 **`ReferenceTransducedLM`** computes exact transduced probabilities by enumerating
 Q/R languages via Precover. Only works on finite-relation FSTs. Used for
@@ -268,7 +268,7 @@ and place them in the appropriate test file (`test_general.py` vs `test_finite.p
 
 ## Dependencies
 
-**Core library:** `numpy`, `graphviz`, `IPython`
+**Core library:** `torch`, `numpy`, `graphviz`, `IPython`
 
 **LM integration:** `torch`, `transformers`
 

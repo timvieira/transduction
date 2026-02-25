@@ -1,7 +1,7 @@
 # Documentation & Naming TODO
 
 - [ ] 100% code coverage
-- [ ] Replace all instances of llm -> lm
+- [ ] Replace all instances of llm -> lm (throughout the entire code base)
 
 ## Refactoring
 
@@ -66,7 +66,7 @@
 
 - [ ] Handle tokenizers with multiple byte representations for the same token
   (line 174)
-- [ ] Implement immutable-tuple KV cache fix for DynamicCache (line 285)
+- [x] ~~Implement immutable-tuple KV cache fix for DynamicCache~~ (resolved via `_clone_dynamic_cache()` deep-cloning)
 
 ### peekaboo.rs — FactoredArena
 

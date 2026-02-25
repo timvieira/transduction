@@ -86,10 +86,13 @@ At each byte position:
 The central operation is `TokenCharacterTrie.log_mass_sum`:
 
 ```python
-def log_mass_sum(self, logp_next: LogDistr) -> np.ndarray:
-    logp = np.array([logp_next[tok] for tok in self._tokens])
-    log_mass = np.full(len(self.children), -np.inf)
-    np.logaddexp.at(log_mass, self._coo_nodes, logp[self._coo_token_ids])
+def log_mass_sum(self, logp_next: LogDistr) -> torch.Tensor:
+    logp = torch.tensor([logp_next[tok] for tok in self._tokens],
+                        dtype=torch.float64)
+    logp_max = logp.max()
+    prob = torch.exp(logp - logp_max)
+    mass = torch.mv(self._reach, prob)      # sparse CSR matvec
+    log_mass = torch.log(mass) + logp_max
     return log_mass
 ```
 
@@ -97,9 +100,10 @@ This computes, for every trie node $n$:
 
 $$\text{mass}(n) = \bigoplus_{t : \text{path}(t) \ni n} P_{\text{inner}}(t \mid \text{LM state})$$
 
-where $\oplus$ is logaddexp. The COO index maps each token to all its
-ancestor nodes, so the scatter computes all masses in a single $O(|\mathcal{V}|
-\cdot \bar{L})$ pass ($\bar{L}$ = avg token length in bytes).
+where $\oplus$ is logaddexp. The `_reach` sparse matrix maps each token to all
+its ancestor nodes, so the matvec computes all masses in a single
+$O(|\mathcal{V}| \cdot \bar{L})$ pass ($\bar{L}$ = avg token length in bytes).
+The log-sum-exp trick (factor out `logp_max`) avoids numerical underflow.
 
 The conditional probability of byte $b$ at node $n$ is then:
 
