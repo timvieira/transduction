@@ -1,7 +1,6 @@
 # Documentation & Naming TODO
 
 - [ ] 100% code coverage
-- [ ] Replace all instances of llm -> lm (throughout the entire code base)
 
 ## Refactoring
 
