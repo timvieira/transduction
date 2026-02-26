@@ -8,8 +8,9 @@ Naming conventions (automata-theory style):
   R, Q       — remainder, quotient (sets of source strings)
   F, G       — frontiers: sets of (state, buffer) pairs
 """
+import numpy as np
 from transduction.fst import EPSILON
-from transduction.util import validate_target, LogVector
+from transduction.util import validate_target, LogVector, LogDistr, logsumexp
 
 
 class Incremental:
@@ -48,6 +49,89 @@ class Incremental:
 
         return (remainder, quotient)
 
+    def logprefix(self, target):
+        """Compute log P(output starts with target) from a single decompose call.
+
+        Requires self.lm to be set.
+
+        Args:
+            target: target string observed so far (tuple of symbols).
+
+        Returns:
+            Log probability that the transduced output starts with target.
+        """
+        lm = self.lm
+        R, Q = self.decompose(target)
+        parts = []
+        for xs in Q:
+            parts.append(lm(xs).logp)
+        for xs in R:
+            state = lm(xs)
+            parts.append(state.logp + state.logp_next[lm.eos])
+        return logsumexp(parts) if parts else float('-inf')
+
+    def logprob(self, target):
+        """Compute log P(output = target exactly) from a single decompose call.
+
+        BFS-expands Q strings to find all source strings that produce exactly
+        target, then sums their string probabilities.  Only follows extensions
+        whose frontier has at least one buffer of length <= len(target)
+        (tighter than is_live, which allows buffer overshoot).
+
+        Requires self.lm to be set.
+
+        Args:
+            target: target string (tuple of symbols).
+
+        Returns:
+            Log probability that the transduced output equals target exactly.
+        """
+        lm = self.lm
+        R, Q = self.decompose(target)
+        N = len(target)
+        parts = []
+        # R strings that produce exactly target
+        for xs in R:
+            if self.is_exact_member(xs, target):
+                state = lm(xs)
+                parts.append(state.logp + state.logp_next[lm.eos])
+        # BFS-expand Q strings: their extensions may also terminate with
+        # exact target.  Use exact-match liveness (buffer must not overshoot
+        # target) plus LM pruning to ensure termination.
+        worklist = list(Q)
+        visited = set(Q)
+        while worklist:
+            candidates = []
+            for xs in worklist:
+                if self.is_exact_member(xs, target):
+                    state = lm(xs)
+                    parts.append(state.logp + state.logp_next[lm.eos])
+                for x in self.source_alphabet:
+                    next_xs = xs + (x,)
+                    if next_xs not in visited and self._is_exact_live(next_xs, target, N):
+                        visited.add(next_xs)
+                        candidates.append(next_xs)
+            worklist = self.prune(candidates)
+        return logsumexp(parts) if parts else float('-inf')
+
+    def _is_exact_live(self, xs, target, N):
+        """Check if xs can still reach a final state with buffer == target.
+
+        Stricter than is_live: requires at least one frontier state whose
+        buffer has not exceeded len(target).
+        """
+        return any(
+            target[:min(N, len(ys))] == ys[:min(N, len(ys))] and len(ys) <= N
+            for (_, ys) in self.run(xs, target)
+        )
+
+    def logp_next_v2(self, target):
+        logp = LogVector()
+        for y in self.target_alphabet:
+            logp[y] = self.logprefix(target + (y,))
+        logp[self.EOS] = self.logprob(target)
+        return logp.normalize()
+    
     def logp_next(self, target):
         """Compute the next-symbol distribution over target_alphabet ∪ {EOS}.
 
@@ -67,20 +151,19 @@ class Incremental:
             return state.logp + state.logp_next[lm.eos]
 
         R, Q = self.decompose(target)
+        seeds = R | Q
 
+        # Track all source strings encountered (seeds + extensions)
+        all_source_strings = set(seeds)
+
+        # Next-symbol contributions: BFS-expand source strings for each y
         seen = set()
-        queue = [(xs, y) for xs in R | Q for y in self.reachable_outputs(xs, target)]
+        queue = [(xs, y) for xs in seeds for y in self.reachable_outputs(xs, target)]
         seen.update(queue)
 
         while queue:
             next_queue = []
-            for (xs, y) in queue:
-                # EOS (deduplicated via seen)
-                if (xs, self.EOS) not in seen:
-                    seen.add((xs, self.EOS))
-                    if self.is_exact_member(xs, target):
-                        logp.logaddexp(self.EOS, logprob(xs))
-                # Resolve (xs, y)
+            for xs, y in queue:
                 ty = target + (y,)
                 if self.is_cylinder(xs, ty):
                     logp.logaddexp(y, logprefix(xs))
@@ -92,7 +175,13 @@ class Incremental:
                         if (next_xs, y) not in seen and self.is_live(next_xs, ty) and logprefix(next_xs) > float('-inf'):
                             seen.add((next_xs, y))
                             next_queue.append((next_xs, y))
+                            all_source_strings.add(next_xs)
             queue = next_queue
+
+        # EOS: sum over all discovered source strings that produce exactly target
+        for xs in all_source_strings:
+            if self.is_exact_member(xs, target):
+                logp.logaddexp(self.EOS, logprob(xs))
 
         return logp.normalize()
 

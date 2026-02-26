@@ -2,10 +2,9 @@
 Reference transduced language model using Precover decomposition.
 
 Computes exact next-token probabilities by enumerating the Q/R languages
-from the Precover decomposition at each step.  This is a ground-truth
-implementation for validating approximate algorithms like TransducedLM.
-
-Only terminates when Q and R are finite (i.e., finite-relation FSTs).
+from the Precover decomposition at each step.  Terminates whenever the
+inner LM assigns zero probability to all sufficiently long source strings
+(e.g., any finite-support LM), even when Q and R are infinite.
 
 Usage:
     from transduction.lm.ngram import CharNgramLM
@@ -22,6 +21,7 @@ Usage:
 
 from __future__ import annotations
 
+import heapq
 from functools import cached_property
 from typing import Any
 
@@ -35,8 +35,9 @@ from transduction.precover import Precover
 class ReferenceTransducedLM(LM[Token]):
     """Ground-truth transduced LM using Precover decomposition.
 
-    Computes exact next-token probabilities by enumerating Q/R languages.
-    Only terminates when Q and R are finite.
+    Computes exact next-token probabilities by enumerating Q/R languages
+    via LM-pruned heap search over the Precover DFA.  Terminates for any
+    LM with finite support, even when Q/R are infinite.
     """
 
     def __init__(self, inner_lm: LM, fst: FST[Any, Any],
@@ -46,6 +47,7 @@ class ReferenceTransducedLM(LM[Token]):
         self.eos = eos
         self._decomp = Precover.factory(fst)
         self._target_alphabet = fst.B - {EPSILON}
+        self._source_alphabet = fst.A - {EPSILON}
 
     def initial(self) -> ReferenceTransducedState:
         return ReferenceTransducedState(self, (), 0.0)
@@ -68,29 +70,50 @@ class ReferenceTransducedState(LMState[Token]):
         self._target = target
         self.logp = logp
 
-    # Note: this is independent of the state
     def _score(self, prefix: Str[Token]) -> float:
         """Compute log P(output starts with prefix).
 
-        Uses the Precover decomposition:
-        - Q strings contribute prefix probability (marginalized over continuations).
-        - R strings contribute exact string probability (with EOS).
+        Heap-ordered enumeration over the Precover DFA (Q and R share arcs
+        and start states; only stop states differ).  Processes source strings
+        in order of decreasing LM prefix probability.
 
-        Note: R(prefix) includes source strings whose output *starts with*
-        prefix (possibly longer), not just those equal to prefix.  So R alone
-        cannot give P(output = prefix exactly); use the residual instead.
+        - Q-accepting (universal) states: add prefix probability, prune subtree.
+        - R-accepting (non-universal final) states: add string probability.
+        - Prune when LM prefix probability is -inf.
         """
-        # TODO: these strings could be structured into a trie to reduce the number
-        # of inner LM state updates
         result = self.tlm._decomp(prefix)
-        inner_eos = self.tlm.inner_lm.eos
+        Q, R = result.quotient, result.remainder
+        # Q and R share the same DFA arcs and start states.
+        source_alphabet = self.tlm._source_alphabet
+        inner_lm = self.tlm.inner_lm
+        inner_eos = inner_lm.eos
         parts: list[float] = []
-        for src in result.quotient.language():
-            state = self.tlm.inner_lm(src)
-            parts.append(state.logp)
-        for src in result.remainder.language():
-            state = self.tlm.inner_lm(src)
-            parts.append(state.logp + state.logp_next[inner_eos])
+
+        # Max-heap by LM prefix probability: (-logp, tie_breaker, dfa_state, lm_state)
+        heap: list[tuple[float, int, Any, Any]] = []
+        counter = 0
+        for s in Q.start:
+            lm0 = inner_lm.initial()
+            heapq.heappush(heap, (-lm0.logp, counter, s, lm0))
+            counter += 1
+
+        while heap:
+            neg_logp, _, dfa_s, lm_s = heapq.heappop(heap)
+
+            if dfa_s in Q.stop:
+                parts.append(lm_s.logp)
+                continue  # prefix probability covers all extensions
+
+            if dfa_s in R.stop:
+                parts.append(lm_s.logp + lm_s.logp_next[inner_eos])
+
+            for x, dfa_t in Q.arcs(dfa_s):
+                next_lm = lm_s >> x
+                if next_lm.logp == float('-inf'):
+                    continue
+                heapq.heappush(heap, (-next_lm.logp, counter, dfa_t, next_lm))
+                counter += 1
+
         return logsumexp(parts)
 
     @cached_property
@@ -101,10 +124,9 @@ class ReferenceTransducedState(LMState[Token]):
             s = self._score(self._target + (y,))
             if s > float('-inf'):
                 scores[y] = s - Z
-        # EOS as residual: log P(EOS) = log(1 - Σ_y P(y)) = log1mexp(log Σ_y P(y))
-        # (No direct decomposition for P(output = target exactly) because
-        # R(target) includes strings with output *longer* than target.)
-        scores[self.eos] = log1mexp(logsumexp(list(scores.values())))
+        # EOS as residual: log P(EOS) = log(1 - Σ_y P(y))
+        total = logsumexp(list(scores.values()))
+        scores[self.eos] = log1mexp(total)
         return LogDistr(scores)
 
     def __rshift__(self, y: Token) -> ReferenceTransducedState:
