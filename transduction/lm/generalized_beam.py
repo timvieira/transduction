@@ -410,11 +410,11 @@ class GeneralizedBeamState(LMState):
     """LM state for GeneralizedBeam: wraps a _HybridBundle."""
 
     def __init__(self, gb: GeneralizedBeam, target: Str[Token],
-                 logp: float, bundle: _HybridBundle) -> None:
+                 logprefix: float, bundle: _HybridBundle) -> None:
         self.gb = gb
         self.eos = gb.eos
         self._target = target
-        self.logp = logp
+        self.logprefix = logprefix
         self._bundle = bundle
 
     @property
@@ -426,7 +426,7 @@ class GeneralizedBeamState(LMState):
         new_bundle = self._bundle.advance(y)
         return GeneralizedBeamState(
             self.gb, self._target + (y,),
-            self.logp + logp_delta, new_bundle,
+            self.logprefix + logp_delta, new_bundle,
         )
 
     def __repr__(self) -> str:

@@ -303,10 +303,10 @@ class TestLogprob:
 class FiniteLMState(LMState):
     """State for a finite-support LM. Computes exact conditionals from the trie."""
 
-    def __init__(self, lm, prefix, logp):
+    def __init__(self, lm, prefix, logprefix):
         self._lm = lm
         self._prefix = prefix
-        self.logp = logp
+        self.logprefix = logprefix
         self.eos = lm.eos
 
     def _prefix_mass(self, prefix):
@@ -338,7 +338,7 @@ class FiniteLMState(LMState):
         if token == self.eos:
             raise ValueError("Cannot advance past EOS")
         lp = self.logp_next[token]
-        return FiniteLMState(self._lm, self._prefix + (token,), self.logp + lp)
+        return FiniteLMState(self._lm, self._prefix + (token,), self.logprefix + lp)
 
 
 class FiniteLM(LM):

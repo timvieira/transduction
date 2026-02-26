@@ -32,9 +32,9 @@ def copy_fst(alphabet):
 
 class TinyState(LMState):
     """Minimal LM state for testing with a fixed token distribution."""
-    def __init__(self, probs, logp=0.0):
+    def __init__(self, probs, logprefix=0.0):
         self._probs = probs
-        self.logp = logp
+        self.logprefix = logprefix
 
     @property
     def logp_next(self):
@@ -46,7 +46,7 @@ class TinyState(LMState):
 
     def __rshift__(self, token):
         lp = self._probs.get(token, -np.inf)
-        return TinyState(self._probs, self.logp + lp)
+        return TinyState(self._probs, self.logprefix + lp)
 
 
 class TinyLM(LM):
@@ -60,10 +60,10 @@ class TinyLM(LM):
 class FiniteLMState(LMState):
     """State for a finite-support LM. Computes exact conditionals from the trie."""
 
-    def __init__(self, lm, prefix, logp):
+    def __init__(self, lm, prefix, logprefix):
         self._lm = lm
         self._prefix = prefix
-        self.logp = logp
+        self.logprefix = logprefix
         self.eos = lm.eos
 
     def _prefix_mass(self, prefix):
@@ -95,7 +95,7 @@ class FiniteLMState(LMState):
         if token == self.eos:
             raise ValueError("Cannot advance past EOS")
         lp = self.logp_next[token]
-        return FiniteLMState(self._lm, self._prefix + (token,), self.logp + lp)
+        return FiniteLMState(self._lm, self._prefix + (token,), self.logprefix + lp)
 
 
 class FiniteLM(LM):
@@ -115,7 +115,7 @@ def brute_force_pushforward(inner_lm, fst, target, max_source_len=8):
 
     def source_logp(source):
         state = inner_lm(source)
-        return state.logp + state.logp_next[state.eos]
+        return state.logprefix + state.logp_next[state.eos]
 
     source_outputs = defaultdict(set)
     for source, output in fst.relation(max_source_len):
@@ -179,12 +179,12 @@ class TestGeneralizedBeamBasic:
             f"Probabilities should sum to ~1 (log ~0), got log-sum={total:.6f}"
 
     def test_logp_starts_at_zero(self):
-        """Initial state has logp = 0."""
+        """Initial state has logprefix = 0."""
         inner_lm = TinyLM()
         fst = copy_fst(['a', 'b'])
         gb = GeneralizedBeam(inner_lm, fst, K=100)
         state = gb.initial()
-        assert state.logp == 0.0
+        assert state.logprefix == 0.0
 
     def test_logp_accumulates(self):
         """logp after >> y1 >> y2 equals sum of logp_next[y_i]."""
@@ -200,7 +200,7 @@ class TestGeneralizedBeamBasic:
 
         state2 = state1 >> 'b'
         expected = lp1 + lp2
-        assert state2.logp == pytest.approx(expected, abs=1e-10)
+        assert state2.logprefix == pytest.approx(expected, abs=1e-10)
 
     def test_repr_doesnt_crash(self):
         """repr shouldn't crash."""

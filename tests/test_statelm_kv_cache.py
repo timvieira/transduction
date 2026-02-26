@@ -143,7 +143,7 @@ class TestHuggingFaceLM:
             expected_logp += state.logp_next[tid]
             state = state >> tid
 
-        assert np.isclose(state.logp, expected_logp, rtol=1e-5)
+        assert np.isclose(state.logprefix, expected_logp, rtol=1e-5)
 
     def test_token_ids(self, lm, enc):
         """token_ids() should return the int token IDs fed in."""

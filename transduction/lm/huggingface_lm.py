@@ -286,7 +286,7 @@ class HuggingFaceLM(LM[int]):
     def initial(self) -> TokenIDState:
         return TokenIDState(
             lm=self,
-            logp=0,
+            logprefix=0,
             context=(),
             _kv_source=None,
         )
@@ -533,11 +533,11 @@ class TokenIDState(LMState[int]):
     caches) can be garbage-collected when no longer reachable.
     """
 
-    def __init__(self, lm: HuggingFaceLM, logp: float,
+    def __init__(self, lm: HuggingFaceLM, logprefix: float,
                  context: tuple[Any, ...], _kv_source: TokenIDState | None) -> None:
         self.lm = lm
         self.eos = lm.eos
-        self.logp = logp
+        self.logprefix = logprefix
         self.context = context
         self._kv_source = _kv_source
 
@@ -546,7 +546,7 @@ class TokenIDState(LMState[int]):
             raise ValueError(f"Out of vocabulary: {token_id!r}")
         return TokenIDState(
             lm=self.lm,
-            logp=self.logp + self.logp_next[token_id],
+            logprefix=self.logprefix + self.logp_next[token_id],
             context=(self.context, token_id),
             _kv_source=self,
         )

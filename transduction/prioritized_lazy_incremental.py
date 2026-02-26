@@ -172,12 +172,12 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
         the min-heap (smaller = explored first).  When ``None`` (default),
         uses :class:`BFSHeuristic` (orders by depth).
 
-        If the heuristic state exposes a ``.logp`` attribute (cumulative
+        If the heuristic state exposes a ``.logprefix`` attribute (cumulative
         log-probability), the ``logp_gap`` stopping criterion can be used.
     logp_gap : float or None
-        Stop exploring when the best remaining heap entry's ``logp`` falls
-        more than ``logp_gap`` below the best quotient entry's ``logp``.
-        Requires the heuristic to expose a ``.logp`` attribute.
+        Stop exploring when the best remaining heap entry's ``logprefix`` falls
+        more than ``logp_gap`` below the best quotient entry's ``logprefix``.
+        Requires the heuristic to expose a ``.logprefix`` attribute.
         ``None`` (default) disables gap-based stopping.
     max_steps : int or float
         Hard safety limit on heap pops.
@@ -381,14 +381,14 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
         steps = 0
         logp_gap = self.logp_gap
 
-        # Reference logp for gap stopping: use the parent's best quotient logp
+        # Reference logprefix for gap stopping: use the parent's best quotient logprefix
         # as the baseline.  This avoids a cold-start problem where the local
         # best_quotient_logp starts at -inf and the gap check is disabled until
         # the first local quotient is found.  The parent's estimate is already
         # a good approximation of the prefix probability mass.
         if self.parent is not None:
             best_quotient_logp = max(
-                (getattr(h, 'logp', -float('inf'))
+                (getattr(h, 'logprefix', -float('inf'))
                  for h, _node in self.parent._quotient.values()),
                 default=-float('inf'),
             )
@@ -402,7 +402,7 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
             # is far below the best quotient entry, the remaining mass is
             # negligible — stop early.
             if logp_gap is not None and best_quotient_logp > -float('inf'):
-                h_logp = getattr(h_state, 'logp', None)
+                h_logp = getattr(h_state, 'logprefix', None)
                 if h_logp is not None and best_quotient_logp - h_logp > logp_gap:
                     break
 
@@ -437,8 +437,8 @@ class PrioritizedLazyIncremental(IncrementalDecomposition):
 
             if cls == 'universal':
                 self._quotient[xs] = (h_state, node)
-                # Track best quotient logp for gap stopping.
-                h_logp = getattr(h_state, 'logp', None)
+                # Track best quotient logprefix for gap stopping.
+                h_logp = getattr(h_state, 'logprefix', None)
                 if h_logp is not None and h_logp > best_quotient_logp:
                     best_quotient_logp = h_logp
                 continue

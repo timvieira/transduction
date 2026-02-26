@@ -177,14 +177,14 @@ def test_cb_self_consistency(setup):
     context = b"The"
     state = cb(context)
     logp = state.logp_next
-    Z = state.logp
+    Z = state.logprefix
 
     # Check top-5 keys: logp_next[k] == logp(context + k) - logp(context)
     for k in list(logp.top(5)):
         if k == cb._eos_bytes:
             continue
         have = logp[k]
-        want = (state >> k).logp - Z
+        want = (state >> k).logprefix - Z
         assert abs(have - want) < 1e-3, f"key={k!r}: {have:.6f} vs {want:.6f}"
 
 

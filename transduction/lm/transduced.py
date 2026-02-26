@@ -29,7 +29,7 @@ Usage:
 
     state = tlm >> 'h'
     print(state.logp_next['e'])
-    print(state.logp)
+    print(state.logprefix)
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ class TransducedState(LMState[Token]):
     Supports:
         state >> y         -> new state (advance by target symbol y)
         state.logp_next[y] -> log P(y | target_so_far)
-        state.logp         -> cumulative log probability
+        state.logprefix         -> cumulative log probability
         state.eos          -> EOS token
 
     Each state holds K particles (source-prefix hypotheses).  Computing
@@ -112,13 +112,13 @@ class TransducedState(LMState[Token]):
     """
 
     def __init__(self, tlm: TransducedLM, peekaboo_state: State,
-                 particles: list[Particle], logp: float,
+                 particles: list[Particle], logprefix: float,
                  path: Str[Token] = ()) -> None:
         self.tlm = tlm
         self.eos = tlm.eos
         self._peekaboo_state = peekaboo_state
         self._particles = particles
-        self.logp = logp
+        self.logprefix = logprefix
         self.path = path
         self._logp_next_cache: LogDistr[Token] | None = None
         self._carry_forward: dict[Token, list[Particle]] | None = None
@@ -172,7 +172,7 @@ class TransducedState(LMState[Token]):
             self.tlm,
             peekaboo_state = new_peekaboo,
             particles = _select_top_k(new_particles, self.tlm.K),
-            logp = self.logp + self._logp_next_cache[y],
+            logprefix = self.logprefix + self._logp_next_cache[y],
             path = self.path + (y,),
         )
 
@@ -336,7 +336,7 @@ class TransducedState(LMState[Token]):
         qr_builder = ps.build_qr_fsa if can_decode and hasattr(ps, 'build_qr_fsa') else None
 
         result = render_particles_html(
-            'TransducedState', self._particles, self.path, self.logp,
+            'TransducedState', self._particles, self.path, self.logprefix,
             decode_fn=decode_fn,
             q_states=q_states, r_states=r_states,
             qr_builder=qr_builder, decomp=decomp,
@@ -344,7 +344,7 @@ class TransducedState(LMState[Token]):
 
         from transduction.viz import render_logp_next_html
         result += render_logp_next_html(
-            'TransducedState', self.path, self.logp, self.logp_next,
+            'TransducedState', self.path, self.logprefix, self.logp_next,
         )
         return result
 
@@ -411,7 +411,7 @@ class TransducedLM(LM[Token]):
         return TransducedState(
             self,
             peekaboo_state = peekaboo,
-            logp = 0.0,
+            logprefix = 0.0,
             particles = [
                 Particle(s, inner_initial, 0.0, ())
                 for s in peekaboo.dfa.start()

@@ -36,7 +36,7 @@ class TestByteNgramInterface:
         for ch in b'the ':
             state = state >> ch
         assert state._context == tuple(b'he ')
-        assert state.logp == pytest.approx(-2.718, abs=0.01)
+        assert state.logprefix == pytest.approx(-2.718, abs=0.01)
 
     def test_call_shorthand(self, lm):
         """lm(prompt) advances through each byte."""
@@ -44,7 +44,7 @@ class TestByteNgramInterface:
         for ch in b'the ':
             state = state >> ch
         state2 = lm(b'the ')
-        assert state.logp == pytest.approx(state2.logp, abs=1e-10)
+        assert state.logprefix == pytest.approx(state2.logprefix, abs=1e-10)
 
     def test_top_predictions_after_the_space(self, lm):
         state = lm.initial()
@@ -97,7 +97,7 @@ class TestByteNgramScoring:
             state = lm.initial()
             for ch in text:
                 state = state >> ch
-            return state.logp
+            return state.logprefix
 
         lp_good = score(b'the cat sat on the mat.')
         lp_bad = score(b'xyzzy plugh grault.')
@@ -108,7 +108,7 @@ class TestByteNgramScoring:
             state = lm.initial()
             for ch in text:
                 state = state >> ch
-            return state.logp
+            return state.logprefix
 
         lp1 = score(b'the cat sat on the mat.')
         lp2 = score(b'the dog sat on the log.')
@@ -119,7 +119,7 @@ class TestByteNgramScoring:
         state = lm.initial()
         for ch in text:
             state = state >> ch
-        ppl = np.exp(-state.logp / len(text))
+        ppl = np.exp(-state.logprefix / len(text))
         assert ppl < 10  # low perplexity for in-distribution text
 
     def test_perplexity_nonsense(self, lm):
@@ -127,7 +127,7 @@ class TestByteNgramScoring:
         state = lm.initial()
         for ch in text:
             state = state >> ch
-        ppl = np.exp(-state.logp / len(text))
+        ppl = np.exp(-state.logprefix / len(text))
         assert ppl > 100  # high perplexity for nonsense
 
 

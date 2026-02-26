@@ -250,13 +250,13 @@ class FusedTransducedState(LMState[Token]):
     """
 
     def __init__(self, tlm: FusedTransducedLM, particles: list[Particle],
-                 target: Str[Token], logp: float,
+                 target: Str[Token], logprefix: float,
                  path: Str[Token] = ()) -> None:
         self.tlm = tlm
         self.eos = tlm.eos
         self._particles = particles
         self._target = target
-        self.logp = logp
+        self.logprefix = logprefix
         self.path = path
         self._logp_next_cache: LogDistr[Token] | None = None
         self._carry_forward_cache: dict[Token, list[Particle]] | None = None
@@ -288,7 +288,7 @@ class FusedTransducedState(LMState[Token]):
         return FusedTransducedState(
             self.tlm, new_particles,
             self._target + (y,),
-            self.logp + self._logp_next_cache[y],  # type: ignore[index]
+            self.logprefix + self._logp_next_cache[y],  # type: ignore[index]
             path=self.path + (y,),
         )
 
@@ -316,7 +316,7 @@ class FusedTransducedState(LMState[Token]):
                 return decode_cache[dfa_state]
         return render_particles_html(
             'FusedTransducedState', self._particles,
-            list(self._target), self.logp,
+            list(self._target), self.logprefix,
             decode_fn=decode_fn,
         )
 

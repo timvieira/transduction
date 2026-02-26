@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Hashable, Iterable
+from functools import cached_property
 from typing import Generic, TypeVar
 
 from transduction.util import LogDistr
@@ -98,7 +99,7 @@ class LMState(ABC, Generic[Token]):
     """
 
     eos: Token
-    logp: float
+    logprefix: float
 
     @property
     @abstractmethod
@@ -115,6 +116,11 @@ class LMState(ABC, Generic[Token]):
     def __rshift__(self, token: Token) -> LMState:
         """Advance by one token, returning a new LMState conditioned on the extended context."""
         ...
+
+    @cached_property
+    def logprob(self):
+        """Log probability that the LM generates exactly this string."""
+        return self.logprefix + self.logp_next[self.eos]
 
     def greedy_decode(self, max_len: int = 100) -> list[Token]:
         """Greedy decode until EOS or max_len. Returns list of tokens."""

@@ -117,7 +117,7 @@ class LlamaCppLM(LM[int]):
     def initial(self) -> LlamaCppState:
         return LlamaCppState(
             lm=self,
-            logp=0,
+            logprefix=0,
             context=(),
             parent=None,
         )
@@ -142,11 +142,11 @@ class LlamaCppState(LMState[int]):
     forward pass only runs when ``logp_next`` is first accessed.
     """
 
-    def __init__(self, lm: LlamaCppLM, logp: float,
+    def __init__(self, lm: LlamaCppLM, logprefix: float,
                  context: tuple[Any, ...], parent: LlamaCppState | None) -> None:
         self.lm = lm
         self.eos = lm.eos
-        self.logp = logp
+        self.logprefix = logprefix
         self.context = context
         self.parent = parent
 
@@ -155,7 +155,7 @@ class LlamaCppState(LMState[int]):
             raise ValueError(f"Out of vocabulary: {token_id!r}")
         return LlamaCppState(
             lm=self.lm,
-            logp=self.logp + self.logp_next[token_id],
+            logprefix=self.logprefix + self.logp_next[token_id],
             context=(self.context, token_id),
             parent=self,
         )

@@ -38,16 +38,16 @@ class NgramState(LMState[int]):
     Supports:
         state >> token     -> new state  (token is int 0-255)
         state.logp_next[x] -> log P(x | context)
-        state.logp         -> cumulative log probability
+        state.logprefix         -> cumulative log probability
         state.eos          -> EOS token (int 0)
     """
 
-    def __init__(self, lm: ByteNgramLM, context: Str[int], logp: float,
+    def __init__(self, lm: ByteNgramLM, context: Str[int], logprefix: float,
                  history: tuple[Any, ...] = ()) -> None:
         self.lm = lm
         self.eos = lm.eos
         self._context = context      # last (n-1) bytes as tuple of ints
-        self.logp = logp
+        self.logprefix = logprefix
         self.history = history        # full path as nested tuple (like LM/LMState.context)
 
     def __rshift__(self, token: int) -> NgramState:
@@ -58,7 +58,7 @@ class NgramState(LMState[int]):
         lp = self.logp_next[token]
         n = self.lm.n
         new_ctx = (self._context + (token,))[-(n - 1):] if n > 1 else ()
-        return NgramState(self.lm, new_ctx, self.logp + lp,
+        return NgramState(self.lm, new_ctx, self.logprefix + lp,
                           history=(self.history, token))
 
     @cached_property
@@ -85,7 +85,7 @@ class NgramState(LMState[int]):
 
     def __lt__(self, other: NgramState) -> bool:
         # Higher logp → smaller → explored first in min-heap
-        return self.logp > other.logp
+        return self.logprefix > other.logprefix
 
     def __repr__(self) -> str:
         ctx_bytes = bytes(self._context)
@@ -200,16 +200,16 @@ class CharNgramState(LMState[Token]):
     Supports:
         state >> token     -> new state
         state.logp_next[x] -> log P(x | context)
-        state.logp         -> cumulative log probability
+        state.logprefix         -> cumulative log probability
         state.eos          -> EOS token
     """
 
-    def __init__(self, lm: CharNgramLM, context: Str[Token], logp: float,
+    def __init__(self, lm: CharNgramLM, context: Str[Token], logprefix: float,
                  history: tuple[Any, ...] = ()) -> None:
         self.lm = lm
         self.eos = lm.eos
         self._context = context      # last (n-1) symbols as tuple
-        self.logp = logp
+        self.logprefix = logprefix
         self.history = history
 
     def __rshift__(self, token: Token) -> CharNgramState:
@@ -218,7 +218,7 @@ class CharNgramState(LMState[Token]):
         lp = self.logp_next[token]
         n = self.lm.n
         new_ctx = (self._context + (token,))[-(n - 1):] if n > 1 else ()
-        return CharNgramState(self.lm, new_ctx, self.logp + lp,
+        return CharNgramState(self.lm, new_ctx, self.logprefix + lp,
                               history=(self.history, token))
 
     @cached_property
@@ -237,7 +237,7 @@ class CharNgramState(LMState[Token]):
 
     def __lt__(self, other: CharNgramState) -> bool:
         # Higher logp → smaller → explored first in min-heap
-        return self.logp > other.logp
+        return self.logprefix > other.logprefix
 
     def __repr__(self) -> str:
         return f'CharNgramState({self._context!r})'

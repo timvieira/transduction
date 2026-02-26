@@ -8,9 +8,8 @@ Naming conventions (automata-theory style):
   R, Q       — remainder, quotient (sets of source strings)
   F, G       — frontiers: sets of (state, buffer) pairs
 """
-import numpy as np
 from transduction.fst import EPSILON
-from transduction.util import validate_target, LogVector, LogDistr, logsumexp, memoize
+from transduction.util import validate_target, LogVector, logsumexp, memoize
 
 
 class Incremental:
@@ -58,60 +57,34 @@ class Incremental:
         return self._lm_state(xs[:-1]) >> xs[-1]
 
     def logprefix(self, target):
-        """Compute log P(output starts with target) from a single decompose call.
-
-        Requires self.lm to be set.
-
-        Args:
-            target: target string observed so far (tuple of symbols).
-
-        Returns:
-            Log probability that the transduced output starts with target.
-        """
+        """Log P(output starts with target)."""
         R, Q = self.decompose(target)
         parts = []
         for xs in Q:
-            parts.append(self._lm_state(xs).logp)
+            parts.append(self._lm_state(xs).logprefix)
         for xs in R:
-            state = self._lm_state(xs)
-            parts.append(state.logp + state.logp_next[self.lm.eos])
+            parts.append(self._lm_state(xs).logprob)
         return logsumexp(parts) if parts else float('-inf')
 
     def logprob(self, target):
-        """Compute log P(output = target exactly) from a single decompose call.
+        """Log P(output = target exactly).
 
         BFS-expands Q strings to find all source strings that produce exactly
-        target, then sums their string probabilities.  Only follows extensions
-        whose frontier has at least one buffer of length <= len(target)
-        (tighter than is_live, which allows buffer overshoot).
-
-        Requires self.lm to be set.
-
-        Args:
-            target: target string (tuple of symbols).
-
-        Returns:
-            Log probability that the transduced output equals target exactly.
+        target, then sums their string probabilities.
         """
         R, Q = self.decompose(target)
         N = len(target)
         parts = []
-        # R strings that produce exactly target
         for xs in R:
             if self.is_exact_member(xs, target):
-                state = self._lm_state(xs)
-                parts.append(state.logp + state.logp_next[self.lm.eos])
-        # BFS-expand Q strings: their extensions may also terminate with
-        # exact target.  Use exact-match liveness (buffer must not overshoot
-        # target) plus LM pruning to ensure termination.
+                parts.append(self._lm_state(xs).logprob)
         worklist = list(Q)
         visited = set(Q)
         while worklist:
             candidates = []
             for xs in worklist:
                 if self.is_exact_member(xs, target):
-                    state = self._lm_state(xs)
-                    parts.append(state.logp + state.logp_next[self.lm.eos])
+                    parts.append(self._lm_state(xs).logprob)
                 for x in self.source_alphabet:
                     next_xs = xs + (x,)
                     if next_xs not in visited and self._is_exact_live(next_xs, target, N):
@@ -139,22 +112,15 @@ class Incremental:
         return logp.normalize()
 
     def logp_next(self, target):
-        """Compute the next-symbol distribution over target_alphabet ∪ {EOS}.
+        """Next-symbol distribution over target_alphabet ∪ {EOS}.
 
-        Requires self.lm to be set (pass lm= to the constructor).
-
-        Args:
-            target: target string observed so far (tuple of symbols).
+        Single decompose call, joint BFS across all target symbols.
         """
         logp = LogVector()
-
         R, Q = self.decompose(target)
         seeds = R | Q
-
-        # Track all source strings encountered (seeds + extensions)
         all_source_strings = set(seeds)
 
-        # Next-symbol contributions: BFS-expand source strings for each y
         seen = set()
         queue = [(xs, y) for xs in seeds for y in self.reachable_outputs(xs, target)]
         seen.update(queue)
@@ -164,24 +130,23 @@ class Incremental:
             for xs, y in queue:
                 ty = target + (y,)
                 if self.is_cylinder(xs, ty):
-                    logp.logaddexp(y, self._lm_state(xs).logp)
+                    logp.logaddexp(y, self._lm_state(xs).logprefix)
                 else:
                     if self.is_member(xs, ty):
-                        state = self._lm_state(xs)
-                        logp.logaddexp(y, state.logp + state.logp_next[self.lm.eos])
-                    for x in self.source_alphabet:
+                        logp.logaddexp(y, self._lm_state(xs).logprob)
+                    for x in self.source_alphabet:    # TODO: how can we speed this loop up?
                         next_xs = xs + (x,)
-                        if (next_xs, y) not in seen and self.is_live(next_xs, ty) and self._lm_state(next_xs).logp > float('-inf'):
+                        if ((next_xs, y) not in seen
+                                and self.is_live(next_xs, ty)
+                                and self._lm_state(next_xs).logprefix > float('-inf')):
                             seen.add((next_xs, y))
                             next_queue.append((next_xs, y))
                             all_source_strings.add(next_xs)
-            queue = next_queue
+            queue = next_queue    # TODO: needs pruning!
 
-        # EOS: sum over all discovered source strings that produce exactly target
         for xs in all_source_strings:
             if self.is_exact_member(xs, target):
-                state = self._lm_state(xs)
-                logp.logaddexp(self.EOS, state.logp + state.logp_next[self.lm.eos])
+                logp.logaddexp(self.EOS, self._lm_state(xs).logprob)
 
         return logp.normalize()
 
@@ -217,7 +182,7 @@ class Incremental:
     def prune(self, candidates):
         if self.lm is None:
             return candidates
-        return [xs for xs in candidates if self._lm_state(xs).logp > float('-inf')]
+        return [xs for xs in candidates if self._lm_state(xs).logprefix > float('-inf')]
 
     def is_live(self, xs, target):
         N = len(target)

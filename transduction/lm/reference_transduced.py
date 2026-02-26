@@ -59,16 +59,16 @@ class ReferenceTransducedState(LMState[Token]):
     Supports:
         state >> y         -> new state (advance by target symbol y)
         state.logp_next[y] -> log P(y | target_so_far)
-        state.logp         -> cumulative log probability
+        state.logprefix         -> cumulative log probability
         state.eos          -> EOS token
     """
 
     def __init__(self, tlm: ReferenceTransducedLM, target: Str[Token],
-                 logp: float) -> None:
+                 logprefix: float) -> None:
         self.tlm = tlm
         self.eos = tlm.eos
         self._target = target
-        self.logp = logp
+        self.logprefix = logprefix
 
     def _score(self, prefix: Str[Token]) -> float:
         """Compute log P(output starts with prefix).
@@ -93,24 +93,24 @@ class ReferenceTransducedState(LMState[Token]):
         counter = 0
         for s in Q.start:
             lm0 = inner_lm.initial()
-            heapq.heappush(heap, (-lm0.logp, counter, s, lm0))
+            heapq.heappush(heap, (-lm0.logprefix, counter, s, lm0))
             counter += 1
 
         while heap:
             (_, _, dfa_s, lm_s) = heapq.heappop(heap)
 
             if dfa_s in Q.stop:
-                parts.append(lm_s.logp)
+                parts.append(lm_s.logprefix)
                 continue  # prefix probability covers all extensions
 
             if dfa_s in R.stop:
-                parts.append(lm_s.logp + lm_s.logp_next[inner_eos])
+                parts.append(lm_s.logprefix + lm_s.logp_next[inner_eos])
 
             for x, dfa_t in Q.arcs(dfa_s):
                 next_lm = lm_s >> x
-                if next_lm.logp == float('-inf'):
+                if next_lm.logprefix == float('-inf'):
                     continue
-                heapq.heappush(heap, (-next_lm.logp, counter, dfa_t, next_lm))
+                heapq.heappush(heap, (-next_lm.logprefix, counter, dfa_t, next_lm))
                 counter += 1
 
         return logsumexp(parts)
@@ -134,7 +134,7 @@ class ReferenceTransducedState(LMState[Token]):
         lp = self.logp_next[y]
         if lp == float('-inf'):
             raise ValueError(f"Symbol {y!r} has zero probability")
-        return ReferenceTransducedState(self.tlm, self._target + (y,), self.logp + lp)
+        return ReferenceTransducedState(self.tlm, self._target + (y,), self.logprefix + lp)
 
     def path(self) -> list[Token]:
         return list(self._target)
@@ -142,7 +142,7 @@ class ReferenceTransducedState(LMState[Token]):
     def _repr_html_(self) -> str:
         from transduction.viz import render_logp_next_html
         return render_logp_next_html(
-            'ReferenceTransducedState', self._target, self.logp, self.logp_next,
+            'ReferenceTransducedState', self._target, self.logprefix, self.logp_next,
         )
 
     def __repr__(self) -> str:
@@ -181,11 +181,11 @@ class BruteForceTransducedLM(LM[Token]):
 class BruteForceTransducedState(LMState[Token]):
 
     def __init__(self, tlm: BruteForceTransducedLM, target: Str[Token],
-                 logp: float) -> None:
+                 logprefix: float) -> None:
         self.tlm = tlm
         self.eos = tlm.eos
         self._target = target
-        self.logp = logp
+        self.logprefix = logprefix
 
     def _prefix_mass(self, prefix: Str[Token]) -> float:
         n = len(prefix)
@@ -215,7 +215,7 @@ class BruteForceTransducedState(LMState[Token]):
         lp = self.logp_next[y]
         if lp == float('-inf'):
             raise ValueError(f"Symbol {y!r} has zero probability")
-        return BruteForceTransducedState(self.tlm, self._target + (y,), self.logp + lp)
+        return BruteForceTransducedState(self.tlm, self._target + (y,), self.logprefix + lp)
 
     def path(self) -> list[Token]:
         return list(self._target)

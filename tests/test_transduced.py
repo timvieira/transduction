@@ -34,9 +34,9 @@ def copy_fst(alphabet):
 
 class TinyState(LMState):
     """Minimal LM state for testing with a fixed token distribution."""
-    def __init__(self, probs, logp=0.0):
+    def __init__(self, probs, logprefix=0.0):
         self._probs = probs
-        self.logp = logp
+        self.logprefix = logprefix
 
     @property
     def logp_next(self):
@@ -48,7 +48,7 @@ class TinyState(LMState):
 
     def __rshift__(self, token):
         lp = self._probs.get(token, -np.inf)
-        return TinyState(self._probs, self.logp + lp)
+        return TinyState(self._probs, self.logprefix + lp)
 
 
 class TinyLM(LM):
@@ -62,10 +62,10 @@ class TinyLM(LM):
 class FiniteLMState(LMState):
     """State for a finite-support LM. Computes exact conditionals from the trie."""
 
-    def __init__(self, lm, prefix, logp):
+    def __init__(self, lm, prefix, logprefix):
         self._lm = lm
         self._prefix = prefix
-        self.logp = logp
+        self.logprefix = logprefix
         self.eos = lm.eos
 
     def _prefix_mass(self, prefix):
@@ -98,7 +98,7 @@ class FiniteLMState(LMState):
         if token == self.eos:
             raise ValueError("Cannot advance past EOS")
         lp = self.logp_next[token]
-        return FiniteLMState(self._lm, self._prefix + (token,), self.logp + lp)
+        return FiniteLMState(self._lm, self._prefix + (token,), self.logprefix + lp)
 
 
 class FiniteLM(LM):
@@ -128,7 +128,7 @@ def brute_force_pushforward(inner_lm, fst, target, max_source_len=8):
     def source_logp(source):
         """Compute log P_inner(source) including EOS."""
         state = inner_lm(source)
-        return state.logp + state.logp_next[state.eos]
+        return state.logprefix + state.logp_next[state.eos]
 
     # Group by source to deduplicate outputs (relation() may yield
     # duplicate pairs when multiple state-paths produce the same strings).
@@ -224,7 +224,7 @@ class TestTransducedLM:
         state2 = state1 >> 'b'
 
         expected = lp1 + lp2
-        assert state2.logp == pytest.approx(expected, abs=1e-10)
+        assert state2.logprefix == pytest.approx(expected, abs=1e-10)
 
     def test_small_fst_nontrivial(self, char_ngram_lm):
         """TransducedLM with examples.small() produces valid distributions."""
@@ -292,12 +292,12 @@ class TestTransducedLM:
         assert list(state.path) == ['a', 'b', 'a']
 
     def test_logp_starts_at_zero(self, char_ngram_lm):
-        """Initial state has logp = 0."""
+        """Initial state has logprefix = 0."""
         fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
         fst = copy_fst(fst_alpha)
         tlm = TransducedLM(char_ngram_lm, fst, K=100)
         state = tlm.initial()
-        assert state.logp == 0.0
+        assert state.logprefix == 0.0
 
     def test_repr(self, char_ngram_lm):
         """Repr doesn't crash."""
@@ -312,9 +312,9 @@ class TestTransducedLM:
         """With identity/copy FST, P(EOS) from TransducedLM should match inner LM."""
 
         class TinyState:
-            def __init__(self, probs, logp=0.0, history=()):
+            def __init__(self, probs, logprefix=0.0, history=()):
                 self._probs = probs
-                self.logp = logp
+                self.logprefix = logprefix
                 self.history = history
                 self.eos = '<EOS>'
 
@@ -324,7 +324,7 @@ class TestTransducedLM:
 
             def __rshift__(self, token):
                 lp = self._probs.get(token, -np.inf)
-                return TinyState(self._probs, self.logp + lp,
+                return TinyState(self._probs, self.logprefix + lp,
                                  history=(self.history, token))
 
         class TinyLM(LM):
@@ -460,7 +460,7 @@ class TestLMState:
         state = ngram_lm.initial()
         s1 = state >> ord('a') >> ord('b')
         s2 = state(b'ab')
-        assert s1.logp == pytest.approx(s2.logp)
+        assert s1.logprefix == pytest.approx(s2.logprefix)
 
     def test_transduced_advance(self, char_ngram_lm):
         """__call__ on TransducedState matches sequential >>."""
@@ -470,7 +470,7 @@ class TestLMState:
         state = tlm.initial()
         s1 = state >> 'a' >> 'b'
         s2 = state(['a', 'b'])
-        assert s1.logp == pytest.approx(s2.logp)
+        assert s1.logprefix == pytest.approx(s2.logprefix)
 
     def test_advance_empty(self, ngram_lm):
         """__call__ with empty sequence returns same state."""
@@ -596,7 +596,7 @@ class TestFusedTransducedLM:
         state2 = state1 >> 'b'
 
         expected = lp1 + lp2
-        assert state2.logp == pytest.approx(expected, abs=1e-10)
+        assert state2.logprefix == pytest.approx(expected, abs=1e-10)
 
     def test_eos_normalization(self):
         """logp_next (including EOS) should sum to approximately 1."""
@@ -614,12 +614,12 @@ class TestFusedTransducedLM:
             f"Probabilities should sum to ~1 (log ~0), got log-sum={total:.6f}"
 
     def test_logp_starts_at_zero(self, char_ngram_lm):
-        """Initial state has logp = 0."""
+        """Initial state has logprefix = 0."""
         fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
         fst = copy_fst(fst_alpha)
         fused = FusedTransducedLM(char_ngram_lm, fst)
         state = fused.initial()
-        assert state.logp == 0.0
+        assert state.logprefix == 0.0
 
     def test_path_recovery(self, char_ngram_lm):
         """Path recovery returns the correct sequence of target symbols."""
@@ -870,7 +870,7 @@ class TestBPEStyleFST:
         state = tlm.initial()
         for y in ('a', 'a', 'b', 'b'):
             state = state >> y
-        assert state.logp > -np.inf
+        assert state.logprefix > -np.inf
 
     def test_fused_multi_token_sequence(self):
         """FusedTransducedLM can decode two full BPE tokens (x then y)."""
@@ -881,7 +881,7 @@ class TestBPEStyleFST:
         state = tlm.initial()
         for y in ('a', 'a', 'b', 'b'):
             state = state >> y
-        assert state.logp > -np.inf
+        assert state.logprefix > -np.inf
 
 
 # ---------------------------------------------------------------------------
@@ -1197,9 +1197,9 @@ class TestReferenceTransducedLM:
     # -- Basic properties ---------------------------------------------------
 
     def test_logp_starts_at_zero(self):
-        """Initial state has logp = 0."""
+        """Initial state has logprefix = 0."""
         tlm = ReferenceTransducedLM(_finite_inner_lm(), _mapping_fst())
-        assert tlm.initial().logp == 0.0
+        assert tlm.initial().logprefix == 0.0
 
     def test_normalization_mapping_fst(self):
         """logp_next sums to exactly 1 at the initial state."""
@@ -1236,7 +1236,7 @@ class TestReferenceTransducedLM:
         state1 = state0 >> 'a'
         lp2 = state1.logp_next['b']
         state2 = state1 >> 'b'
-        assert state2.logp == pytest.approx(lp1 + lp2, abs=1e-10)
+        assert state2.logprefix == pytest.approx(lp1 + lp2, abs=1e-10)
 
     # -- Exact value tests --------------------------------------------------
 
@@ -1326,7 +1326,7 @@ class TestReferenceTransducedLM:
         tlm = ReferenceTransducedLM(
             _finite_inner_lm(), _bounded_copy_fst(['a', 'b'], 2))
         state = tlm >> 'a' >> 'b'
-        complete_logp = state.logp + state.logp_next['<EOS>']
+        complete_logp = state.logprefix + state.logp_next['<EOS>']
         assert complete_logp == pytest.approx(np.log(0.15), abs=1e-10)
 
     # -- EOS and error handling ---------------------------------------------
@@ -1492,7 +1492,7 @@ class TestReferenceTransducedLM:
             lp = state.logp_next[y]
             cumulative += lp
             state = state >> y
-            assert state.logp == pytest.approx(cumulative, abs=1e-10)
+            assert state.logprefix == pytest.approx(cumulative, abs=1e-10)
         # Final state should have P(EOS) = 1
         assert state.logp_next['<EOS>'] == pytest.approx(0.0, abs=1e-10)
 
@@ -1505,8 +1505,8 @@ class TestReferenceTransducedLM:
         state = state >> 'y'
         # Target 'xy' corresponds to source 'a' with P = 0.3.
         # Pushforward total = 0.5, so P_target('xy') = 0.3/0.5 = 0.6.
-        # Complete string logp = log(0.6).
-        complete_logp = state.logp + state.logp_next['<EOS>']
+        # Complete string logprob = log(0.6).
+        complete_logp = state.logprefix + state.logp_next['<EOS>']
         assert complete_logp == pytest.approx(np.log(0.6), abs=1e-10)
 
 

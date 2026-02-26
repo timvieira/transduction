@@ -339,11 +339,11 @@ class CharacterBeamState(LMState):
 
     eos = None
 
-    def __init__(self, cb: CharacterBeam, context: bytes, logp: float,
+    def __init__(self, cb: CharacterBeam, context: bytes, logprefix: float,
                  candidates: _Bundle) -> None:
         self.cb = cb
         self.context = context
-        self.logp = logp
+        self.logprefix = logprefix
         self._candidates = candidates
 
     @cached_property
@@ -357,7 +357,7 @@ class CharacterBeamState(LMState):
         next_candidates = self._candidates.extend.prune() >> byte_val
         return CharacterBeamState(
             self.cb, self.context + bytes([byte_val]),
-            self.logp + logp_delta, next_candidates,
+            self.logprefix + logp_delta, next_candidates,
         )
 
 

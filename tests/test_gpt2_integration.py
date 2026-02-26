@@ -148,7 +148,7 @@ class TestCharacterBeamGPT2:
             if byte_val in state.logp_next:
                 total_logp += state.logp_next[byte_val]
                 state = state >> byte_val
-        assert np.isclose(state.logp, total_logp, rtol=1e-5)
+        assert np.isclose(state.logprefix, total_logp, rtol=1e-5)
 
 
 # ---------------------------------------------------------------------------
