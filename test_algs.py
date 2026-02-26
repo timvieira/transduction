@@ -384,6 +384,12 @@ def _run_logp_test(fst, max_source_len=None, target_depth=None, seed=42, atol=1e
     ref_tlm = BruteForceTransducedLM(lm._string_probs, fst, eos=lm.eos)
 
     def check(target):
+        # Verify decompose_next matches per-symbol decompose calls.
+        remainders, quotients, _ = inc.decompose_next(target)
+        for y in set(quotients) | set(remainders):
+            assert (remainders[y], quotients[y]) == inc.decompose(target + (y,)), \
+                f"target={target} symbol={y}: decompose_next != decompose"
+
         got = inc.logp_next(target)
         ref_logp_next = ref_tlm(target).logp_next
         for y in target_alphabet:

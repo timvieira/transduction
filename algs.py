@@ -157,16 +157,17 @@ class Incremental:
         logp[self.EOS] = self.logprob(target)
         return logp.normalize()
 
-    def logp_next(self, target):
-        """Next-symbol distribution over target_alphabet ∪ {EOS}.
+    def decompose_next(self, target):
+        """Decompose T⁻¹(target·y·Σ*) for all next target symbols y at once.
 
         Single-worklist BFS over source strings, checking all reachable
         target symbols per string in one pass — directly mirroring peekaboo's
         per-state multi-symbol classification.  When xs is a cylinder for y,
         the entire subtree is absorbed and extension is skipped for all symbols.
 
-        Correctness: equivalent to logp_next_bruteforce (one logprefix/logprob
-        call per symbol), but shares source-string discovery across symbols.
+        Returns (remainders, quotients, preimage) where:
+        - remainders[y] = R(target·y), quotients[y] = Q(target·y)
+        - preimage = {xs : T(xs) = target exactly}
 
         Functional-FST cylinder uniqueness: a source string can be a cylinder
         for at most one target symbol y.  Once found to be a cylinder for y,
@@ -185,7 +186,6 @@ class Incremental:
         target·z·Σ* are disjoint.  But xs and all its extensions are in both
         preimages — contradiction.
         """
-        logp = LogVector()
         R, Q = self.decompose(target)
         seeds = R | Q
         all_source_strings = set(seeds)
@@ -196,8 +196,8 @@ class Incremental:
         non_cylinders = set(R)
 
         from collections import defaultdict
-        cylinders = defaultdict(set)
-        members = defaultdict(set)
+        quotients = defaultdict(set)    # y → Q(target·y)
+        remainders = defaultdict(set)   # y → R(target·y)
 
         worklist = set(seeds)
         while worklist:
@@ -211,11 +211,11 @@ class Incremental:
                     if xs not in non_cylinders and self.is_cylinder(xs, ty):
                         assert continuous is None, \
                             f"cylinder for both {continuous!r} and {y!r} — non-functional?"
-                        cylinders[y].add(xs)
+                        quotients[y].add(xs)
                         continuous = y
                         continue
                     if self.is_member(xs, ty):
-                        members[y].add(xs)
+                        remainders[y].add(xs)
 
                 if continuous is not None:
                     continue   # absorbed — skip extension for all symbols
@@ -228,21 +228,26 @@ class Incremental:
 
             worklist = self.prune(candidates)
 
-        for y in cylinders:
-            for xs in cylinders[y]:
+        preimage = {xs for xs in all_source_strings
+                    if self.is_exact_member(xs, target)}
+
+        return remainders, quotients, preimage
+
+    def logp_next(self, target):
+        """Next-symbol distribution over target_alphabet ∪ {EOS}.
+
+        Correctness: equivalent to logp_next_bruteforce (one logprefix/logprob
+        call per symbol), but shares source-string discovery across symbols.
+        """
+        remainders, quotients, preimage = self.decompose_next(target)
+        logp = LogVector()
+        for y in set(quotients) | set(remainders):
+            for xs in quotients[y]:
                 logp.logaddexp(y, self._lm_state(xs).logprefix)
-        for y in members:
-            for xs in members[y]:
+            for xs in remainders[y]:
                 logp.logaddexp(y, self._lm_state(xs).logprob)
-
-        for y in set(cylinders) | set(members):
-            assert (members[y], cylinders[y]) == self.decompose(target + (y,))
-
-        # EOS: check all discovered source strings for exact match with target.
-        for xs in all_source_strings:
-            if self.is_exact_member(xs, target):
-                logp.logaddexp(self.EOS, self._lm_state(xs).logprob)
-
+        for xs in preimage:
+            logp.logaddexp(self.EOS, self._lm_state(xs).logprob)
         return logp.normalize()
 
     @memoize
