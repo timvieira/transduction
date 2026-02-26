@@ -204,6 +204,10 @@ class Incremental:
             candidates = set()
             for xs in worklist:
 
+                # Safe: if xs is a cylinder for target·y, every extension
+                # produces output starting with target·y (strictly longer
+                # than target), so no extension can be an exact preimage of
+                # target.
                 if self.is_exact_member(xs, target):
                     preimage.add(xs)
 
