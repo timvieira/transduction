@@ -10,7 +10,7 @@ Naming conventions (automata-theory style):
 """
 import numpy as np
 from transduction.fst import EPSILON
-from transduction.util import validate_target, LogVector, LogDistr, logsumexp
+from transduction.util import validate_target, LogVector, LogDistr, logsumexp, memoize
 
 
 class Incremental:
@@ -22,6 +22,7 @@ class Incremental:
         self.target_alphabet = fst.B - {EPSILON}
         self.EOS = EOS   # sentinel for end-of-string
 
+    @memoize
     def decompose(self, target):
         validate_target(target, self.target_alphabet)
 
@@ -49,6 +50,13 @@ class Incremental:
 
         return (remainder, quotient)
 
+    @memoize
+    def _lm_state(self, xs):
+        """Return LMState for source string xs, caching incrementally."""
+        if len(xs) == 0:
+            return self.lm.initial()
+        return self._lm_state(xs[:-1]) >> xs[-1]
+
     def logprefix(self, target):
         """Compute log P(output starts with target) from a single decompose call.
 
@@ -60,14 +68,13 @@ class Incremental:
         Returns:
             Log probability that the transduced output starts with target.
         """
-        lm = self.lm
         R, Q = self.decompose(target)
         parts = []
         for xs in Q:
-            parts.append(lm(xs).logp)
+            parts.append(self._lm_state(xs).logp)
         for xs in R:
-            state = lm(xs)
-            parts.append(state.logp + state.logp_next[lm.eos])
+            state = self._lm_state(xs)
+            parts.append(state.logp + state.logp_next[self.lm.eos])
         return logsumexp(parts) if parts else float('-inf')
 
     def logprob(self, target):
@@ -86,15 +93,14 @@ class Incremental:
         Returns:
             Log probability that the transduced output equals target exactly.
         """
-        lm = self.lm
         R, Q = self.decompose(target)
         N = len(target)
         parts = []
         # R strings that produce exactly target
         for xs in R:
             if self.is_exact_member(xs, target):
-                state = lm(xs)
-                parts.append(state.logp + state.logp_next[lm.eos])
+                state = self._lm_state(xs)
+                parts.append(state.logp + state.logp_next[self.lm.eos])
         # BFS-expand Q strings: their extensions may also terminate with
         # exact target.  Use exact-match liveness (buffer must not overshoot
         # target) plus LM pruning to ensure termination.
@@ -104,8 +110,8 @@ class Incremental:
             candidates = []
             for xs in worklist:
                 if self.is_exact_member(xs, target):
-                    state = lm(xs)
-                    parts.append(state.logp + state.logp_next[lm.eos])
+                    state = self._lm_state(xs)
+                    parts.append(state.logp + state.logp_next[self.lm.eos])
                 for x in self.source_alphabet:
                     next_xs = xs + (x,)
                     if next_xs not in visited and self._is_exact_live(next_xs, target, N):
@@ -131,7 +137,7 @@ class Incremental:
             logp[y] = self.logprefix(target + (y,))
         logp[self.EOS] = self.logprob(target)
         return logp.normalize()
-    
+
     def logp_next(self, target):
         """Compute the next-symbol distribution over target_alphabet ∪ {EOS}.
 
@@ -140,15 +146,7 @@ class Incremental:
         Args:
             target: target string observed so far (tuple of symbols).
         """
-        lm = self.lm
         logp = LogVector()
-
-        def logprefix(xs):
-            return lm(xs).logp
-
-        def logprob(xs):
-            state = lm(xs)
-            return state.logp + state.logp_next[lm.eos]
 
         R, Q = self.decompose(target)
         seeds = R | Q
@@ -166,13 +164,14 @@ class Incremental:
             for xs, y in queue:
                 ty = target + (y,)
                 if self.is_cylinder(xs, ty):
-                    logp.logaddexp(y, logprefix(xs))
+                    logp.logaddexp(y, self._lm_state(xs).logp)
                 else:
                     if self.is_member(xs, ty):
-                        logp.logaddexp(y, logprob(xs))
+                        state = self._lm_state(xs)
+                        logp.logaddexp(y, state.logp + state.logp_next[self.lm.eos])
                     for x in self.source_alphabet:
                         next_xs = xs + (x,)
-                        if (next_xs, y) not in seen and self.is_live(next_xs, ty) and logprefix(next_xs) > float('-inf'):
+                        if (next_xs, y) not in seen and self.is_live(next_xs, ty) and self._lm_state(next_xs).logp > float('-inf'):
                             seen.add((next_xs, y))
                             next_queue.append((next_xs, y))
                             all_source_strings.add(next_xs)
@@ -181,24 +180,19 @@ class Incremental:
         # EOS: sum over all discovered source strings that produce exactly target
         for xs in all_source_strings:
             if self.is_exact_member(xs, target):
-                logp.logaddexp(self.EOS, logprob(xs))
+                state = self._lm_state(xs)
+                logp.logaddexp(self.EOS, state.logp + state.logp_next[self.lm.eos])
 
         return logp.normalize()
 
-    # DO NOT INLINE THIS METHOD THIS A PLACEHOLDER FOR A MORE PRECISE IMPLEMENTATION.
     def reachable_outputs(self, xs, target):
-        return self.target_alphabet
-
-    def reachable_outputs_precise(self, xs, target):
-        """Target symbols (and EOS) reachable from source string xs given target prefix."""
+        """Target symbols reachable from source string xs given target prefix."""
         result = set()
         F = self.run(xs, target)
         N = len(target)
         for s, ys in F:
             if len(ys) > N and ys[:N] == target:
                 result.add(ys[N])
-            if self.fst.is_final(s) and len(ys) == N and ys == target:
-                result.add(self.EOS)
             for y in self.target_alphabet:
                 extended = target + (y,)
                 M = N + 1
@@ -223,7 +217,7 @@ class Incremental:
     def prune(self, candidates):
         if self.lm is None:
             return candidates
-        return [xs for xs in candidates if self.lm(xs).logp > float('-inf')]
+        return [xs for xs in candidates if self._lm_state(xs).logp > float('-inf')]
 
     def is_live(self, xs, target):
         N = len(target)
@@ -236,6 +230,7 @@ class Incremental:
         N = len(target)
         return any(self.fst.is_final(s) for (s, ys) in self.run(xs, target) if ys[:N] == target)
 
+    @memoize
     def is_cylinder(self, xs, target):
 
         N = len(target)
@@ -268,11 +263,12 @@ class Incremental:
 
         return True
 
+    @memoize
     def run(self, xs, target):
         if len(xs) == 0:
-            return self.closure({(s, ()) for s in self.fst.start}, target)
+            return frozenset(self.closure({(s, ()) for s in self.fst.start}, target))
         else:
-            return self.step(self.run(xs[:-1], target), xs[-1], target)
+            return frozenset(self.step(self.run(xs[:-1], target), xs[-1], target))
 
     def step(self, F, x, target):
         assert x != EPSILON

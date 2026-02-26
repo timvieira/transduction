@@ -147,3 +147,78 @@ class ReferenceTransducedState(LMState[Token]):
 
     def __repr__(self) -> str:
         return f'ReferenceTransducedState(target={self._target!r})'
+
+
+class BruteForceTransducedLM(LM[Token]):
+    """Exact transduced LM by exhaustive enumeration of source strings.
+
+    Precomputes the pushforward distribution over output strings:
+        P_T(output) = Σ_{xs : output ∈ T(xs)} P_lm(xs)
+
+    Then derives conditional next-symbol distributions from that.
+    Requires ``source_probs``, a finite mapping from source strings to
+    probabilities.
+    """
+
+    def __init__(self, source_probs: dict[Str[Token], float],
+                 fst: FST[Any, Any],
+                 eos: Token = '<EOS>') -> None:  # type: ignore[assignment]
+        self.eos = eos
+        self._target_alphabet = fst.B - {EPSILON}
+        # Pushforward: output string -> total probability mass
+        output_probs: dict[Str[Token], float] = {}
+        for xs, prob in source_probs.items():
+            if prob <= 0:
+                continue
+            for output in fst.transduce(xs):
+                output_probs[output] = output_probs.get(output, 0.0) + prob
+        self._output_probs = output_probs
+
+    def initial(self) -> BruteForceTransducedState:
+        return BruteForceTransducedState(self, (), 0.0)
+
+
+class BruteForceTransducedState(LMState[Token]):
+
+    def __init__(self, tlm: BruteForceTransducedLM, target: Str[Token],
+                 logp: float) -> None:
+        self.tlm = tlm
+        self.eos = tlm.eos
+        self._target = target
+        self.logp = logp
+
+    def _prefix_mass(self, prefix: Str[Token]) -> float:
+        n = len(prefix)
+        return sum(p for out, p in self.tlm._output_probs.items()
+                   if len(out) >= n and out[:n] == prefix)
+
+    @cached_property
+    def logp_next(self) -> LogDistr[Token]:
+        import math
+        target = self._target
+        Z = self._prefix_mass(target)
+        if Z <= 0:
+            return LogDistr({self.eos: 0.0})
+        scores: dict[Token, float] = {}
+        for y in self.tlm._target_alphabet:
+            mass = self._prefix_mass(target + (y,))
+            if mass > 0:
+                scores[y] = math.log(mass / Z)
+        eos_mass = self.tlm._output_probs.get(target, 0.0)
+        if eos_mass > 0:
+            scores[self.eos] = math.log(eos_mass / Z)
+        return LogDistr(scores)
+
+    def __rshift__(self, y: Token) -> BruteForceTransducedState:
+        if y == self.eos:
+            raise ValueError("Cannot advance past EOS")
+        lp = self.logp_next[y]
+        if lp == float('-inf'):
+            raise ValueError(f"Symbol {y!r} has zero probability")
+        return BruteForceTransducedState(self.tlm, self._target + (y,), self.logp + lp)
+
+    def path(self) -> list[Token]:
+        return list(self._target)
+
+    def __repr__(self) -> str:
+        return f'BruteForceTransducedState(target={self._target!r})'

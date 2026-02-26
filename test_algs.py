@@ -6,7 +6,7 @@ from functools import cached_property
 from transduction import examples, EPSILON, Precover, DecompositionResult, FST
 from transduction.util import set_memory_limit, LogDistr, logsumexp
 from transduction.lm.base import LM, LMState
-from transduction.lm.reference_transduced import ReferenceTransducedLM
+from transduction.lm.reference_transduced import ReferenceTransducedLM, BruteForceTransducedLM
 from algs import Incremental
 
 set_memory_limit(4)
@@ -365,7 +365,7 @@ def _random_finite_lm(alphabet, max_len, seed=0):
 
 
 def _run_logp_test(fst, max_source_len=None, target_depth=None, seed=42, atol=1e-8):
-    """Test logp_next against ReferenceTransducedLM for target prefixes up to depth."""
+    """Test logp_next against BruteForceTransducedLM for target prefixes up to depth."""
     source_alphabet = fst.A - {EPSILON}
     target_alphabet = fst.B - {EPSILON}
 
@@ -381,7 +381,7 @@ def _run_logp_test(fst, max_source_len=None, target_depth=None, seed=42, atol=1e
 
     lm = _random_finite_lm(source_alphabet, max_len=max_source_len, seed=seed)
     inc = Incremental(fst, lm=lm)
-    ref_tlm = ReferenceTransducedLM(lm, fst)
+    ref_tlm = BruteForceTransducedLM(lm._string_probs, fst, eos=lm.eos)
 
     def check(target):
         got = inc.logp_next(target)
