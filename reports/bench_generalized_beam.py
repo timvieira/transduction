@@ -115,7 +115,7 @@ for vs in VOCAB_SIZES:
     for seq in train_ids:
         if all(tid in used_set for tid in seq):
             try:
-                target_bytes = list(fst_v.transduce(seq))[:NUM_TARGET_BYTES]
+                target_bytes = list(next(fst_v.transduce(seq)))[:NUM_TARGET_BYTES]
                 break
             except ValueError:
                 continue
@@ -124,7 +124,7 @@ for vs in VOCAB_SIZES:
         for tid in train_used:
             if tid in used_set:
                 try:
-                    target_bytes.extend(fst_v.transduce([tid]))
+                    target_bytes.extend(next(fst_v.transduce([tid])))
                 except ValueError:
                     continue
                 if len(target_bytes) >= NUM_TARGET_BYTES:
@@ -207,7 +207,7 @@ try:
     print(f"PTB FST built in {ptb_build_time:.1f}s: {len(ptb_fst.states)} states")
 
     ptb_text = "The quick brown fox jumps over the lazy dog."
-    ptb_target_seq = list(ptb_fst.transduce(ptb_text.encode('utf-8')))
+    ptb_target_seq = list(next(ptb_fst.transduce(ptb_text.encode('utf-8'))))
     ptb_source_alpha = ptb_fst.A - {EPSILON}
     ptb_inner_lm = CharNgramLM.train(
         [list(s.encode('utf-8')) for s in train_sentences],

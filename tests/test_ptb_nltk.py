@@ -21,7 +21,7 @@ from transduction.applications.wikitext import load_wikitext, wikitext_detokeniz
 def fst_tokenize(fst, text):
     """Tokenize text using the FST."""
     try:
-        output = fst.transduce(text.encode('utf-8'))
+        output = next(fst.transduce(text.encode('utf-8')))
     except ValueError:
         return None  # FST rejected input
     return decode_ptb_output(output).split()

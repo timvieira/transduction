@@ -132,7 +132,7 @@ def load_wikitext_paragraphs_ptb(fst, split, n=4, max_chars=None):
             detokenized = detokenized[:max_chars]
 
         try:
-            transduced = fst.transduce(detokenized.encode('utf-8'))
+            transduced = next(fst.transduce(detokenized.encode('utf-8')))
             paragraphs.append(transduced)
             original.append(detokenized)
         except ValueError:
@@ -309,7 +309,7 @@ def main(n_pgs=1, max_chars=None, max_prefix_len=None,
     # Sanity test
     test_str = "Hello, world!"
     try:
-        test_output = fst.transduce(test_str.encode('utf-8'))
+        test_output = next(fst.transduce(test_str.encode('utf-8')))
         print(f"\n  Sanity test: '{test_str}' -> '{decode_ptb_output(test_output)}'")
     except Exception as e:
         print(f"\n  Sanity test FAILED: {e}")

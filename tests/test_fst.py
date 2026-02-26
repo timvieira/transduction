@@ -157,9 +157,9 @@ def test_transduce():
     fst.add_arc(0, 'a', 'x', 0)
     fst.add_arc(0, 'b', 'y', 0)
 
-    assert fst.transduce('ab') == ('x', 'y')
-    assert fst.transduce('ba') == ('y', 'x')
-    assert fst.transduce('') == ()
+    assert set(fst.transduce('ab')) == {('x', 'y')}
+    assert set(fst.transduce('ba')) == {('y', 'x')}
+    assert set(fst.transduce('')) == {()}
 
 
 def test_transduce_with_epsilon():
@@ -170,19 +170,18 @@ def test_transduce_with_epsilon():
     fst.add_arc(1, EPSILON, 'x', 2)
     fst.add_stop(2)
 
-    result = fst.transduce('a')
-    assert result == ('x',)
+    result = set(fst.transduce('a'))
+    assert result == {('x',)}
 
 
 def test_transduce_no_path():
-    """ValueError when no accepting path exists."""
+    """Empty iterator when no accepting path exists."""
     fst = FST()
     fst.add_start(0)
     fst.add_stop(1)
     fst.add_arc(0, 'a', 'x', 1)
 
-    with pytest.raises(ValueError, match="No accepting path"):
-        fst.transduce('b')
+    assert set(fst.transduce('b')) == set()
 
 
 def test_transduce_multi_symbol_output():
@@ -192,7 +191,7 @@ def test_transduce_multi_symbol_output():
     fst.add_stop(0)
     fst.add_arc(0, 'a', 'hello', 0)
 
-    assert fst.transduce('a') == ('hello',)
+    assert set(fst.transduce('a')) == {('hello',)}
 
 
 # ── Graph algorithms ──────────────────────────────────────────────────────────
@@ -675,9 +674,7 @@ def test_transduce_nondeterministic():
     fst.add_arc(1, EPSILON, EPSILON, 2)
     fst.add_arc(0, 'a', 'y', 2)
 
-    result = fst.transduce('a')
-    # BFS finds the shorter path first
-    assert result in [('x',), ('y',)]
+    assert set(fst.transduce('a')) == {('x',), ('y',)}
 
 
 # ── Helper functions (lines 877-881, 886-887) ────────────────────────────────

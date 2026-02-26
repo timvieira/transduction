@@ -138,7 +138,7 @@ for vs in VOCAB_SIZES:
     for seq in train_ids:
         if all(tid in used_set for tid in seq):
             try:
-                target_bytes = list(fst_v.transduce(seq))[:NUM_TARGET_BYTES]
+                target_bytes = list(next(fst_v.transduce(seq)))[:NUM_TARGET_BYTES]
                 break
             except ValueError:
                 continue
@@ -147,7 +147,7 @@ for vs in VOCAB_SIZES:
         for tid in train_used:
             if tid in used_set:
                 try:
-                    target_bytes.extend(fst_v.transduce([tid]))
+                    target_bytes.extend(next(fst_v.transduce([tid])))
                 except ValueError:
                     continue
                 if len(target_bytes) >= NUM_TARGET_BYTES:
@@ -270,7 +270,7 @@ target_bytes_q = None
 for seq in train_ids:
     if all(tid in used_set_q for tid in seq):
         try:
-            target_bytes_q = list(fst_q.transduce(seq))[:NUM_TARGET_BYTES]
+            target_bytes_q = list(next(fst_q.transduce(seq)))[:NUM_TARGET_BYTES]
             break
         except ValueError:
             continue

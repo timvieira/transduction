@@ -96,6 +96,7 @@ def triplets_of_doom():
     return m
 
 
+# Warning: sam.transduce(('a', 'b')) 
 def samuel_example():
     sam = FST()
 

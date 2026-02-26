@@ -507,29 +507,21 @@ class FST(Generic[A, B]):
                 new_ys = (*ys, y) if y != EPSILON else ys
                 worklist.append((j, new_xs, new_ys))
 
-    def transduce(self, input_seq: Sequence[A]) -> Str[B]:
-        """Transduce input_seq through this FST via BFS NFA simulation.
-        Returns one accepting output tuple, or raises ValueError if no
-        accepting path exists.
-        """
-        queue: deque[tuple[State, int]] = deque()
-        parent: dict[tuple[State, int], tuple[tuple[State, int], B] | None] = {}
+    def transduce(self, input_seq: Sequence[A]) -> Iterator[Str[B]]:
+        """Yield all distinct output strings for input_seq."""
+        seen: set[Str[B]] = set()
+        queue: deque[tuple[State, int, Str[B]]] = deque()
+        visited: set[tuple[State, int, Str[B]]] = set()
         for s in self.start:
-            key = (s, 0)
-            parent[key] = None
-            queue.append(key)
+            entry = (s, 0, ())
+            visited.add(entry)
+            queue.append(entry)
         while queue:
-            state, pos = queue.popleft()
+            state, pos, output = queue.popleft()
             if pos == len(input_seq) and state in self.stop:
-                output: list[B] = []
-                k = (state, pos)
-                while parent[k] is not None:
-                    prev, out_sym = parent[k]  # pyright: ignore[reportOptionalMemberAccess]
-                    if out_sym != EPSILON:
-                        output.append(out_sym)
-                    k = prev
-                output.reverse()
-                return tuple(output)
+                if output not in seen:
+                    seen.add(output)
+                    yield output
             for a, b, j in self.arcs(state):
                 if a == EPSILON:
                     new_pos = pos
@@ -537,11 +529,11 @@ class FST(Generic[A, B]):
                     new_pos = pos + 1
                 else:
                     continue
-                key = (j, new_pos)
-                if key not in parent:
-                    parent[key] = ((state, pos), b)
-                    queue.append(key)
-        raise ValueError("No accepting path found")
+                new_output = output if b == EPSILON else output + (b,)
+                entry = (j, new_pos, new_output)
+                if entry not in visited:
+                    visited.add(entry)
+                    queue.append(entry)
 
     def is_functional(self) -> tuple[bool, tuple[Str[A], Str[B], Str[B]] | None]:
         """Check whether this FST defines a (partial) function.

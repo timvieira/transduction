@@ -74,7 +74,7 @@ bpe_inner_lm = CharNgramLM.train(train_ids, n=3, alpha=0.5, alphabet=bpe_source_
 
 text = "The quick brown fox jumps over the lazy dog."
 bpe_token_ids = tokenizer.encode(text)
-bpe_target_seq = list(bpe_fst.transduce(bpe_token_ids))
+bpe_target_seq = list(next(bpe_fst.transduce(bpe_token_ids)))
 
 print(f'\nBPE FST: {len(bpe_fst.states)} states, |A|={len(bpe_fst.A)}, |B|={len(bpe_fst.B)}')
 print(f'BPE target: {len(bpe_target_seq)} symbols')
@@ -89,7 +89,7 @@ ptb_build_time = time.perf_counter() - t0
 print(f'PTB FST built in {ptb_build_time:.1f}s: {len(ptb_fst.states)} states')
 
 ptb_text = "The quick brown fox jumps over the lazy dog."
-ptb_target_seq = list(ptb_fst.transduce(ptb_text.encode('utf-8')))
+ptb_target_seq = list(next(ptb_fst.transduce(ptb_text.encode('utf-8'))))
 ptb_source_alpha = ptb_fst.A - {EPSILON}
 ptb_inner_lm = CharNgramLM.train(
     [list(s.encode('utf-8')) for s in train_sentences],
