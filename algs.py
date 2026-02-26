@@ -180,6 +180,11 @@ class Incremental:
         # Track all source strings encountered so we can check EOS at the end.
         all_source_strings = set(seeds)
 
+        # R strings are not cylinders for target, hence not for any target·y
+        # (target·y is strictly more restrictive).  Skip the expensive powerset
+        # universality check for these seeds.
+        non_cylinders = set(R)
+
         # Seed the BFS: for each seed xs and each target symbol y reachable
         # from xs's frontier, create a (xs, y) work item.  reachable_outputs
         # filters to only those y that appear on at least one FST arc from
@@ -194,7 +199,7 @@ class Incremental:
             next_queue = []
             for xs, y in queue:
                 ty = target + (y,)
-                if self.is_cylinder(xs, ty):
+                if xs not in non_cylinders and self.is_cylinder(xs, ty):
                     # xs is universal for target·y: every continuation of xs
                     # produces output starting with target·y.  The entire
                     # subtree is absorbed — contributes prefix probability
@@ -207,7 +212,7 @@ class Incremental:
                     # exploring extensions — the subtree is not fully classified.
                     if self.is_member(xs, ty):
                         logp.logaddexp(y, self._lm_state(xs).logprob)
-                    for x in self.source_alphabet:    # TODO: how can we speed this loop up?
+                    for x in self.reachable_inputs(xs, target):    # TODO: how can we speed this loop up?
                         next_xs = xs + (x,)
                         if ((next_xs, y) not in seen
                                 and self.is_live(next_xs, ty)
@@ -226,6 +231,23 @@ class Incremental:
                 logp.logaddexp(self.EOS, self._lm_state(xs).logprob)
 
         return logp.normalize()
+
+    @memoize
+    def reachable_inputs(self, xs, target):
+        """Source symbols x with arcs from xs's frontier states.
+
+        Dual of reachable_outputs: prunes the source-symbol loop in logp_next
+        to only those x that have at least one arc from a frontier state.
+        Soundness: run(xs, target) ⊇ run(xs, target·y) for any y (extending
+        the target only tightens buffer filtering), so any source symbol
+        reachable under target·y is also reachable under target.
+        """
+        result = set()
+        for s, ys in self.run(xs, target):
+            for a, b, t in self.fst.arcs(s):
+                if a != EPSILON:
+                    result.add(a)
+        return result
 
     def reachable_outputs(self, xs, target):
         """Target symbols y reachable from xs's frontier in one FST step.
