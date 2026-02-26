@@ -585,12 +585,29 @@ class FST(Generic[A, B]):
             if q1 in t.stop and q2 in t.stop:
                 product_final.add(pair)
             arcs: list[tuple[Any, Any, Any, State, State]] = []
+            # Both copies take arcs with matching input (including eps-eps)
             for a, b1, j1 in t.arcs(q1):
                 for a2, b2, j2 in t.arcs(q2):
                     if a != a2:
                         continue
                     arcs.append((a, b1, b2, j1, j2))
                     dest = (j1, j2)
+                    if dest not in fwd:
+                        fwd.add(dest)
+                        queue.append(dest)
+            # Copy 1 takes an epsilon-input arc, copy 2 stays
+            for a, b1, j1 in t.arcs(q1):
+                if a == EPSILON:
+                    arcs.append((EPSILON, b1, EPSILON, j1, q2))
+                    dest = (j1, q2)
+                    if dest not in fwd:
+                        fwd.add(dest)
+                        queue.append(dest)
+            # Copy 2 takes an epsilon-input arc, copy 1 stays
+            for a2, b2, j2 in t.arcs(q2):
+                if a2 == EPSILON:
+                    arcs.append((EPSILON, EPSILON, b2, q1, j2))
+                    dest = (q1, j2)
                     if dest not in fwd:
                         fwd.add(dest)
                         queue.append(dest)

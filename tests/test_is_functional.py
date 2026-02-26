@@ -129,11 +129,20 @@ class TestIsFunctionalExamples:
         'weird_copy', 'lookahead', 'lowercase',
         'gated_universal', 'complementary_halves',
         'shrinking_nonuniversal', 'scaled_newspeak',
-        'layered_witnesses', 'samuel_example',
+        'layered_witnesses',
     ])
     def test_known_functional(self, name):
         fst = getattr(examples, name)()
         assert fst.is_functional() == (True, None)
+
+    def test_samuel_example_nonfunctional(self):
+        """samuel_example is non-functional: T(ab) = {c, cx} via eps-arc ambiguity."""
+        fst = examples.samuel_example()
+        ok, witness = fst.is_functional()
+        assert not ok
+        x, y1, y2 = witness
+        assert x == ('a', 'b')
+        assert {y1, y2} == {('c',), ('c', 'x')}
 
     def test_mystery6_is_relation(self):
         fst = examples.mystery6()
