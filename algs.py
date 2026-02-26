@@ -65,9 +65,7 @@ class Incremental:
                     remainder.add(xs)
                 # not a cylinder → must explore extensions
                 for x in self.reachable_inputs(xs, target):
-                    next_xs = xs + (x,)
-                    assert self.is_live(next_xs, target)
-                    candidates.append(next_xs)
+                    candidates.append(xs + (x,))
             worklist = self.prune(candidates)
 
         return (remainder, quotient)
@@ -104,46 +102,13 @@ class Incremental:
     def logprob(self, target):
         """Log P(output = target exactly).
 
-        R strings may or may not produce exactly target (some produce longer
-        outputs starting with target), so we filter by is_exact_member.
-        Q strings are cylinders — their extensions can also produce exactly
-        target — so we BFS-expand Q, collecting exact members along the way.
-        Uses _is_exact_live (buffer must not overshoot target length) for
-        tighter pruning than the prefix-compatible is_live.
+        Reuses decompose_next, which computes the preimage (source strings
+        mapping to exactly target) as a byproduct of its BFS.
         """
-        R, Q = self.decompose(target)
-        N = len(target)
-        parts = []
-        for xs in R:
-            if self.is_exact_member(xs, target):
-                parts.append(self._lm_state(xs).logprob)
-        # BFS through Q extensions: cylinders guarantee every continuation
-        # produces output *starting with* target, but we need *exactly* target.
-        worklist = list(Q)
-        visited = set(Q)
-        while worklist:
-            candidates = []
-            for xs in worklist:
-                if self.is_exact_member(xs, target):
-                    parts.append(self._lm_state(xs).logprob)
-                for x in self.source_alphabet:
-                    next_xs = xs + (x,)
-                    if next_xs not in visited and self._is_exact_live(next_xs, target, N):
-                        visited.add(next_xs)
-                        candidates.append(next_xs)
-            worklist = self.prune(candidates)
-        return logsumexp(parts) if parts else float('-inf')
-
-    def _is_exact_live(self, xs, target, N):
-        """Check if xs can still reach a final state with buffer == target.
-
-        Stricter than is_live: requires at least one frontier state whose
-        buffer has not exceeded len(target).
-        """
-        return any(
-            target[:min(N, len(ys))] == ys[:min(N, len(ys))] and len(ys) <= N
-            for (_, ys) in self.run(xs, target)
-        )
+        _, _, preimage = self.decompose_next(target)
+        return logsumexp([
+            self._lm_state(xs).logprob for xs in preimage
+        ])
 
     def logp_next_bruteforce(self, target):
         """Next-symbol distribution via independent per-symbol decompositions.
@@ -229,9 +194,7 @@ class Incremental:
                     continue   # absorbed — skip extension for all symbols
 
                 for x in self.reachable_inputs(xs, target):
-                    next_xs = xs + (x,)
-                    assert self.is_live(next_xs, target)
-                    candidates.add(next_xs)
+                    candidates.add(xs + (x,))
 
             worklist = self.prune(candidates)
 
