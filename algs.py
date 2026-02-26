@@ -94,10 +94,10 @@ class Incremental:
         R, Q = self.decompose(target)
         parts = []
         for xs in Q:
-            parts.append(self._lm_state(xs).logprefix)   # P_LM(xs·Σ*)
+            parts.append(self._lm_state(xs).logprefix)
         for xs in R:
-            parts.append(self._lm_state(xs).logprob)      # P_LM(xs·EOS)
-        return logsumexp(parts) if parts else float('-inf')
+            parts.append(self._lm_state(xs).logprob)
+        return logsumexp(parts)
 
     def logprob(self, target):
         """Log P(output = target exactly).
@@ -105,7 +105,7 @@ class Incremental:
         Reuses decompose_next, which computes the preimage (source strings
         mapping to exactly target) as a byproduct of its BFS.
         """
-        _, _, preimage = self.decompose_next(target)
+        (_, _, preimage) = self.decompose_next(target)
         return logsumexp([
             self._lm_state(xs).logprob for xs in preimage
         ])
