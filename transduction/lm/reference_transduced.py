@@ -84,7 +84,6 @@ class ReferenceTransducedState(LMState[Token]):
         result = self.tlm._decomp(prefix)
         Q, R = result.quotient, result.remainder
         # Q and R share the same DFA arcs and start states.
-        source_alphabet = self.tlm._source_alphabet
         inner_lm = self.tlm.inner_lm
         inner_eos = inner_lm.eos
         parts: list[float] = []
@@ -98,7 +97,7 @@ class ReferenceTransducedState(LMState[Token]):
             counter += 1
 
         while heap:
-            neg_logp, _, dfa_s, lm_s = heapq.heappop(heap)
+            (_, _, dfa_s, lm_s) = heapq.heappop(heap)
 
             if dfa_s in Q.stop:
                 parts.append(lm_s.logp)
