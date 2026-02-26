@@ -20,6 +20,7 @@ Naming conventions (automata-theory style):
 """
 from transduction.fst import EPSILON
 from transduction.util import validate_target, LogVector, logsumexp, memoize
+from collections import defaultdict
 
 
 class Incremental:
@@ -33,7 +34,7 @@ class Incremental:
 
     @memoize
     def decompose(self, target):
-        """Decompose T⁻¹(target·Σ*) into R ∪ Q·Σ* (finite remainder + quotient).
+        """Decompose T⁻¹(target·Σ*) into R ∪ Q·Σ* (remainder + quotient).
 
         Incrementally refines the parent decomposition: seeds are R∪Q from
         decompose(target[:-1]).  Parent Q strings may lose universality at
@@ -188,21 +189,24 @@ class Incremental:
         """
         R, Q = self.decompose(target)
         seeds = R | Q
-        all_source_strings = set(seeds)
 
         # R strings are not cylinders for target, hence not for any target·y
         # (target·y is strictly more restrictive).  Skip the expensive powerset
         # universality check for these seeds.
         non_cylinders = set(R)
 
-        from collections import defaultdict
         quotients = defaultdict(set)    # y → Q(target·y)
         remainders = defaultdict(set)   # y → R(target·y)
+        preimage = set()
 
         worklist = set(seeds)
         while worklist:
             candidates = set()
             for xs in worklist:
+
+                if self.is_exact_member(xs, target):
+                    preimage.add(xs)
+
                 # Check all reachable y's for this xs in one pass.
                 # At most one y can be continuous (functional FST).
                 continuous = None
@@ -224,12 +228,16 @@ class Incremental:
                     next_xs = xs + (x,)
                     assert self.is_live(next_xs, target)
                     candidates.add(next_xs)
-                    all_source_strings.add(next_xs)
 
             worklist = self.prune(candidates)
 
-        preimage = {xs for xs in all_source_strings
-                    if self.is_exact_member(xs, target)}
+        # Populate decompose's memo cache: we already computed R(target·y)
+        # and Q(target·y) for every y, so a subsequent decompose(target·y)
+        # call (e.g., from decompose_next(target·y)) hits the cache instead
+        # of re-running its own BFS.
+        cache = Incremental.__dict__['decompose'].cache
+        for y in set(quotients) | set(remainders):
+            cache[(self, target + (y,))] = (remainders[y], quotients[y])
 
         return remainders, quotients, preimage
 
