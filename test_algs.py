@@ -385,16 +385,30 @@ def _run_logp_test(fst, max_source_len=None, target_depth=None, seed=42, atol=1e
 
     def check(target):
         got = inc.logp_next(target)
+        got_v3 = inc.logp_next_v3(target)
+        got_v4 = inc.logp_next_v4(target)
         ref_logp_next = ref_tlm(target).logp_next
         for y in target_alphabet:
             got_val = got[y] if y in got else float('-inf')
+            got_v3_val = got_v3[y] if y in got_v3 else float('-inf')
+            got_v4_val = got_v4[y] if y in got_v4 else float('-inf')
             ref_val = ref_logp_next[y]
             assert got_val == pytest.approx(ref_val, abs=atol), \
                 f"target={target} symbol={y}: got={got_val} ref={ref_val}"
+            assert got_v3_val == pytest.approx(ref_val, abs=atol), \
+                f"target={target} symbol={y}: got_v3={got_v3_val} ref={ref_val}"
+            assert got_v4_val == pytest.approx(ref_val, abs=atol), \
+                f"target={target} symbol={y}: got_v4={got_v4_val} ref={ref_val}"
         got_eos = got[inc.EOS] if inc.EOS in got else float('-inf')
+        got_v3_eos = got_v3[inc.EOS] if inc.EOS in got_v3 else float('-inf')
+        got_v4_eos = got_v4[inc.EOS] if inc.EOS in got_v4 else float('-inf')
         ref_eos = ref_logp_next[lm.eos]
         assert got_eos == pytest.approx(ref_eos, abs=atol), \
             f"target={target} EOS: got={got_eos} ref={ref_eos}"
+        assert got_v3_eos == pytest.approx(ref_eos, abs=atol), \
+            f"target={target} EOS: got_v3={got_v3_eos} ref={ref_eos}"
+        assert got_v4_eos == pytest.approx(ref_eos, abs=atol), \
+            f"target={target} EOS: got_v4={got_v4_eos} ref={ref_eos}"
 
     def recurse(target, depth):
         if depth < 0:

@@ -63,10 +63,10 @@ class Incremental:
                 if self.is_member(xs, target):
                     remainder.add(xs)
                 # not a cylinder → must explore extensions
-                for x in self.source_alphabet:
+                for x in self.reachable_inputs(xs, target):
                     next_xs = xs + (x,)
-                    if self.is_live(next_xs, target):
-                        candidates.append(next_xs)
+                    assert self.is_live(next_xs, target)
+                    candidates.append(next_xs)
             worklist = self.prune(candidates)
 
         return (remainder, quotient)
@@ -193,11 +193,18 @@ class Incremental:
         queue = [(xs, y) for xs in seeds for y in self.reachable_outputs(xs, target)]
         seen.update(queue)
 
+        # Functional-FST shortcut: a source string can be a cylinder for at
+        # most one y (see proof in logp_next_v4).  Once absorbed, skip it for
+        # all other symbols.
+        absorbed = set()
+
         # BFS loop: classify each (xs, y) pair.  Each iteration processes one
         # "level" of source-string extensions (all strings of the same length).
         while queue:
             next_queue = []
             for xs, y in queue:
+                if xs in absorbed:
+                    continue   # cylinder for another y → skip entirely
                 ty = target + (y,)
                 if xs not in non_cylinders and self.is_cylinder(xs, ty):
                     # xs is universal for target·y: every continuation of xs
@@ -205,6 +212,7 @@ class Incremental:
                     # subtree is absorbed — contributes prefix probability
                     # and no further extensions are needed.
                     logp.logaddexp(y, self._lm_state(xs).logprefix)
+                    absorbed.add(xs)
                 else:
                     # xs is not a cylinder for target·y.  If it's a member
                     # (produces target·y at a final state), it contributes
@@ -212,11 +220,10 @@ class Incremental:
                     # exploring extensions — the subtree is not fully classified.
                     if self.is_member(xs, ty):
                         logp.logaddexp(y, self._lm_state(xs).logprob)
-                    for x in self.reachable_inputs(xs, target):    # TODO: how can we speed this loop up?
+                    for x in self.reachable_inputs(xs, ty):    # TODO: how can we speed this loop up?
                         next_xs = xs + (x,)
-                        if ((next_xs, y) not in seen
-                                and self.is_live(next_xs, ty)
-                                and self._lm_state(next_xs).logprefix > float('-inf')):
+                        assert self.is_live(next_xs, ty)
+                        if ((next_xs, y) not in seen and self._lm_state(next_xs).logprefix > float('-inf')):
                             seen.add((next_xs, y))
                             next_queue.append((next_xs, y))
                             all_source_strings.add(next_xs)
@@ -232,21 +239,186 @@ class Incremental:
 
         return logp.normalize()
 
+    def logp_next_v3(self, target):
+        """Next-symbol distribution over target_alphabet ∪ {EOS}.
+
+        Same as logp_next but with separate BFS queues per target symbol y.
+        This makes per-symbol termination and pruning natural: each y's search
+        runs independently, and fast symbols (all strings classified early)
+        stop without waiting for slower ones.
+        """
+        logp = LogVector()
+        R, Q = self.decompose(target)
+        seeds = R | Q
+        all_source_strings = set(seeds)
+
+        # R strings are not cylinders for target, hence not for any target·y.
+        non_cylinders = set(R)
+
+        # Build per-y seed lists from reachable outputs (only reachable y's).
+        from collections import defaultdict
+        queues = defaultdict(list)
+        for xs in seeds:
+            for y in self.reachable_outputs(xs, target):
+                queues[y].append(xs)
+
+#        def run_queue(queue, target):
+#            while queue:
+#                candidates = []
+#                for xs in worklist:
+#
+#                    if self.is_cylinder(xs, target):
+#                        quotient.add(xs)
+#                        continue   # absorb: no need to explore extensions of xs
+#                    if self.is_member(xs, target):
+#                        remainder.add(xs)
+#                    # not a cylinder → must explore extensions
+#                    for x in self.reachable_inputs(xs, target):
+#                        next_xs = xs + (x,)
+#                        assert self.is_live(next_xs, target)
+#                        next_queue.append(next_xs)
+#
+#                queue = self.prune(next_queue)
+
+
+        # Functional-FST shortcut: a source string can be a cylinder for at
+        # most one y (see proof in logp_next_v4).  Once absorbed, skip it for
+        # all other symbols.
+        absorbed = set()
+
+        # Per-symbol BFS: one queue per reachable target symbol y.
+        for y, queue in queues.items():
+            ty = target + (y,)
+            seen = set(queue)
+
+#            run_queue(queue, ty)
+            while queue:
+                next_queue = []
+                for xs in queue:
+                    if xs in absorbed:
+                        continue   # cylinder for another y → skip entirely
+                    if xs not in non_cylinders and self.is_cylinder(xs, ty):
+                        logp.logaddexp(y, self._lm_state(xs).logprefix)
+                        absorbed.add(xs)
+                    else:
+                        if self.is_member(xs, ty):
+                            logp.logaddexp(y, self._lm_state(xs).logprob)
+                        for x in self.reachable_inputs(xs, ty):
+                            next_xs = xs + (x,)
+                            if (next_xs not in seen
+                                    and self._lm_state(next_xs).logprefix > float('-inf')):
+                                seen.add(next_xs)
+                                next_queue.append(next_xs)
+                                all_source_strings.add(next_xs)
+                queue = next_queue    # TODO: needs pruning!
+
+        # EOS: check all discovered source strings for exact match with target.
+        for xs in all_source_strings:
+            if self.is_exact_member(xs, target):
+                logp.logaddexp(self.EOS, self._lm_state(xs).logprob)
+
+        return logp.normalize()
+
+    def logp_next_v4(self, target):
+        """Next-symbol distribution over target_alphabet ∪ {EOS}.
+
+        Per-symbol BFS that mirrors decompose's structure: each y's search
+        collects sets of cylinders and members (idempotent add), then sums
+        contributions at the end.  No 'seen' set needed — set idempotency
+        handles duplicates, just like decompose.
+        """
+        logp = LogVector()
+        R, Q = self.decompose(target)
+        seeds = R | Q
+        all_source_strings = set(seeds)
+
+        # R strings are not cylinders for target, hence not for any target·y.
+        non_cylinders = set(R)
+
+        # Build per-y seed sets from reachable outputs (only reachable y's).
+        from collections import defaultdict
+        queues = defaultdict(set)
+        for xs in seeds:
+            for y in self.reachable_outputs(xs, target):
+                queues[y].add(xs)
+
+        # Functional-FST shortcut (ported from peekaboo_incremental.py):
+        # a source string can be a cylinder for at most one target symbol y.
+        # Once found to be a cylinder for y, skip it in all other symbols'
+        # BFS loops — its entire subtree maps to target·y, contributing
+        # nothing to z ≠ y.
+        #
+        # NOTE: This assumes the FST is functional.  A productive
+        # input-epsilon cycle (eps-input arcs that produce non-epsilon
+        # output) makes an FST non-functional, since the cycle can be
+        # traversed any number of times yielding distinct outputs for
+        # the same input.  Non-functional FSTs may violate the
+        # uniqueness invariant below.
+        #
+        # Proof (functional FSTs): Suppose xs is a cylinder for both y
+        # and z (y ≠ z).  Being a cylinder for y means every extension
+        # of xs produces output starting with target·y.  Likewise for z.
+        # For a functional FST each input has a unique output, so the
+        # preimages of target·y·Σ* and target·z·Σ* are disjoint.
+        # But xs and all its extensions are in both preimages — contradiction.
+        absorbed = set()
+
+        # Per-symbol BFS: collect cylinder/member sets per y, then sum.
+        for y, worklist in queues.items():
+            ty = target + (y,)
+            cylinders, members = set(), set()
+
+            while worklist:
+                candidates = set()
+                for xs in worklist:
+                    if xs in absorbed:
+                        continue   # cylinder for another y → skip entirely
+                    if xs not in non_cylinders and self.is_cylinder(xs, ty):
+                        cylinders.add(xs)
+                        absorbed.add(xs)
+                        continue   # absorb: no need to explore extensions
+                    if self.is_member(xs, ty):
+                        members.add(xs)
+                    # not a cylinder → must explore extensions
+                    for x in self.reachable_inputs(xs, ty):
+                        next_xs = xs + (x,)
+                        assert self.is_live(next_xs, ty)
+                        candidates.add(next_xs)
+                        all_source_strings.add(next_xs)
+                worklist = self.prune(candidates)    # TODO: needs pruning!
+
+            for xs in cylinders:
+                logp.logaddexp(y, self._lm_state(xs).logprefix)
+            for xs in members:
+                logp.logaddexp(y, self._lm_state(xs).logprob)
+
+            assert (members, cylinders) == self.decompose(ty)
+            
+        # EOS: check all discovered source strings for exact match with target.
+        for xs in all_source_strings:
+            if self.is_exact_member(xs, target):
+                logp.logaddexp(self.EOS, self._lm_state(xs).logprob)
+
+        return logp.normalize()
+
     @memoize
     def reachable_inputs(self, xs, target):
         """Source symbols x with arcs from xs's frontier states.
 
-        Dual of reachable_outputs: prunes the source-symbol loop in logp_next
-        to only those x that have at least one arc from a frontier state.
-        Soundness: run(xs, target) ⊇ run(xs, target·y) for any y (extending
-        the target only tightens buffer filtering), so any source symbol
-        reachable under target·y is also reachable under target.
+        Dual of reachable_outputs: prunes the source-symbol loop in decompose
+        and logp_next to only source symbols that produce a target-compatible
+        buffer.  Guarantees is_live(xs+(x,), target) for every x returned:
+        if x is in the result, step(run(xs, target), x, target) has at least
+        one state before ε-closure, and closure only adds states.
         """
         result = set()
+        N = len(target)
         for s, ys in self.run(xs, target):
             for a, b, t in self.fst.arcs(s):
                 if a != EPSILON:
-                    result.add(a)
+                    next_buf = ys if b == EPSILON else ys + (b,)
+                    if target[:min(N, len(next_buf))] == next_buf[:min(N, len(next_buf))]:
+                        result.add(a)
         return result
 
     def reachable_outputs(self, xs, target):
@@ -255,6 +427,15 @@ class Incremental:
         Checks which y could appear at position N of the output by looking at
         arcs (both ε and source-symbol) from each frontier state.  This prunes
         the (xs, y) pairs in logp_next, avoiding BFS work for unreachable y.
+
+        Soundness (no y with nonzero probability is missed): for y to have
+        nonzero probability, some seed's frontier must have a state (s, ys)
+        on a path to producing y at position N.  At the first FST step:
+        - Buffer already past N (len(ys) > N): ys[N] adds y directly.
+        - Buffer at length N, arc outputs y: target+(y)==target+(y2) adds y.
+        - Buffer shorter than N (or at N with ε-output): the compatibility
+          check never sees position N, so it passes for *all* y — a sound
+          over-approximation (spurious y's get filtered by is_live later).
         """
         result = set()
         F = self.run(xs, target)
