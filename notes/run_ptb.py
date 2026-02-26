@@ -135,7 +135,7 @@ def load_wikitext_paragraphs_ptb(fst, split, n=4, max_chars=None):
             transduced = next(fst.transduce(detokenized.encode('utf-8')))
             paragraphs.append(transduced)
             original.append(detokenized)
-        except ValueError:
+        except StopIteration:
             print(f"  Skipping (FST rejected): {detokenized[:50]}...")
             continue
         except Exception as e:

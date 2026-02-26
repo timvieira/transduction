@@ -140,7 +140,7 @@ for vs in VOCAB_SIZES:
             try:
                 target_bytes = list(next(fst_v.transduce(seq)))[:NUM_TARGET_BYTES]
                 break
-            except ValueError:
+            except StopIteration:
                 continue
     if target_bytes is None:
         target_bytes = []
@@ -148,7 +148,7 @@ for vs in VOCAB_SIZES:
             if tid in used_set:
                 try:
                     target_bytes.extend(next(fst_v.transduce([tid])))
-                except ValueError:
+                except StopIteration:
                     continue
                 if len(target_bytes) >= NUM_TARGET_BYTES:
                     break
@@ -272,7 +272,7 @@ for seq in train_ids:
         try:
             target_bytes_q = list(next(fst_q.transduce(seq)))[:NUM_TARGET_BYTES]
             break
-        except ValueError:
+        except StopIteration:
             continue
 
 if target_bytes_q:

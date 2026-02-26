@@ -117,7 +117,7 @@ def test_cb_vs_fused(setup):
         if all(tid in used_set for tid in seq):
             try:
                 target_bytes = list(next(fst.transduce(seq)))
-            except ValueError:
+            except StopIteration:
                 continue
             if len(target_bytes) >= 6:
                 target_bytes = target_bytes[:6]
@@ -273,7 +273,7 @@ def test_cb_vs_reference(small_setup):
         if all(tid in used_set for tid in seq):
             try:
                 target_bytes = list(next(fst.transduce(seq)))
-            except ValueError:
+            except StopIteration:
                 continue
             if len(target_bytes) >= 6:
                 target_bytes = target_bytes[:6]
