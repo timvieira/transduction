@@ -393,7 +393,76 @@ class Incremental:
                 logp.logaddexp(y, self._lm_state(xs).logprob)
 
             assert (members, cylinders) == self.decompose(ty)
-            
+
+        # EOS: check all discovered source strings for exact match with target.
+        for xs in all_source_strings:
+            if self.is_exact_member(xs, target):
+                logp.logaddexp(self.EOS, self._lm_state(xs).logprob)
+
+        return logp.normalize()
+
+    def logp_next_v5(self, target):
+        """Next-symbol distribution over target_alphabet ∪ {EOS}.
+
+        Single-worklist BFS over source strings, checking all reachable
+        target symbols per string in one pass — directly mirroring peekaboo's
+        per-state multi-symbol classification.  When xs is a cylinder for y,
+        the entire subtree is absorbed and extension is skipped for all symbols
+        (the functional-FST uniqueness shortcut applies naturally).
+
+        More memory-efficient than per-y variants (v3/v4): one worklist and
+        one candidates set instead of |target_alphabet| separate ones.
+        """
+        logp = LogVector()
+        R, Q = self.decompose(target)
+        seeds = R | Q
+        all_source_strings = set(seeds)
+        non_cylinders = set(R)
+
+        from collections import defaultdict
+        cylinders = defaultdict(set)
+        members = defaultdict(set)
+
+        worklist = set(seeds)
+        while worklist:
+            candidates = set()
+            for xs in worklist:
+                # Check all reachable y's for this xs in one pass.
+                # At most one y can be continuous (functional FST; see
+                # proof in logp_next_v4).
+                continuous = None
+                for y in self.reachable_outputs(xs, target):
+                    ty = target + (y,)
+                    if xs not in non_cylinders and self.is_cylinder(xs, ty):
+                        assert continuous is None, \
+                            f"cylinder for both {continuous!r} and {y!r} — non-functional?"
+                        cylinders[y].add(xs)
+                        continuous = y
+                        continue
+                    if self.is_member(xs, ty):
+                        members[y].add(xs)
+
+                if continuous is not None:
+                    continue   # absorbed — skip extension for all symbols
+
+                for x in self.reachable_inputs(xs, target):
+                    next_xs = xs + (x,)
+                    assert self.is_live(next_xs, target)
+                    candidates.add(next_xs)
+                    all_source_strings.add(next_xs)
+
+            worklist = self.prune(candidates)
+
+        for y in cylinders:
+            for xs in cylinders[y]:
+                logp.logaddexp(y, self._lm_state(xs).logprefix)
+        for y in members:
+            for xs in members[y]:
+                logp.logaddexp(y, self._lm_state(xs).logprob)
+
+        for y in set(cylinders) | set(members):
+            assert (members[y], cylinders[y]) == self.decompose(target + (y,))
+
         # EOS: check all discovered source strings for exact match with target.
         for xs in all_source_strings:
             if self.is_exact_member(xs, target):
