@@ -1,0 +1,883 @@
+\documentclass{article}
+\usepackage[margin=1in]{geometry}
+
+\usepackage{hyperref}
+\usepackage{url}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{fancyvrb}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+
+\usepackage[inline]{enumitem}
+\setitemize{noitemsep,topsep=0pt,parsep=0pt,partopsep=0pt,leftmargin=*}
+\setenumerate{noitemsep,topsep=0pt,parsep=0pt,partopsep=0pt,leftmargin=*}
+
+\usepackage[capitalize,noabbrev]{cleveref}
+\crefname{section}{\S}{\S\S}
+\crefname{figure}{Fig.}{Figs.}
+\crefname{algorithm}{Alg.}{}
+\crefname{equation}{Eq.}{Eq.}
+
+\usepackage{latexsym}
+\usepackage{cancel}
+\usepackage{inconsolata}
+\usepackage{amssymb}
+\usepackage{mleftright}
+\usepackage{xspace}
+
+\usepackage{minted}
+\setminted{linenos, firstnumber=last, escapeinside=@@, numbersep=4pt}
+
+\usepackage{multicol}
+\usepackage{setspace}
+\usepackage{framed}
+
+\usepackage{tikz}
+\usetikzlibrary{tikzmark}
+\usetikzlibrary{arrows}
+\usetikzlibrary{arrows.meta}
+\usetikzlibrary{shapes}
+\usetikzlibrary{automata,positioning}
+\tikzset{
+  CenterFix/.style={baseline={(current bounding box.center)}},
+}
+
+\usepackage{graphicx}
+\usepackage{bbm}
+\usepackage{dsfont}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{soul}
+\usepackage{float}
+\usepackage{stmaryrd}
+
+\usepackage[normalem]{ulem}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!35!black,
+  citecolor=blue!35!black,
+  urlcolor=blue!35!black
+}
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{remark}[theorem]{Remark}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% MACROS (from paper/macros.tex)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\colorlet{MacroColor}{black}
+\newcommand{\mymacro}[1]{#1}
+
+\renewcommand{\Pr}[2][]{\mathop{\mathrm{Pr}}_{#1}\mleft[#2\mright]}
+
+\newcommand{\prooftext}[1]{\text{\color{black!50}#1}}
+
+\newcommand{\defn}[1]{\textbf{#1}}
+\newcommand{\defeq}{\mathrel{\overset{\raisebox{-0.25ex}{\textnormal{\tiny def}}}{=}}}
+
+\newcommand{\card}[1]{\left|#1\right|}
+\newcommand{\set}[1]{\left\{ #1 \right\}}
+\newcommand{\indicator}[1]{\mathbbm{1}\mleft\{#1\mright\}}
+
+\newcommand{\bigo}{{\mymacro{ \mathcal{O}}}}
+\newcommand{\bigO}[1]{{\mymacro{ \bigo\mleft(#1\mright)}}}
+
+\newcommand{\kleene}[1]{#1^*}
+\newcommand{\kleeneplus}[1]{#1^+}
+
+\DeclareMathOperator*{\argmax}{argmax}
+\DeclareMathOperator*{\argmin}{argmin}
+
+\newcommand{\wsp}{\textvisiblespace}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% PAPER-SPECIFIC NOTATION
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Cover, quotient, remainder
+\newcommand{\preCover}{{\color{TokenColor}\mathcal{P}}}
+\newcommand{\Quotient}{{\color{TokenColor}\mathcal{Q}}}
+\newcommand{\Remainder}{{\color{TokenColor}\mathcal{R}}}
+\newcommand{\Quotientp}{\Quotient'}
+\newcommand{\Remainderp}{\Remainder'}
+\newcommand{\maxQuotient}{{\color{TokenColor}\mathcal{C}}}
+
+\newcommand{\eos}{{\mymacro{\textsc{eos}}}}
+
+\newcommand{\basisSet}[1]{\langle #1\rangle}
+
+\definecolor{CharacterColor}{RGB}{98,115,19}
+\definecolor{WordColor}{RGB}{102,0,204}
+\definecolor{TokenColor}{RGB}{140,10,89}
+\definecolor{TargetColor}{RGB}{98,115,19}
+\definecolor{SourceColor}{RGB}{140,10,89}
+\definecolor{StormBlue}{RGB}{42,90,120}
+
+\newcommand{\tokenfont}[2][]{%
+    \ensuremath{%
+        \stackrel{\raisebox{-0.5ex}{{\color{TokenColor}\strut\texttt{#2}}}}%
+        {\text{\scriptsize \raisebox{-0.5ex}{{\color{black!50}\texttt{\strut#1}}}}}%
+    }%
+}
+\newcommand{\charfont}[1]{{\color{CharacterColor}\strut\texttt{#1}}}
+\newcommand{\tfont}[1]{{\color{TokenColor}\texttt{#1}}}
+
+\newcommand{\transFnSym}[0]{f}
+\newcommand{\transFn}{\ensuremath{{\color{CharacterColor}\transFnSym}}\xspace}
+
+% Source / target symbols and strings
+\newcommand{\srcSym}{{\color{TokenColor}x}}
+\newcommand{\srcSyma}{{\color{TokenColor}a}}
+\newcommand{\srcSymp}{{\color{TokenColor}x^\prime}}
+\newcommand{\srcStr}{\ensuremath{{\color{TokenColor}\boldsymbol{x}}}\xspace}
+\newcommand{\srcStrp}[0]{{\color{TokenColor}\srcStr^\prime}}
+\newcommand{\srcStrpp}[0]{{\color{TokenColor}\srcStr^{\prime\prime}}}
+
+\newcommand{\tgtSym}{{\color{CharacterColor}y}}
+\newcommand{\tgtSymb}{{\color{CharacterColor}b}}
+\newcommand{\tgtSymp}{{\color{CharacterColor}y^\prime}}
+\newcommand{\tgtSympp}{{\color{CharacterColor}y^{\prime\prime}}}
+\newcommand{\tgtSymScore}{{\color{CharacterColor}\hat{y}}}
+
+\newcommand{\tgtStr}{{\color{CharacterColor}\boldsymbol{y}}}
+\newcommand{\tgtStrp}{{\color{CharacterColor}\boldsymbol{y}^\prime}}
+\newcommand{\tgtStrpp}{{\color{CharacterColor}\boldsymbol{y}^{\prime\prime}}}
+
+% Language models
+\newcommand{\pSource}{\mymacro{p_{\srcAlphabet}}}
+\newcommand{\pTarget}{\mymacro{p_{\tgtAlphabet}}}
+\newcommand{\prefixLanguageOp}[1]{\overrightarrow{#1}}
+\newcommand{\prefixSource}{{\mymacro{\prefixLanguageOp{\pSource}}}}
+\newcommand{\prefixTarget}{{\mymacro{\prefixLanguageOp{\pTarget}}}}
+
+% Alphabets
+\newcommand{\srcAlphabet}[0]{{\color{TokenColor}\ensuremath{\mathcal{X}}}\xspace}
+\newcommand{\tgtAlphabet}[0]{{\color{CharacterColor}\ensuremath{\mathcal{Y}}}\xspace}
+\newcommand{\srcStrings}[0]{\ensuremath{\srcAlphabet^*}\xspace}
+\newcommand{\tgtStrings}[0]{\ensuremath{\tgtAlphabet^*}\xspace}
+
+% Transducer
+\newcommand{\transST}{{\color{CharacterColor}\texttt{f}}}
+
+% States
+\newcommand{\States}{\mymacro{\mathsf{S}}}
+\newcommand{\Transitions}{\mymacro{\mathsf{T}}}
+\newcommand{\InitialStates}[0]{\mymacro{\mathsf{I}}}
+\newcommand{\FinalStates}{\mymacro{\mathsf{F}}}
+
+\newcommand{\state}{\mymacro{s}}
+\newcommand{\statep}{\mymacro{s^\prime}}
+\newcommand{\statepp}{\mymacro{s^{\prime\prime}}}
+
+% Cover algorithm
+\newcommand{\queue}[0]{\texttt{q}}
+\newcommand{\candidates}[0]{\texttt{C}}
+\newcommand{\frontier}{\mathcal{F}}
+\newcommand{\frontierp}{\frontier^\prime}
+
+\newcommand{\powerstate}{S}
+\newcommand{\powerstatep}{\powerstate^{\prime}}
+
+\newcommand{\threshold}{\tau}
+
+\newcommand{\sem}[1]{\llbracket #1 \rrbracket}
+
+\newcommand{\forceStart}[2]{#1_{[#2]}}
+
+\newcommand{\buffer}{{\color{CharacterColor}\boldsymbol{b}}}
+\newcommand{\bufferp}{{\color{CharacterColor}\boldsymbol{b}'}}
+
+% Minted function names
+\newcommand{\mintedFunc}[1]{\mbox{\texttt{{\color{orange!50!black}#1}}}}
+\newcommand{\myMintedFunc}[1]{\mbox{\texttt{{\color{StormBlue}#1}}}}
+
+\newcommand{\continuous}[0]{\myMintedFunc{is\_cylinder}}
+\newcommand{\discontinuous}[0]{\myMintedFunc{is\_member}}
+\newcommand{\candidate}[0]{\myMintedFunc{is\_live}}
+\newcommand{\build}[0]{\myMintedFunc{build}}
+\newcommand{\prune}[0]{\myMintedFunc{prune}}
+\newcommand{\decompose}[0]{\myMintedFunc{decompose}}
+
+\newcommand{\runFrontier}[0]{\myMintedFunc{run}}
+\newcommand{\nextFrontier}[0]{\myMintedFunc{step}}
+\newcommand{\closureFrontier}[0]{\myMintedFunc{closure}}
+
+\newcommand{\reachableOutputs}[0]{\myMintedFunc{reachable\_outputs}}
+\newcommand{\reachableInputs}[0]{\myMintedFunc{reachable\_inputs}}
+\newcommand{\isExactMember}[0]{\myMintedFunc{is\_exact\_member}}
+\newcommand{\decomposeNext}[0]{\myMintedFunc{decompose\_next}}
+
+\newcommand{\ipUniversal}[0]{\myMintedFunc{fast\_univ\_filter}}
+\newcommand{\ipUniversalStates}[0]{U}
+
+\newcommand{\projUniv}[0]{\myMintedFunc{proj\_pos}}
+
+\newcommand{\ProjA}{\mymacro{\mathsf{proj}}_{\srcAlphabet}}
+
+\newcommand{\pdict}{\mymacro{\overline{p}}}
+\newcommand{\pdictNew}{\mymacro{\overline{p}_{\texttt{new}}}}
+
+\newcommand{\Visited}{\mymacro{V}}
+
+\newcommand{\Cache}{\mymacro{\texttt{cache}}}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\title{Source-String Incremental Decomposition\\with Multi-Symbol Expansion}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Overview}
+
+We present an incremental decomposition algorithm that operates directly on
+\emph{source strings} $\srcStr \in \srcStrings$, maintaining a frontier of
+$(\state, \buffer)$ pairs internally but exposing the decomposition as sets of
+source strings.
+The algorithm has two key components:
+\begin{enumerate}
+\item $\decompose(\tgtStr)$: a memoized, incremental BFS that computes
+  $(\Remainder(\tgtStr), \Quotient(\tgtStr))$ by refining the parent
+  decomposition $(\Remainder(\tgtStr_{<N}), \Quotient(\tgtStr_{<N}))$.
+\item $\decomposeNext(\tgtStr)$: a single-worklist BFS that computes
+  $\Remainder(\tgtStr\tgtSym)$ and $\Quotient(\tgtStr\tgtSym)$ for \emph{all}
+  $\tgtSym \in \tgtAlphabet$ simultaneously, then populates the $\decompose$
+  cache to avoid redundant BFS for subsequent calls.
+\end{enumerate}
+The next-symbol distribution $\prefixTarget(\cdot \mid \tgtStr)$ follows
+directly from $\decomposeNext$, giving a much simpler algorithm than the
+general \texttt{fast\_next\_dist}.
+
+\paragraph{Notation.}
+We follow the notation of the main paper.
+$\transST$ is a functional FST with source alphabet $\srcAlphabet$ and target
+alphabet $\tgtAlphabet$.
+$\tgtStr \in \tgtStrings$ is a target string (prefix) with $N \defeq |\tgtStr|$.
+$\Remainder(\tgtStr)$ and $\Quotient(\tgtStr)$ denote the remainder and
+quotient of the prefix decomposition
+$\transFn^{-1}(\tgtStr\tgtStrings) = \Remainder(\tgtStr) \cup
+\Quotient(\tgtStr) \cdot \srcStrings$.
+$\pSource$ is a language model over source strings, and
+$\prefixSource(\srcStr) \defeq \sum_{\srcStrp \in \srcStrings}
+\pSource(\srcStr\srcStrp)$ is its prefix probability.
+A \defn{frontier} $\frontier \defeq \{(\state, \buffer)\}$ is a set of
+(FST state, output buffer) pairs.
+
+
+\section{Frontier Computation}
+\label{sec:frontier}
+
+The frontier $\runFrontier_\tgtStr(\srcStr)$ computes the set of $(\state,
+\buffer)$ pairs reachable by reading source string $\srcStr$ from the initial
+states, filtering to buffers compatible with $\tgtStr$ (\cref{fig:frontier}).
+Compatibility means $\tgtStr$ and $\buffer$ agree on their shared prefix:
+$\tgtStr_{<k} = \buffer_{<k}$ where $k = \min(N, |\buffer|)$.
+This allows buffers shorter than $\tgtStr$ (output not yet produced) or longer
+(output already past target --- still live for prefix matching).
+
+The frontier supports two recursion strategies (\cref{fig:frontier}):
+\begin{itemize}
+\item \textbf{Source recursion:}
+  $\runFrontier_\tgtStr(\srcStr) =
+  \nextFrontier_\tgtStr(\runFrontier_\tgtStr(\srcStr_{<N}), \srcSym_N)$.
+  Extends one source symbol with target fixed.
+\item \textbf{Target recursion:}
+  $\runFrontier_{\tgtStr\tgtSym}(\srcStr) =
+  \{(\state, \buffer) \in \runFrontier_\tgtStr(\srcStr) :
+  |\buffer| \le N \lor \buffer_{N+1} = \tgtSym\}$.
+  Derives from parent target by filtering
+  (\cref{prop:frontier-containment}).
+\end{itemize}
+Both are memoized on $(\srcStr, \tgtStr)$.  Source recursion is the default.
+Target recursion is used opportunistically when
+$\runFrontier_\tgtStr(\srcStr)$ is already cached --- typical in
+$\decomposeNext$, where we move from target $\tgtStr$ to target
+$\tgtStr\tgtSym$.  This avoids recomputing the entire source-string chain for
+the new target.
+
+\begin{proposition}[Frontier containment]
+\label{prop:frontier-containment}
+For any source string $\srcStr$ and target symbol $\tgtSym$,
+\[
+\runFrontier_{\tgtStr\tgtSym}(\srcStr) = \{(\state, \buffer) \in
+\runFrontier_\tgtStr(\srcStr) : |\buffer| \le N \text{ or } \buffer_{N+1} =
+\tgtSym\}.
+\]
+\end{proposition}
+\begin{proof}
+Buffer filtering in $\nextFrontier$ and $\closureFrontier$ keeps only
+$(\state, \buffer)$ pairs where $\buffer$ and the target agree on their shared
+prefix.
+Since FST arcs only append to the buffer (never backtrack), once
+$\buffer_{N+1} = \tgtSymp \ne \tgtSym$ at some step, all descendant buffers
+also have position $N{+}1 = \tgtSymp$ and would be filtered out by the
+$\tgtStr\tgtSym$ filter.
+Therefore, filtering $\runFrontier_\tgtStr(\srcStr)$ at the end is equivalent
+to filtering at each step.
+
+The $(\supseteq)$ direction holds because $\tgtStr\tgtSym$-compatible elements
+are also $\tgtStr$-compatible (the former is strictly more restrictive).
+The $(\subseteq)$ direction holds because elements that are
+$\tgtStr$-compatible but \emph{not} $\tgtStr\tgtSym$-compatible (i.e.,
+$|\buffer| > N$ and $\buffer_{N+1} \ne \tgtSym$) cannot produce descendants
+that become $\tgtStr\tgtSym$-compatible, since buffers only grow.
+\end{proof}
+
+\begin{figure}[H]
+\centering
+\begin{minipage}[t]{.35\linewidth}
+\begin{minted}{python}
+def @$\runFrontier_\tgtStr(\srcSym_1 \cdots \srcSym_N)$@:  # memoize
+  if @$N = 0$@:
+    return @$\closureFrontier_\tgtStr(\InitialStates \times \{ \varepsilon \})$@
+  # Target recursion (if parent cached)
+  if @$|\tgtStr| > 0$@ and @$\runFrontier_{\tgtStr_{<N}}(\srcStr)$@ in cache:
+    @$\tgtSym \gets \tgtStr_N$@; @$M \gets N{-}1$@
+    return @$\{(\state, \buffer) \in \runFrontier_{\tgtStr_{<N}}(\srcStr)$@
+           @$\colon |\buffer| \le M \lor \buffer_{M+1} = \tgtSym \}$@
+  # Source recursion (default)
+  return @$\nextFrontier_\tgtStr(\runFrontier_\tgtStr(\srcStr_{<N}), \srcSym_N)$@
+\end{minted}
+\end{minipage}
+\hfill
+\begin{minipage}[t]{.30\linewidth}
+\begin{minted}{python}
+def @$\nextFrontier_\tgtStr(\frontier, \srcSym)$@:
+  @$\frontierp \gets \emptyset$@
+  for @$(\state, \buffer)$@ in @$\frontier$@:
+    for @$(\_ \xrightarrow{\srcSym:\tgtSym} \statep)\in \Transitions(\state, \srcSym)$@:
+      @$\bufferp  \gets \buffer\tgtSym$@
+      if @$\bufferp \preceq \tgtStr \lor \tgtStr \preceq \bufferp$@:
+        @$\frontierp$@.add(@$(\statep, \bufferp)$@)
+  return @$\closureFrontier_\tgtStr(\frontierp)$@
+\end{minted}
+\end{minipage}
+\hfill
+\begin{minipage}[t]{.30\linewidth}
+\begin{minted}{python}
+def @$\closureFrontier_\tgtStr(\frontier)$@:
+  @$\frontierp \gets \frontier$@
+  @$\queue \gets \textsc{Queue}(\frontier)$@
+  while @$|\queue| > 0$@:
+    @$(\state, \buffer) \gets$@ @$\queue$@.pop()
+    for @$(\_ \xrightarrow{\varepsilon:\tgtSymp} \statep)\in \Transitions(\state, \varepsilon)$@:
+      @$\bufferp  \gets \buffer\tgtSymp$@
+      if @$\bufferp \preceq \tgtStr \lor \tgtStr \preceq \bufferp$@:
+        if @$(\statep, \bufferp) \notin \frontierp$@:
+          @$\frontierp$@.add(@$(\statep, \bufferp)$@)
+          @$\queue$@.add(@$(\statep, \bufferp)$@)
+  return @$\frontierp$@
+\end{minted}
+\end{minipage}
+\caption{Frontier computation.
+$\runFrontier_\tgtStr(\srcStr)$ supports two recursion strategies:
+source recursion via $\nextFrontier$ (extending $\srcStr$) and
+target recursion via filtering (extending $\tgtStr$,
+\cref{prop:frontier-containment}).
+Target recursion is used when the parent-target frontier is already cached,
+avoiding a full chain recomputation.
+Buffer filtering discards $(\state, \buffer)$ pairs where $\buffer$ is
+incompatible with $\tgtStr$; sound because FSTs only append to the buffer.
+We write $\buffer\tgtSym$ as shorthand for $\buffer$ when $\tgtSym = \varepsilon$,
+and $\buffer \cdot (\tgtSym)$ otherwise.}
+\label{fig:frontier}
+\end{figure}
+
+
+\section{Frontier-Based Checks}
+\label{sec:checks}
+
+The decomposition relies on three checks, each defined in terms of the frontier
+(\cref{fig:checks}).  These are identical to the main paper's
+\texttt{LazyCachedDecomp}.
+We do not use the $\mintedFunc{combined\_universal}$
+shortcut from the paper; see the comparison section below for details.
+
+\begin{figure}[H]
+\centering
+\begin{minipage}[t]{.58\linewidth}
+\begin{minted}{python}
+class Incremental:
+  @$({\_, \srcAlphabet, \_, \Transitions, \InitialStates, \FinalStates}) \gets \transST$@
+\end{minted}
+\begin{minted}{python}
+  def @$\continuous(\srcStr, \tgtStr)$@:  # memoize
+    @$N \gets |\tgtStr|$@
+    def @$\projUniv(\frontierp)$@:
+      return @$\{(\state, \bufferp_{<N}) \mid (\state, \bufferp) \in \frontierp,$@
+             @$\bufferp \preceq \tgtStr \lor \tgtStr \preceq \bufferp \}$@
+    @$\powerstate \gets \projUniv(\runFrontier_\tgtStr(\srcStr))$@
+    @$\Visited \gets \{ \powerstate \}$@
+    @$\queue \gets \textsc{Queue}(\{\powerstate\})$@
+    while @$\queue$@:
+      @$\powerstate \gets \queue$@.pop()
+      # Accepting: some pair has matched
+      # target and is accepting
+      if @$\neg \exists\, (\state, \buffer) \in \powerstate \colon \buffer \succeq \tgtStr \land \state \in \FinalStates$@:
+        return False
+      # Complete: every input leads to a
+      # non-empty successor
+      for @$\srcSymp \in \srcAlphabet$@:
+        @$\powerstatep \gets \projUniv(\nextFrontier_\tgtStr(\powerstate, \srcSymp))$@
+        if @$\powerstatep = \emptyset$@: return False
+        if @$\powerstatep \notin \Visited$@:
+          @$\Visited$@.add(@$\powerstatep$@); @$\queue$@.push(@$\powerstatep$@)
+    return True
+\end{minted}
+\end{minipage}
+\hfill
+\begin{minipage}[t]{.38\linewidth}
+\begin{minted}{python}
+  def @$\discontinuous(\srcStr, \tgtStr)$@:
+    return @$\exists (\state, \buffer) \in$@
+      @$\runFrontier_\tgtStr(\srcStr) \colon$@
+      @$\buffer \succeq \tgtStr \land \state \in \FinalStates$@
+\end{minted}
+\begin{minted}{python}
+  def @$\candidate(\srcStr, \tgtStr)$@:
+    return @$\runFrontier_\tgtStr(\srcStr) \ne \emptyset$@
+\end{minted}
+\begin{minted}{python}
+  def @$\isExactMember(\srcStr, \tgtStr)$@:
+    return @$\exists (\state, \buffer) \in$@
+      @$\runFrontier_\tgtStr(\srcStr) \colon$@
+      @$\buffer = \tgtStr \land \state \in \FinalStates$@
+\end{minted}
+\begin{minted}{python}
+  def @$\prune(\candidates)$@:
+    return @$\{\srcStr \in \candidates$@
+      @$\mid \prefixSource(\srcStr) > 0 \}$@
+\end{minted}
+\begin{minted}{python}
+  def @$\reachableInputs(\srcStr, \tgtStr)$@:  # memoize
+    @$N \gets |\tgtStr|$@
+    return @$\{\srcSymp \mid (\state, \buffer) \in \runFrontier_\tgtStr(\srcStr),$@
+      @$(\state \xrightarrow{\srcSymp:\tgtSym} \statep) \in \Transitions(\state, \srcSymp),$@
+      @$\buffer\tgtSym \preceq \tgtStr \lor \tgtStr \preceq \buffer\tgtSym \}$@
+\end{minted}
+\begin{minted}{python}
+  def @$\reachableOutputs(\srcStr, \tgtStr)$@:
+    @$N \gets |\tgtStr|$@
+    @$\frontier \gets \runFrontier_\tgtStr(\srcStr)$@
+    return @$\{\bufferp_{N+1} \mid$@
+      @$(\state, \buffer) \in \frontier,$@
+      @$(\state \xrightarrow{\_:\tgtSym} \statep) \in \Transitions(\state),$@
+      @$\bufferp = \buffer\tgtSym, |\bufferp| > N,$@
+      @$\bufferp_{<N} = \tgtStr_{<N} \}$@
+    # over-approx: also yields @$\tgtSym$@
+    # where buffer has not yet reached
+    # position @$N$@; filtered by @$\candidate$@ later
+\end{minted}
+\end{minipage}
+\caption{Frontier-based checks on $\texttt{Incremental}$.
+\textbf{Left:} $\continuous(\srcStr, \tgtStr)$ performs powerset BFS to verify
+that every continuation of $\srcStr$ produces output starting with $\tgtStr$.
+Buffers are truncated to length $N$ via $\projUniv$ to keep the powerset
+state space finite.
+\textbf{Right:}
+$\discontinuous$ checks if $\srcStr$ produces output covering $\tgtStr$ at a
+final state.
+$\candidate$ checks if $\srcStr$ has any live frontier state.
+$\isExactMember$ checks if $\transFn(\srcStr) = \tgtStr$ exactly.
+$\prune$ drops source strings with zero LM prefix probability.
+$\reachableInputs$ returns source symbols leading to target-compatible
+successors (used in $\decompose$ to prune the extension loop).
+$\reachableOutputs$ returns target symbols $\tgtSym$ reachable at position
+$N{+}1$ of the output (used in $\decomposeNext$ to prune per-symbol checks).}
+\label{fig:checks}
+\end{figure}
+
+
+\section{Incremental Decomposition}
+\label{sec:decompose}
+
+The $\decompose$ method (\cref{fig:decompose}) is a memoized, incremental BFS
+that computes $(\Remainder(\tgtStr), \Quotient(\tgtStr))$.
+For the empty target $\varepsilon$, the BFS is seeded with $\{\varepsilon\}$.
+For $\tgtStr = \tgtStr_{<N}\tgtSym_N$, the BFS is seeded with
+$\Quotient(\tgtStr_{<N}) \cup \Remainder(\tgtStr_{<N})$ from the parent
+decomposition.
+Parent quotient strings may lose universality under the new target symbol;
+parent remainder strings may gain new extensions.
+Each source string is classified:
+\begin{itemize}
+\item \textbf{Cylinder} ($\continuous$): $\srcStr$ and all its extensions
+  produce output starting with $\tgtStr$.  Added to $\Quotient$;
+  no further extension needed (the entire subtree is absorbed).
+\item \textbf{Member} ($\discontinuous$): $\srcStr$ itself produces output
+  starting with $\tgtStr$.  Added to $\Remainder$; extensions are still
+  explored (some may be cylinders or members of their own).
+\item \textbf{Extension}: for each reachable source symbol $\srcSymp$,
+  $\srcStr\srcSymp$ is added to the candidate set if it has a live frontier
+  ($\candidate$).
+\end{itemize}
+The BFS terminates because $\continuous$ absorbs entire subtrees ($\Quotient$
+grows monotonically in depth), $\candidate$ filters dead prefixes, and $\prune$
+filters LM-dead prefixes.
+
+\begin{figure}[H]
+\centering
+\begin{minted}{python}
+class Incremental:  # continued
+  def @$\decompose(\tgtStr)$@:  # memoize
+    @$N \gets |\tgtStr|$@
+    if @$N = 0$@:
+      @$\queue \gets \{\varepsilon\}$@
+    else:
+      @$(\Remainderp, \Quotientp) \gets \decompose(\tgtStr_{<N})$@
+      @$\queue \gets \Quotientp\cup\Remainderp$@
+    @$(\Remainder, \Quotient) \gets (\emptyset, \emptyset)$@
+    while @$|\queue| > 0$@:
+      @$\candidates \gets \emptyset$@
+      for @$\srcStr$@ in @$\queue$@:
+        if @$\continuous(\srcStr, \tgtStr)$@:
+          @$\Quotient$@.add(@$\srcStr$@); continue        # absorb entire subtree
+        if @$\discontinuous(\srcStr, \tgtStr)$@:
+          @$\Remainder$@.add(@$\srcStr$@)
+        # not a cylinder @$\Rightarrow$@ must explore extensions
+        for @$\srcSymp \in \reachableInputs(\srcStr, \tgtStr)$@:
+          @$\candidates$@.add(@$\srcStr\srcSymp$@)
+      @$\queue \gets \prune(\candidates)$@
+    return @$(\Remainder, \Quotient)$@
+\end{minted}
+\caption{Incremental decomposition.
+$\decompose(\tgtStr)$ is memoized: extending to $\tgtStr\tgtSym$ starts from
+$\Quotient(\tgtStr) \cup \Remainder(\tgtStr)$ rather than $\varepsilon$.
+The extension loop uses $\reachableInputs$ rather than iterating over all of
+$\srcAlphabet$, pruning source symbols whose arcs produce target-incompatible
+buffers.}
+\label{fig:decompose}
+\end{figure}
+
+
+\section{Multi-Symbol Expansion}
+\label{sec:decompose-next}
+
+The $\decomposeNext$ method (\cref{fig:decompose-next}) computes
+$\Remainder(\tgtStr\tgtSym)$ and $\Quotient(\tgtStr\tgtSym)$ for all
+$\tgtSym \in \tgtAlphabet$ simultaneously, as well as the exact preimage
+$\{\srcStr : \transFn(\srcStr) = \tgtStr\}$.
+This is the key efficiency improvement over calling $\decompose(\tgtStr\tgtSym)$
+independently for each $\tgtSym$.
+
+The BFS is seeded with $\Quotient(\tgtStr) \cup \Remainder(\tgtStr)$.
+For each source string $\srcStr$ in the worklist:
+\begin{enumerate}
+\item \textbf{Exact preimage:} if $\isExactMember(\srcStr, \tgtStr)$,
+  add $\srcStr$ to the preimage set.
+\item \textbf{Per-symbol classification:} for each
+  $\tgtSym \in \reachableOutputs(\srcStr, \tgtStr)$, check if $\srcStr$ is a
+  cylinder or member for $\tgtStr\tgtSym$.
+  By functionality of $\transST$, at most one $\tgtSym$ can be a cylinder
+  (see below).
+\item \textbf{Absorption:} if a cylinder was found for some $\tgtSym$, the
+  entire subtree rooted at $\srcStr$ is absorbed --- skip extension for
+  \emph{all} symbols.
+\item \textbf{Extension:} otherwise, extend by all reachable source symbols.
+\end{enumerate}
+
+Three optimizations:
+\begin{itemize}
+\item \textbf{Target recursion in $\runFrontier$ (\cref{sec:frontier}):}
+  The call $\continuous(\srcStr, \tgtStr\tgtSym)$ internally triggers
+  $\runFrontier_{\tgtStr\tgtSym}(\srcStr)$.
+  Because $\decomposeNext$ has already computed
+  $\runFrontier_\tgtStr(\srcStr)$ (via $\decompose(\tgtStr)$), the frontier
+  for the extended target is derived by filtering rather than recomputing the
+  entire source-string chain (\cref{prop:frontier-containment}).
+  This is transparent: $\continuous$ is called unchanged; the optimization
+  lives entirely inside $\runFrontier$.
+\item \textbf{Non-cylinder shortcut:}
+  Strings in $\Remainder(\tgtStr)$ were not cylinders for $\tgtStr$,
+  hence cannot be cylinders for the strictly more restrictive $\tgtStr\tgtSym$.
+  The expensive powerset universality check is skipped for these seeds.
+\item \textbf{Cache population:}
+  After the BFS, the computed $\Remainder(\tgtStr\tgtSym)$ and
+  $\Quotient(\tgtStr\tgtSym)$ are written into $\decompose$'s memoization
+  cache.
+  A subsequent $\decompose(\tgtStr\tgtSym)$ call (e.g., from
+  $\decomposeNext(\tgtStr\tgtSym)$) hits the cache instead of re-running its
+  own BFS.
+\end{itemize}
+
+\begin{proposition}[Cylinder uniqueness]
+\label{prop:cylinder-uniqueness}
+For a functional FST $\transST$, a source string $\srcStr$ can be a cylinder
+for at most one target symbol $\tgtSym$.
+\end{proposition}
+\begin{proof}
+Suppose $\srcStr$ is a cylinder for both $\tgtSym$ and $\tgtSymp$ with $\tgtSym
+\ne \tgtSymp$.
+Being a cylinder for $\tgtSym$ means every extension of $\srcStr$ produces
+output starting with $\tgtStr\tgtSym$; likewise for $\tgtSymp$.
+For a functional FST, each input has a unique output, so
+$\transFn^{-1}(\tgtStr\tgtSym\tgtStrings) \cap
+\transFn^{-1}(\tgtStr\tgtSymp\tgtStrings) = \emptyset$.
+But $\srcStr$ and all its extensions lie in both preimages --- a contradiction.
+\end{proof}
+
+\begin{figure}[H]
+\centering
+\begin{minted}{python}
+  def @$\decomposeNext(\tgtStr)$@:
+    @$(\Remainder, \Quotient) \gets \decompose(\tgtStr)$@
+    @$\texttt{quotients} \gets \{\}$@; @$\texttt{remainders} \gets \{\}$@        # @$\tgtSym \mapsto$@ set of @$\srcStr$@
+    @$\texttt{preimage} \gets \emptyset$@
+    # Remainder strings were not cylinders for @$\tgtStr$@, hence not for any @$\tgtStr\tgtSym$@.
+    @$\texttt{non\_cyl} \gets \Remainder$@
+    @$\queue \gets \Remainder \cup \Quotient$@
+    while @$|\queue| > 0$@:
+      @$\candidates \gets \emptyset$@
+      for @$\srcStr$@ in @$\queue$@:
+        if @$\isExactMember(\srcStr, \tgtStr)$@:
+          @$\texttt{preimage}$@.add(@$\srcStr$@)               # @$\transFn(\srcStr) = \tgtStr$@ exactly
+        # Check all reachable @$\tgtSym$@'s for this @$\srcStr$@ in one pass.
+        # At most one @$\tgtSym$@ can be a cylinder (\cref{prop:cylinder-uniqueness}).
+        @$\texttt{cyl\_sym} \gets \texttt{None}$@
+        for @$\tgtSym$@ in @$\reachableOutputs(\srcStr, \tgtStr)$@:
+          if @$\srcStr \notin \texttt{non\_cyl}$@ and @$\continuous(\srcStr, \tgtStr\tgtSym)$@:
+            assert @$\texttt{cyl\_sym} = \texttt{None}$@      # functionality
+            @$\texttt{quotients}[\tgtSym]$@.add(@$\srcStr$@); @$\texttt{cyl\_sym} \gets \tgtSym$@; continue
+          if @$\discontinuous(\srcStr, \tgtStr\tgtSym)$@:
+            @$\texttt{remainders}[\tgtSym]$@.add(@$\srcStr$@)
+        if @$\texttt{cyl\_sym} \ne \texttt{None}$@: continue   # absorbed @$\Rightarrow$@ skip extension for all @$\tgtSym$@
+        for @$\srcSymp \in \reachableInputs(\srcStr, \tgtStr)$@:
+          @$\candidates$@.add(@$\srcStr\srcSymp$@)
+      @$\queue \gets \prune(\candidates)$@
+    # Populate @$\decompose$@'s cache for all children
+    for @$\tgtSym \in \texttt{quotients}.\texttt{keys}() \cup \texttt{remainders}.\texttt{keys}()$@:
+      @$\Cache[\decompose, \tgtStr\tgtSym] \gets (\texttt{remainders}[\tgtSym], \texttt{quotients}[\tgtSym])$@
+    return @$(\texttt{remainders}, \texttt{quotients}, \texttt{preimage})$@
+\end{minted}
+\caption{Multi-symbol expansion.
+$\decomposeNext(\tgtStr)$ computes $\Remainder(\tgtStr\tgtSym)$ and
+$\Quotient(\tgtStr\tgtSym)$ for all $\tgtSym \in \tgtAlphabet$ in a single
+BFS pass.
+The $\continuous(\srcStr, \tgtStr\tgtSym)$ call triggers
+$\runFrontier_{\tgtStr\tgtSym}(\srcStr)$, which is computed cheaply via
+target recursion (\cref{prop:frontier-containment}) since the parent frontier
+$\runFrontier_\tgtStr(\srcStr)$ is already cached.
+The non-cylinder shortcut avoids the universality check entirely for
+seeds in $\Remainder(\tgtStr)$.
+After the BFS, the cache is populated so that subsequent
+$\decompose(\tgtStr\tgtSym)$ calls are free.
+The exact preimage is collected as a byproduct: if $\srcStr$ is a cylinder for
+some $\tgtStr\tgtSym$, every extension produces output strictly longer than
+$\tgtStr$, so no extension can be an exact preimage of $\tgtStr$.}
+\label{fig:decompose-next}
+\end{figure}
+
+
+\section{Scoring}
+\label{sec:scoring}
+
+Given the decomposition, the scoring functions (\cref{fig:scoring}) are
+straightforward.
+The prefix probability $\prefixTarget(\tgtStr)$ sums LM prefix probabilities
+over $\Quotient$ and LM string probabilities over $\Remainder$.
+The next-symbol distribution $\prefixTarget(\cdot \mid \tgtStr)$ is computed
+via $\decomposeNext$, which provides the per-symbol decompositions and exact
+preimage in a single pass.
+
+\begin{figure}[H]
+\centering
+\begin{minipage}[t]{.48\linewidth}
+\begin{minted}{python}
+  def prefix_prob(@$\tgtStr$@):
+    @$(\Remainder, \Quotient) \gets \decompose(\tgtStr)$@
+    return @$\sum_{\srcStr \in \Quotient} \prefixSource(\srcStr) + \sum_{\srcStr \in \Remainder} \pSource(\srcStr)$@
+\end{minted}
+\begin{minted}{python}
+  def prob(@$\tgtStr$@):
+    @$(\_, \_, \texttt{preimage}) \gets \decomposeNext(\tgtStr)$@
+    return @$\sum_{\srcStr \in \texttt{preimage}} \pSource(\srcStr)$@
+\end{minted}
+\end{minipage}
+\hfill
+\begin{minipage}[t]{.48\linewidth}
+\begin{minted}{python}
+  def next_dist(@$\tgtStr$@):
+    @$(\texttt{remainders}, \texttt{quotients}, \texttt{preimage}) \gets \decomposeNext(\tgtStr)$@
+    @$\pdict \gets \{\}$@
+    for @$\tgtSym \in \texttt{quotients}.\texttt{keys}() \cup \texttt{remainders}.\texttt{keys}()$@:
+      for @$\srcStr \in \texttt{quotients}[\tgtSym]$@:
+        @$\pdict[\tgtSym]$@ += @$\prefixSource(\srcStr)$@
+      for @$\srcStr \in \texttt{remainders}[\tgtSym]$@:
+        @$\pdict[\tgtSym]$@ += @$\pSource(\srcStr)$@
+    for @$\srcStr \in \texttt{preimage}$@:
+      @$\pdict[\eos]$@ += @$\pSource(\srcStr)$@
+    return @$\mintedFunc{normalize}(\pdict)$@
+\end{minted}
+\end{minipage}
+\caption[Scoring functions]{%
+\textbf{Left:} $\mintedFunc{prefix\_prob}(\tgtStr) = \prefixTarget(\tgtStr)$ and
+$\mintedFunc{prob}(\tgtStr) = \pTarget(\tgtStr)$.
+\textbf{Right:} $\mintedFunc{next\_dist}(\tgtStr) = \prefixTarget(\cdot \mid \tgtStr)$
+via $\decomposeNext$.
+Compared to $\mintedFunc{fast\_next\_dist}$, this is simpler: there is no
+per-element expansion loop and no $\bot$ / catching-up logic.
+Target recursion in $\runFrontier$ (\cref{prop:frontier-containment}) avoids
+the frontier recomputation.
+The entire complexity is absorbed by $\decomposeNext$, which classifies all
+symbols in one pass.
+All computations are in the log domain; we write sums for clarity.
+$\prefixSource$ and $\pSource$ are memoized so that
+$\prefixSource(\cdot \mid \cdot)$ takes $\mathcal{O}(1)$ time.}
+\label{fig:scoring}
+\end{figure}
+
+For reference, the na\"ive next-symbol distribution computes
+$\mintedFunc{prefix\_prob}(\tgtStr\tgtSym)$ independently for each $\tgtSym$:
+
+\begin{figure}[H]
+\centering
+\begin{minted}{python}
+  def next_dist_bruteforce(@$\tgtStr$@):
+    @$\pdict \gets \{\}$@
+    @$Z \gets \mintedFunc{prefix\_prob}(\tgtStr)$@
+    for @$\tgtSymp \in \tgtAlphabet$@:
+      @$\pdict[\tgtSymp] \gets \mintedFunc{prefix\_prob}(\tgtStr\tgtSymp) / Z$@
+    @$\pdict[\eos] \gets \mintedFunc{prob}(\tgtStr) / Z$@
+    return @$\pdict$@
+\end{minted}
+\caption{Reference implementation.
+Correct but redundant: each $\mintedFunc{prefix\_prob}(\tgtStr\tgtSym)$ call
+triggers its own $\decompose$ BFS.
+Used as a test oracle for $\mintedFunc{next\_dist}$.}
+\label{fig:bruteforce}
+\end{figure}
+
+
+\section{Correctness}
+
+\begin{proposition}
+$\mintedFunc{next\_dist}(\tgtStr) = \mintedFunc{next\_dist\_bruteforce}(\tgtStr)$.
+\end{proposition}
+
+\begin{proof}
+It suffices to show that $\decomposeNext(\tgtStr)$ produces the same
+$\Remainder(\tgtStr\tgtSym)$ and $\Quotient(\tgtStr\tgtSym)$ as calling
+$\decompose(\tgtStr\tgtSym)$ independently.
+
+Both $\decompose(\tgtStr\tgtSym)$ and $\decomposeNext(\tgtStr)$ are seeded
+with $\Quotient(\tgtStr) \cup \Remainder(\tgtStr)$.
+The former classifies each $\srcStr$ using $\continuous(\srcStr,
+\tgtStr\tgtSym)$ and $\discontinuous(\srcStr, \tgtStr\tgtSym)$, extending
+non-cylinders by $\reachableInputs(\srcStr, \tgtStr\tgtSym)$.
+The latter performs the same checks for all $\tgtSym$ simultaneously.
+
+There are three potential differences to verify:
+\begin{enumerate}
+\item \textbf{Reachable symbols:} $\decomposeNext$ only checks
+  $\tgtSym \in \reachableOutputs(\srcStr, \tgtStr)$ rather than all of
+  $\tgtAlphabet$.
+  By soundness of $\reachableOutputs$, any $\tgtSym$ with
+  $\Quotient(\tgtStr\tgtSym) \ne \emptyset$ or
+  $\Remainder(\tgtStr\tgtSym) \ne \emptyset$ is included.
+
+\item \textbf{Extension symbols:} $\decomposeNext$ extends by
+  $\reachableInputs(\srcStr, \tgtStr)$ while $\decompose(\tgtStr\tgtSym)$
+  extends by $\reachableInputs(\srcStr, \tgtStr\tgtSym)$.
+  The former is a superset of the latter (compatibility with $\tgtStr$ is weaker
+  than compatibility with $\tgtStr\tgtSym$), so no reachable extensions are
+  missed.
+
+\item \textbf{Cylinder absorption:} when $\srcStr$ is a cylinder for $\tgtSym$,
+  $\decomposeNext$ skips extension for \emph{all} symbols.
+  This is correct by
+  \cref{prop:cylinder-uniqueness}: $\srcStr$ cannot be a cylinder for any other
+  $\tgtSymp \ne \tgtSym$.
+  Furthermore, since $\srcStr \in \Quotient(\tgtStr\tgtSym)$, every extension
+  of $\srcStr$ produces output starting with $\tgtStr\tgtSym$ --- none can
+  contribute to $\Quotient(\tgtStr\tgtSymp)$ or $\Remainder(\tgtStr\tgtSymp)$
+  for $\tgtSymp \ne \tgtSym$, and none can contribute additional members to
+  $\Remainder(\tgtStr\tgtSym)$ beyond what the cylinder already absorbs.
+\end{enumerate}
+
+\noindent
+The non-cylinder shortcut is also correct: if $\srcStr \in \Remainder(\tgtStr)$,
+then $\srcStr$ was not a cylinder for $\tgtStr$.
+Since $\tgtStr\tgtSym$ is strictly more restrictive than $\tgtStr$ (being a
+cylinder for $\tgtStr\tgtSym$ implies being a cylinder for $\tgtStr$),
+$\srcStr$ cannot be a cylinder for any $\tgtStr\tgtSym$.
+\end{proof}
+
+
+
+\section{Relationship to Existing Algorithms}
+
+\paragraph{Comparison with \texttt{AbstractIncrDecomp}.}
+The $\decompose$ method is identical to
+\texttt{AbstractIncrDecomp}.$\decompose$ from the main paper, with one
+refinement: the extension loop iterates over
+$\reachableInputs(\srcStr, \tgtStr) \subseteq \srcAlphabet$ rather than all of
+$\srcAlphabet$, pre-filtering source symbols whose arcs produce
+target-incompatible buffers.
+
+\paragraph{Comparison with \texttt{fast\_next\_dist}.}
+The $\mintedFunc{next\_dist}$ function achieves the same result as
+\texttt{fast\_next\_dist} but with a fundamentally different structure.
+\texttt{fast\_next\_dist} interleaves symbol classification with source-string
+expansion in a single loop, requiring $\bot$ markers, a
+$\mintedFunc{combined\_universal}$ helper, and catching-up logic for beams
+whose buffers lag behind the target.
+In contrast, $\mintedFunc{next\_dist}$ separates the concerns cleanly:
+$\decomposeNext$ handles all the BFS and classification, and
+$\mintedFunc{next\_dist}$ simply reads off the results.
+The cost of this simplicity is that $\decomposeNext$ always materializes the
+full decomposition $(\Remainder(\tgtStr\tgtSym), \Quotient(\tgtStr\tgtSym))$
+for every reachable $\tgtSym$, whereas \texttt{fast\_next\_dist} can sometimes
+resolve a symbol early (via $\mintedFunc{combined\_universal}$) without full
+expansion.
+
+\paragraph{Comparison with \texttt{combined\_universal}.}
+The paper's $\mintedFunc{combined\_universal}$ is a \emph{sufficient condition}
+for cylinder status: it partitions the frontier into ``scored'' states
+(buffer past target, committed to $\tgtSym$) and ``unscored'' states
+(buffer = target), checks universality of their union on plain FST states
+(no buffer tracking), and verifies that unscored arcs produce only $\tgtSym$
+or $\varepsilon$.
+When it succeeds, it avoids \emph{both} the frontier recomputation and the
+full powerset BFS of $\continuous$.
+When it fails, the algorithm falls through to full expansion.
+
+Our algorithm addresses the frontier recomputation cost via
+\textbf{target recursion} (\cref{sec:frontier}): by
+\cref{prop:frontier-containment}, the $\tgtStr\tgtSym$ frontier is derived by
+filtering the cached $\tgtStr$ frontier ($\mathcal{O}(|\frontier|)$),
+avoiding the chain recomputation.
+This is exact, transparent, and always applies.
+We do not currently use a universality shortcut analogous to
+$\mintedFunc{combined\_universal}$; the full powerset BFS in $\continuous$
+handles all cases.
+
+\paragraph{Comparison with \texttt{LazyCachedDecomp}.}
+The frontier-based checks ($\continuous$, $\discontinuous$, $\candidate$) and
+frontier computation ($\runFrontier$, $\nextFrontier$, $\closureFrontier$) are
+identical to \texttt{LazyCachedDecomp} from the main paper.
+The only structural difference is that this algorithm operates on source strings
+(passed to $\continuous(\srcStr, \tgtStr)$ etc.) while
+\texttt{LazyCachedDecomp} sometimes operates on frontiers directly.
+Internally, both compute the same frontier via $\runFrontier_\tgtStr(\srcStr)$.
+
+
+\end{document}
