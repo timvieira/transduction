@@ -409,8 +409,9 @@ and $\buffer \cdot (\tgtSym)$ otherwise.}
 The decomposition relies on three checks, each defined in terms of the frontier
 (\cref{fig:checks}).  These are identical to the main paper's
 \texttt{LazyCachedDecomp}.
-We do not use the $\mintedFunc{combined\_universal}$
-shortcut from the paper; see the comparison section below for details.
+The $\continuous$ check includes an $\ipUniversal$ shortcut
+(\cref{sec:fast-univ-filter}) that avoids the full powerset BFS when a cheap
+sufficient condition holds.
 
 \begin{figure}[H]
 \centering
@@ -421,6 +422,10 @@ class Incremental:
 \end{minted}
 \begin{minted}{python}
   def @$\continuous(\srcStr, \tgtStr)$@:  # memoize
+    # Cheap shortcut (\cref{sec:fast-univ-filter})
+    if @$|\tgtStr| > 0$@ and @$\ipUniversal(\srcStr, \tgtStr)$@:
+      return True
+    # Full powerset BFS
     @$N \gets |\tgtStr|$@
     def @$\projUniv(\frontierp)$@:
       return @$\{(\state, \bufferp_{<N}) \mid (\state, \bufferp) \in \frontierp,$@
@@ -736,7 +741,9 @@ via $\decomposeNext$.
 Compared to $\mintedFunc{fast\_next\_dist}$, this is simpler: there is no
 per-element expansion loop and no $\bot$ / catching-up logic.
 Target recursion in $\runFrontier$ (\cref{prop:frontier-containment}) avoids
-the frontier recomputation.
+the frontier recomputation, and the $\ipUniversal$ shortcut
+(\cref{sec:fast-univ-filter}) avoids the powerset BFS when all frontier states
+are scored and ip-universal.
 The entire complexity is absorbed by $\decomposeNext$, which classifies all
 symbols in one pass.
 All computations are in the log domain; we write sums for clarity.
@@ -822,6 +829,82 @@ $\srcStr$ cannot be a cylinder for any $\tgtStr\tgtSym$.
 \end{proof}
 
 
+\section{IP-Universal Shortcut for \texorpdfstring{$\continuous$}{is\_cylinder}}
+\label{sec:fast-univ-filter}
+
+The full $\continuous$ check performs a powerset BFS that can be expensive ---
+$\mathcal{O}(2^{|\States| \cdot N} \cdot |\srcAlphabet|)$ in the worst case.
+We add a cheap sufficient condition, $\ipUniversal$, that avoids the BFS
+entirely when it succeeds (\cref{fig:fast-univ-filter}).
+
+\paragraph{IP-universal states.}
+A state $\state$ of $\transST$ is \defn{input-projection universal} (ip-universal)
+if the input projection of $\transST$, started from
+$\varepsilon\text{-close}(\{\state\})$, accepts $\kleene{\srcAlphabet}$.
+The set $\ipUniversalStates$ of all ip-universal states is computed once per FST
+via a greatest-fixpoint iteration
+($\texttt{compute\_ip\_universal\_states}$, defined in
+\texttt{universality.py}).
+
+\paragraph{Key insight.}
+If every frontier state $(\state, \buffer)$ whose buffer is compatible with
+$\tgtStr$ has $\state \in \ipUniversalStates$, then every extension of $\srcStr$
+is accepted by the input projection from each such state.
+Combined with the fact that the buffer already matches $\tgtStr$
+(the ``scored'' condition below), this implies every extension of $\srcStr$
+produces output starting with $\tgtStr$ --- exactly the cylinder property.
+
+\paragraph{Scored vs.\ unscored states.}
+When checking $\continuous(\srcStr, \tgtStr)$ with $\tgtStr = \tgtStr_{<N}\tgtSym$,
+the parent frontier $\runFrontier_{\tgtStr_{<N}}(\srcStr)$ (which must be cached)
+classifies each $(\state, \buffer)$ pair:
+\begin{itemize}
+\item \textbf{Scored} ($|\buffer| > N{-}1$ and $\buffer_N = \tgtSym$): the buffer has already
+  committed to $\tgtSym$ at position $N$.  If $\state \in \ipUniversalStates$,
+  every continuation from $\state$ is accepted, so this pair contributes to
+  universality.
+\item \textbf{Dead} ($|\buffer| > N{-}1$ and $\buffer_N \ne \tgtSym$): the buffer committed to
+  the wrong symbol.  These are already excluded by the $\tgtStr$ filter.
+\item \textbf{Unscored} ($|\buffer| = N{-}1$): the buffer matches $\tgtStr_{<N}$ exactly but
+  hasn't produced position $N$ yet.  We bail out conservatively (return
+  False) since determining whether unscored states eventually commit to
+  $\tgtSym$ requires following transitions.
+\item \textbf{Behind} ($|\buffer| < N{-}1$): bail out conservatively.
+\end{itemize}
+
+The shortcut succeeds when \emph{all} compatible frontier states are scored,
+every scored state has $\state \in \ipUniversalStates$, and at least one scored
+state is final.  This is an $\mathcal{O}(|\frontier|)$ scan with no transitions
+or closures.
+
+\begin{figure}[H]
+\centering
+\begin{minted}{python}
+  @$\ipUniversalStates \gets \texttt{compute\_ip\_universal\_states}(\transST)$@  # precomputed once
+\end{minted}
+\begin{minted}{python}
+  def @$\ipUniversal(\srcStr, \tgtStr)$@:  # @$\tgtStr = \tgtStr_{<N}\tgtSym$@
+    if @$(\srcStr, \tgtStr_{<N}) \notin \Cache[\runFrontier]$@: return False
+    @$\frontier \gets \Cache[\runFrontier][\srcStr, \tgtStr_{<N}]$@
+    @$N \gets |\tgtStr_{<N}|$@; @$\tgtSym \gets \tgtStr_N$@
+    @$\texttt{has\_scored\_final} \gets \text{False}$@
+    for @$(\state, \buffer) \in \frontier$@:
+      if @$|\buffer| > N$@:
+        if @$\buffer_{N+1} \ne \tgtSym$@: continue   # dead for this @$\tgtSym$@, ignore
+        if @$\state \notin \ipUniversalStates$@: return False
+        if @$\state \in \FinalStates$@: @$\texttt{has\_scored\_final} \gets \text{True}$@
+      elif @$|\buffer| = N$@: return False            # unscored: bail out
+      else: return False                              # behind: bail out
+    return @$\texttt{has\_scored\_final}$@
+\end{minted}
+\caption{IP-universal shortcut for $\continuous$.
+Uses precomputed ip-universal states to check the cylinder condition in
+$\mathcal{O}(|\frontier|)$ time, avoiding the powerset BFS.
+Only handles ``scored'' states where the buffer has already committed to
+$\tgtSym = \tgtStr_N$; bails out conservatively on unscored or behind states.}
+\label{fig:fast-univ-filter}
+\end{figure}
+
 
 \section{Relationship to Existing Algorithms}
 
@@ -860,15 +943,25 @@ When it succeeds, it avoids \emph{both} the frontier recomputation and the
 full powerset BFS of $\continuous$.
 When it fails, the algorithm falls through to full expansion.
 
-Our algorithm addresses the frontier recomputation cost via
-\textbf{target recursion} (\cref{sec:frontier}): by
-\cref{prop:frontier-containment}, the $\tgtStr\tgtSym$ frontier is derived by
-filtering the cached $\tgtStr$ frontier ($\mathcal{O}(|\frontier|)$),
-avoiding the chain recomputation.
-This is exact, transparent, and always applies.
-We do not currently use a universality shortcut analogous to
-$\mintedFunc{combined\_universal}$; the full powerset BFS in $\continuous$
-handles all cases.
+Our algorithm now addresses both costs independently:
+\begin{enumerate}
+\item \textbf{Target recursion} (\cref{sec:frontier}): by
+  \cref{prop:frontier-containment}, the $\tgtStr\tgtSym$ frontier is derived by
+  filtering the cached $\tgtStr$ frontier ($\mathcal{O}(|\frontier|)$),
+  avoiding the chain recomputation.
+  This is exact, transparent, and always applies.
+\item \textbf{IP-universal shortcut} (\cref{sec:fast-univ-filter}):
+  $\ipUniversal$ checks whether all scored frontier states have ip-universal
+  FST states, avoiding the powerset BFS in $\mathcal{O}(|\frontier|)$ time.
+  This is a sufficient condition and bails out conservatively on unscored
+  states; the full BFS handles the remaining cases.
+\end{enumerate}
+The paper's $\mintedFunc{combined\_universal}$ also handles unscored states
+(by checking that their arcs produce only $\tgtSym$ or $\varepsilon$), which
+makes it applicable in more cases.
+Our $\ipUniversal$ is more conservative (bails out on unscored states entirely)
+but cheaper --- it requires no transition following at all, just set membership
+checks on precomputed ip-universal states.
 
 \paragraph{Comparison with \texttt{LazyCachedDecomp}.}
 The frontier-based checks ($\continuous$, $\discontinuous$, $\candidate$) and

@@ -19,7 +19,8 @@ Naming conventions (automata-theory style):
   F, G       — frontiers: sets of (state, buffer) pairs
 """
 from transduction.fst import EPSILON
-from transduction.util import validate_target, LogVector, logsumexp, memoize
+from transduction.util import validate_target, LogVector, logsumexp
+from transduction.universality import compute_ip_universal_states
 from collections import defaultdict
 
 
@@ -31,8 +32,14 @@ class Incremental:
         self.source_alphabet = fst.A - {EPSILON}
         self.target_alphabet = fst.B - {EPSILON}
         self.EOS = EOS   # sentinel for end-of-string
+        self._ip_universal = compute_ip_universal_states(fst)
+        # Per-instance caches (keys do NOT include self)
+        self._decompose_cache = {}
+        self._run_cache = {}
+        self._is_cylinder_cache = {}
+        self._reachable_inputs_cache = {}
+        self._lm_state_cache = {}
 
-    @memoize
     def decompose(self, target):
         """Decompose T⁻¹(target·Σ*) into R ∪ Q·Σ* (remainder + quotient).
 
@@ -45,6 +52,9 @@ class Incremental:
         - is_live filters dead prefixes (buffer incompatible with target)
         - prune filters LM-dead prefixes (zero probability under LM)
         """
+        if target in self._decompose_cache:
+            return self._decompose_cache[target]
+
         validate_target(target, self.target_alphabet)
 
         N = len(target)
@@ -68,9 +78,10 @@ class Incremental:
                     candidates.append(xs + (x,))
             worklist = self.prune(candidates)
 
-        return (remainder, quotient)
+        result = (remainder, quotient)
+        self._decompose_cache[target] = result
+        return result
 
-    @memoize
     def _lm_state(self, xs):
         """Return LMState for source string xs, built incrementally.
 
@@ -78,9 +89,14 @@ class Incremental:
         computed at most once (memoized), so total cost across all source
         strings explored is O(sum of their lengths), not O(sum of lengths²).
         """
+        if xs in self._lm_state_cache:
+            return self._lm_state_cache[xs]
         if len(xs) == 0:
-            return self.lm.initial()
-        return self._lm_state(xs[:-1]) >> xs[-1]
+            result = self.lm.initial()
+        else:
+            result = self._lm_state(xs[:-1]) >> xs[-1]
+        self._lm_state_cache[xs] = result
+        return result
 
     def logprefix(self, target):
         """Log P(output starts with target).
@@ -198,13 +214,12 @@ class Incremental:
 
             worklist = self.prune(candidates)
 
-        # Populate decompose's memo cache: we already computed R(target·y)
+        # Populate decompose cache: we already computed R(target·y)
         # and Q(target·y) for every y, so a subsequent decompose(target·y)
         # call (e.g., from decompose_next(target·y)) hits the cache instead
         # of re-running its own BFS.
-        cache = Incremental.__dict__['decompose'].cache
         for y in set(quotients) | set(remainders):
-            cache[(self, target + (y,))] = (remainders[y], quotients[y])
+            self._decompose_cache[target + (y,)] = (remainders[y], quotients[y])
 
         return remainders, quotients, preimage
 
@@ -225,7 +240,6 @@ class Incremental:
             logp.logaddexp(self.EOS, self._lm_state(xs).logprob)
         return logp.normalize()
 
-    @memoize
     def reachable_inputs(self, xs, target):
         """Source symbols x with arcs from xs's frontier states.
 
@@ -235,6 +249,9 @@ class Incremental:
         if x is in the result, step(run(xs, target), x, target) has at least
         one state before ε-closure, and closure only adds states.
         """
+        key = (xs, target)
+        if key in self._reachable_inputs_cache:
+            return self._reachable_inputs_cache[key]
         result = set()
         N = len(target)
         for s, ys in self.run(xs, target):
@@ -243,6 +260,7 @@ class Incremental:
                     next_buf = ys if b == EPSILON else ys + (b,)
                     if target[:min(N, len(next_buf))] == next_buf[:min(N, len(next_buf))]:
                         result.add(a)
+        self._reachable_inputs_cache[key] = result
         return result
 
     def reachable_outputs(self, xs, target):
@@ -314,7 +332,41 @@ class Incremental:
         N = len(target)
         return any(self.fst.is_final(s) for (s, ys) in self.run(xs, target) if ys[:N] == target)
 
-    @memoize
+    def _combined_universal(self, xs, target):
+        """Cheap sufficient condition for is_cylinder using precomputed ip-universal states.
+
+        If every frontier state (s, ys) with buffer matching target has s in the
+        precomputed ip-universal set, then the input projection from that state
+        accepts Σ*, so every extension of xs produces output starting with target.
+
+        Only handles "scored" states (buffer already committed to target[-1]).
+        Bails out conservatively if any state is unscored (buffer == parent_target)
+        or behind (buffer shorter than parent_target).
+        """
+        if len(target) == 0:
+            return False
+        parent_target = target[:-1]
+        if (xs, parent_target) not in self._run_cache:
+            return False
+        F = self._run_cache[(xs, parent_target)]
+        N = len(parent_target)
+        y = target[-1]
+
+        has_scored_final = False
+        for s, ys in F:
+            if len(ys) > N:
+                if ys[N] != y:
+                    continue          # dead for this y, ignore
+                if s not in self._ip_universal:
+                    return False      # scored but not ip-universal
+                if self.fst.is_final(s):
+                    has_scored_final = True
+            elif len(ys) == N:
+                return False          # unscored: can't handle cheaply
+            else:
+                return False          # behind: bail out
+        return has_scored_final
+
     def is_cylinder(self, xs, target):
         """True if xs is a cylinder: every extension of xs produces target prefix.
 
@@ -334,6 +386,15 @@ class Incremental:
         (bounded by 2^(|states| · N), though much smaller in practice due to
         buffer truncation and filtering).
         """
+        key = (xs, target)
+        if key in self._is_cylinder_cache:
+            return self._is_cylinder_cache[key]
+
+        # Cheap shortcut: check ip-universal states
+        if len(target) > 0 and self._combined_universal(xs, target):
+            self._is_cylinder_cache[key] = True
+            return True
+
         N = len(target)
 
         def refine(F):
@@ -353,33 +414,66 @@ class Incremental:
             # Accepting: at least one path through F reaches a final state
             # with buffer matching target.
             if not any(self.fst.is_final(s) for (s, ys) in F if ys[:N] == target):
+                self._is_cylinder_cache[key] = False
                 return False
 
             # Complete: no source symbol leads to a dead (empty) powerset state.
             for x in self.source_alphabet:
                 G = refine(self.step(F, x, target))
-                if len(G) == 0: return False   # dead state → not universal
+                if len(G) == 0:
+                    self._is_cylinder_cache[key] = False
+                    return False   # dead state → not universal
                 if G not in visited:
                     visited.add(G)
                     worklist.append(G)
 
+        self._is_cylinder_cache[key] = True
         return True
 
-    @memoize
     def run(self, xs, target):
         """Compute the frontier: set of (state, buffer) pairs reachable by xs.
 
-        Built incrementally: run(xs) = step(run(xs[:-1]), xs[-1]).  Memoized
-        on (xs, target), so each prefix is computed exactly once across all
-        callers (decompose, is_live, is_member, is_cylinder, etc.).
+        Two recursion strategies, chosen opportunistically:
+        - xs-recursion: run(xs, t) = step(run(xs[:-1], t), xs[-1], t).
+          Extends one source symbol with target fixed.
+        - target-recursion: run(xs, t·y) = filter(run(xs, t)).
+          Derives from parent target by dropping elements with buffer[N] ≠ y.
+          Sound because buffers only grow: once buffer[N] = z ≠ y, all
+          descendants also have position N = z.
 
-        Returns frozenset for hashability (needed by memoize and is_cylinder's
-        visited set).
+        Target-recursion is used when run(xs, target[:-1]) is already cached
+        (typical in decompose_next, where we move from target to target·y).
+        This avoids recomputing the entire xs chain for the new target.
+
+        Returns frozenset for hashability (needed by is_cylinder's visited set).
         """
+        key = (xs, target)
+        if key in self._run_cache:
+            return self._run_cache[key]
+
         if len(xs) == 0:
-            return frozenset(self.closure({(s, ()) for s in self.fst.start}, target))
+            result = frozenset(self.closure({(s, ()) for s in self.fst.start}, target))
+        elif len(target) > 0:
+            # Opportunistic target-recursion: if parent-target frontier is cached,
+            # derive by filtering instead of recomputing the xs chain.
+            parent_target = target[:-1]
+            parent_key = (xs, parent_target)
+            if parent_key in self._run_cache:
+                y = target[-1]
+                N = len(parent_target)
+                result = frozenset(
+                    (s, ys) for s, ys in self._run_cache[parent_key]
+                    if len(ys) <= N or ys[N] == y
+                )
+            else:
+                # Default: xs-recursion
+                result = frozenset(self.step(self.run(xs[:-1], target), xs[-1], target))
         else:
-            return frozenset(self.step(self.run(xs[:-1], target), xs[-1], target))
+            # Default: xs-recursion
+            result = frozenset(self.step(self.run(xs[:-1], target), xs[-1], target))
+
+        self._run_cache[key] = result
+        return result
 
     def step(self, F, x, target):
         """Advance frontier F by one source symbol x, then ε-close.
