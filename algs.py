@@ -374,8 +374,8 @@ class Incremental:
                 # Boundary state: must be ip-universal and exclusively produce y
                 if s not in self._ip_universal:
                     return False
-                for a, b, _t in self.fst.arcs(s):
-                    if a != EPSILON and b != y:
+                for _a, b, _t in self.fst.arcs(s):
+                    if b != EPSILON and b != y:
                         return False
                 if self.fst.is_final(s):
                     has_final = True
