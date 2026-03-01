@@ -343,6 +343,14 @@ class Incremental:
         1. Every state in S_c ∪ S_b is ip-universal
         2. Every transition from a boundary state produces y (output exclusivity)
         3. At least one state in S_c ∪ S_b is accepting
+
+        Speed–accuracy tradeoff: the proposition (prop:combined-universality)
+        requires only *set-level* universality of S_c ∪ S_b (the NFA started
+        from those states accepts Σ*), which is weaker than requiring every
+        individual state to be ip-universal.  We use the per-state check here
+        because it runs in O(|F|) with precomputed U, whereas a set-level
+        universality check requires a powerset BFS that may be as expensive as
+        the full is_cylinder check this shortcut is meant to avoid.
         """
         if len(target) == 0:
             return False
