@@ -374,8 +374,12 @@ class Incremental:
                 # Boundary state: must be ip-universal and exclusively produce y
                 if s not in self._ip_universal:
                     return False
-                for _a, b, _t in self.fst.arcs(s):
-                    if b != EPSILON and b != y:
+                for a, b, _t in self.fst.arcs(s):
+                    # Non-ε-input arcs must produce exactly y (σ:ε is wrong:
+                    # consumes input without producing y, successor unchecked).
+                    # ε-input arcs must produce y or ε (ε:ε successors are in
+                    # S_b via frontier ε-closure; ε:y successors are in S_c).
+                    if not (b == y or (a == EPSILON and b == EPSILON)):
                         return False
                 if self.fst.is_final(s):
                     has_final = True
