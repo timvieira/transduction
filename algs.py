@@ -333,15 +333,16 @@ class Incremental:
         return any(self.fst.is_final(s) for (s, ys) in self.run(xs, target) if ys[:N] == target)
 
     def _combined_universal(self, xs, target):
-        """Cheap sufficient condition for is_cylinder using precomputed ip-universal states.
+        """Sufficient condition for is_cylinder using precomputed ip-universal states.
 
-        If every frontier state (s, ys) with buffer matching target has s in the
-        precomputed ip-universal set, then the input projection from that state
-        accepts Σ*, so every extension of xs produces output starting with target.
+        Given frontier F = run(xs, parent_target):
+        - Committed (S_c): states with buffer ≽ parent·y (already committed to y)
+        - Boundary (S_b): states with buffer = parent_target (undetermined)
 
-        Only handles "scored" states (buffer already committed to target[-1]).
-        Bails out conservatively if any state is unscored (buffer == parent_target)
-        or behind (buffer shorter than parent_target).
+        Returns True if:
+        1. Every state in S_c ∪ S_b is ip-universal
+        2. Every transition from a boundary state produces y (output exclusivity)
+        3. At least one state in S_c ∪ S_b is accepting
         """
         if len(target) == 0:
             return False
@@ -352,20 +353,26 @@ class Incremental:
         N = len(parent_target)
         y = target[-1]
 
-        has_scored_final = False
+        has_final = False
         for s, ys in F:
             if len(ys) > N:
                 if ys[N] != y:
                     continue          # dead for this y, ignore
                 if s not in self._ip_universal:
-                    return False      # scored but not ip-universal
+                    return False
                 if self.fst.is_final(s):
-                    has_scored_final = True
+                    has_final = True
             elif len(ys) == N:
-                return False          # unscored: can't handle cheaply
-            else:
-                return False          # behind: bail out
-        return has_scored_final
+                # Boundary state: must be ip-universal and exclusively produce y
+                if s not in self._ip_universal:
+                    return False
+                for a, b, _t in self.fst.arcs(s):
+                    if a != EPSILON and b != y:
+                        return False
+                if self.fst.is_final(s):
+                    has_final = True
+            # else: behind parent, ignore
+        return has_final
 
     def is_cylinder(self, xs, target):
         """True if xs is a cylinder: every extension of xs produces target prefix.
