@@ -67,6 +67,22 @@
   (line 174)
 - [x] ~~Implement immutable-tuple KV cache fix for DynamicCache~~ (resolved via `_clone_dynamic_cache()` deep-cloning)
 
+### LCP normalization of precover DFA states
+
+- [ ] **Factor out longest common prefix of buffers in frontier states**: Within
+  each DFA state (frozenset of NFA elements), all buffers are `target[:k]` for
+  various `k`.  Normalizing by subtracting `min_k` identifies a translational
+  symmetry: states like `{(q1, target[:3]), (q2, target[:5])}` and
+  `{(q1, target[:7]), (q2, target[:9])}` become the same canonical
+  `{(q1, offset=0), (q2, offset=2)}`.  This is a lossless version of what
+  peekaboo truncation achieves (truncation is lossy — it forgets exact positions
+  beyond N+K, creating dirty states).  Most impactful for the non-peekaboo
+  algorithms (`NonrecursiveDFADecomp`, `TruncatedIncrementalDFADecomp`) where the
+  DFA state space currently grows with target length; LCP normalization would make
+  it depend only on the max buffer *spread* (bounded by the FST's delay).  For
+  peekaboo itself the benefit is marginal since truncation already collapses the
+  state space.
+
 ### peekaboo.rs — FactoredArena
 
 The `FactoredArena` replaces `PowersetArena` in `DirtyPeekaboo` and

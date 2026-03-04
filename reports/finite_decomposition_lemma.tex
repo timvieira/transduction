@@ -1,0 +1,419 @@
+\documentclass{article}
+\usepackage[margin=1in]{geometry}
+
+\usepackage{hyperref}
+\usepackage{url}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+
+\usepackage[inline]{enumitem}
+\setitemize{noitemsep,topsep=0pt,parsep=0pt,partopsep=0pt,leftmargin=*}
+\setenumerate{noitemsep,topsep=0pt,parsep=0pt,partopsep=0pt,leftmargin=*}
+
+\usepackage[capitalize,noabbrev]{cleveref}
+\crefname{section}{\S}{\S\S}
+\crefname{algorithm}{Algorithm}{Algorithms}
+
+\usepackage{latexsym}
+\usepackage{mleftright}
+\usepackage{xspace}
+
+\usepackage{stmaryrd}
+\usepackage{bbm}
+
+\usepackage{tikz}
+\usetikzlibrary{arrows,arrows.meta,shapes,automata,positioning}
+
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\newcommand{\RETURN}{\STATE \textbf{return} }
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% MACROS (from paper/macros.tex)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\colorlet{MacroColor}{black}
+\newcommand{\mymacro}[1]{#1}
+
+\newcommand{\defn}[1]{\textbf{#1}}
+\newcommand{\defeq}{\mathrel{\overset{\raisebox{-0.25ex}{\textnormal{\tiny def}}}{=}}}
+
+\newcommand{\card}[1]{\left|#1\right|}
+\newcommand{\set}[1]{\left\{ #1 \right\}}
+
+\newcommand{\bigo}{{\mymacro{ \mathcal{O}}}}
+\newcommand{\kleene}[1]{#1^*}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% PAPER-SPECIFIC NOTATION
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\definecolor{CharacterColor}{RGB}{98,115,19}
+\definecolor{TokenColor}{RGB}{140,10,89}
+\definecolor{StormBlue}{RGB}{42,90,120}
+
+\newcommand{\preCover}{{\color{TokenColor}\mathcal{P}}}
+\newcommand{\Quotient}{{\color{TokenColor}\mathcal{Q}}}
+\newcommand{\Remainder}{{\color{TokenColor}\mathcal{R}}}
+
+\newcommand{\basisSet}[1]{\langle #1\rangle}
+
+\newcommand{\tfont}[1]{{\color{TokenColor}\texttt{#1}}}
+\newcommand{\charfont}[1]{{\color{CharacterColor}\strut\texttt{#1}}}
+
+\newcommand{\transFnSym}[0]{f}
+\newcommand{\transFn}{\ensuremath{{\color{CharacterColor}\transFnSym}}\xspace}
+
+\newcommand{\srcSym}{{\color{TokenColor}x}}
+\newcommand{\srcSymp}{{\color{TokenColor}x^\prime}}
+\newcommand{\srcStr}{\ensuremath{{\color{TokenColor}\boldsymbol{x}}}\xspace}
+\newcommand{\tgtSym}{{\color{CharacterColor}y}}
+\newcommand{\tgtStr}{{\color{CharacterColor}\boldsymbol{y}}}
+
+\newcommand{\srcAlphabet}[0]{{\color{TokenColor}\ensuremath{\mathcal{X}}}\xspace}
+\newcommand{\tgtAlphabet}[0]{{\color{CharacterColor}\ensuremath{\mathcal{Y}}}\xspace}
+\newcommand{\srcStrings}[0]{\ensuremath{\srcAlphabet^*}\xspace}
+\newcommand{\tgtStrings}[0]{\ensuremath{\tgtAlphabet^*}\xspace}
+
+\newcommand{\transST}{{\color{CharacterColor}\texttt{f}}}
+
+\newcommand{\States}{\mymacro{\mathsf{S}}}
+\newcommand{\Transitions}{\mymacro{\mathsf{T}}}
+\newcommand{\InitialStates}[0]{\mymacro{\mathsf{I}}}
+\newcommand{\FinalStates}{\mymacro{\mathsf{F}}}
+
+\newcommand{\state}{\mymacro{s}}
+\newcommand{\statep}{\mymacro{s^\prime}}
+
+\newcommand{\frontier}{\mathcal{F}}
+\newcommand{\powerstate}{S}
+\newcommand{\powerstatep}{\powerstate^{\prime}}
+
+\newcommand{\Paths}{\mymacro{\Pi}}
+
+\newcommand{\isCylinder}{\mbox{\texttt{{\color{StormBlue}is\_cylinder}}}}
+\newcommand{\run}{\mbox{\texttt{{\color{StormBlue}run}}}}
+\newcommand{\step}{\mbox{\texttt{{\color{StormBlue}step}}}}
+\newcommand{\isLive}{\mbox{\texttt{{\color{StormBlue}is\_live}}}}
+
+\newcommand{\SafeStates}{\States_{\mathsf{safe}}}
+\newcommand{\SafePower}{\mathcal{G}_{\mathsf{safe}}}
+\newcommand{\SafePowerK}{\mathcal{G}_{\mathsf{safe}}^{(k)}}
+
+\newcommand{\Succ}{\mathrm{Succ}}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{remark}[theorem]{Remark}
+\newtheorem{example}[theorem]{Example}
+
+\title{Revising the Finite Decomposition Lemma\\(Lemma~6.1)}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Current Lemma and Issues}
+\label{sec:current}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{lemma}[Current Lemma 6.1]
+\label{lemma:current}
+Let $\transFn\colon \srcStrings\to \tgtStrings$ be a function realized by an
+input-determinized transducer $\transST$.
+Let $\Paths_{\tgtStr}$ be the set of all paths that emit exactly $\tgtStr$
+\begin{equation}
+\Paths_{\tgtStr} \defeq  \{ \state_0 \xrightarrow{\srcSym_1:\tgtSym_1}\state_1 \cdots \state_{N-1} \xrightarrow{\srcSym_N:\tgtSym_N}\state_N \mid \state_0\in \InitialStates, \tgtSym_1\cdots\tgtSym_N=\tgtStr\}.
+\end{equation}
+Let $\States_{\tgtStr}$ be the set of the accepting states of the paths in $\Paths_{\tgtStr}$. For a given target string $\tgtStr\in\tgtStrings$, the precover $\preCover(\tgtStr)$ admits a finite decomposition---i.e., the remainder $\Remainder(\tgtStr)$ and quotient $\Quotient(\tgtStr)$ are both finite sets---if the following two conditions hold:
+\begin{enumerate}
+\item [(i)] \textbf{Finite pre-image:} The set of paths $\Paths_{\tgtStr}$ is finite -- i.e., there are no $\varepsilon$-cycles on the output on any path that emits $\tgtStr$.
+\item [(ii)] \textbf{Safety:} Every state $\state\in\States_{\tgtStr}$ is \defn{safe}, defined inductively, as the smallest set satisfying the following conditions:
+\begin{enumerate}
+\item [(a)] \textbf{Base case 1 (universality):} $\state$ is universal.
+\item [(b)] \textbf{Base case 2 (finite closure):} The language accepted by starting the transducer $\transST$ at $\state$ is finite.
+\item [(c)] \textbf{Recursive step:} For all transitions $\state\xrightarrow{\srcSym:\tgtSym}\statep$ the state $\statep$ is safe.
+\end{enumerate}
+\end{enumerate}
+\end{lemma}
+
+\paragraph{Issues.}
+(1)~Algorithms compute \emph{frontiers} (sets of reachable states), not
+individual paths---$\Paths_{\tgtStr}$ is unnecessary indirection.
+(2)~$\States_{\tgtStr}$ are terminal states of paths emitting $\tgtStr$, not
+accepting states of the transducer---the name is misleading.
+(3)~The algorithm checks \emph{collective} ip-universality of powerstates,
+which is strictly weaker than requiring every individual state to be universal.
+(4)~The safety condition has no associated algorithm for checking it.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Revised Formulation}
+\label{sec:revised}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{definition}[Frontier and successors]
+\label{def:frontier}
+The \defn{frontier} $\frontier(\tgtStr) \defeq \{ \state \in \States \mid
+\exists\, \state_0 \in \InitialStates,\;
+\state_0 \xrightarrow{\srcSym_1:\tgtSym_1} \cdots \xrightarrow{\srcSym_N:\tgtSym_N} \state,\;
+\tgtSym_1 \cdots \tgtSym_N = \tgtStr \}$
+is the set of states reachable from $\InitialStates$ along arcs whose outputs
+concatenate to $\tgtStr$.  For $\powerstate \subseteq \States$ and $\srcSym \in \srcAlphabet$,
+$\Succ(\powerstate, \srcSym) \defeq
+\{ \statep \mid \exists\, \state \in \powerstate :\;
+\state \xrightarrow{\srcSym:\tgtSym} \statep \}$.
+\end{definition}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Safety}
+\label{sec:safety}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+We give two versions of the safety condition---on individual states and on
+powerstates---with the same structure: identify base cases, then check that
+every path eventually reaches one.
+
+%----------------------------------------------------------
+\subsection{Individual-state safety}
+\label{sec:level1}
+%----------------------------------------------------------
+
+\begin{definition}[Safe state]
+\label{def:safe-state}
+$\SafeStates \subseteq \States$ is the smallest set such that $\state \in \SafeStates$ if:
+\begin{enumerate}[label=(\alph*)]
+\item $L_{\mathrm{inp}}(\state) = \srcStrings$ \quad (ip-universal), or
+\item $L(\transST_\state)$ is finite \quad (no cycle reachable from $\state$), or
+\item every transition $\state \xrightarrow{\srcSym:\tgtSym} \statep$ has $\statep \in \SafeStates$.
+\end{enumerate}
+\end{definition}
+
+A state is unsafe iff it can reach a cycle among non-base-case states.  This yields a linear-time algorithm:
+
+\begin{algorithm}[ht]
+\caption{$\textsc{ComputeSafeStates}(\transST)$}
+\label{alg:safe-states}
+\begin{algorithmic}[1]
+\STATE $B \leftarrow \{\, \state \mid L_{\mathrm{inp}}(\state) = \srcStrings \,\}
+  \;\cup\; \{\, \state \mid \text{no cycle reachable from } \state \,\}$
+  \hfill\COMMENT{base cases}
+\STATE $G' \leftarrow$ subgraph induced by $\States \setminus B$
+\STATE $\mathit{Cyc} \leftarrow$ states in non-trivial SCCs of $G'$
+  \hfill\COMMENT{Tarjan}
+\STATE $\mathit{Unsafe} \leftarrow \{ \state \in \States \setminus B \mid
+  \state \text{ can reach } \mathit{Cyc} \text{ in } G' \}$
+  \hfill\COMMENT{reverse BFS}
+\RETURN $\SafeStates \leftarrow \States \setminus \mathit{Unsafe}$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{proposition}
+\label{prop:safe-states}
+\cref{alg:safe-states} computes exactly $\SafeStates$ in $O(|\States| + |\Transitions|)$ time,
+independent of $\tgtStr$.
+\end{proposition}
+\begin{proof}
+If $\state \notin \SafeStates$, it has an unsafe successor; iterating gives an
+infinite path in $G'$, hence a cycle, so $\state \in \mathit{Unsafe}$.
+Conversely, if $\state$ reaches a non-trivial SCC $C$ in $G'$, states in $C$
+cannot satisfy clause~(c), so by induction $\state \notin \SafeStates$.
+\end{proof}
+
+
+%----------------------------------------------------------
+\subsection{Powerset safety}
+\label{sec:level2}
+%----------------------------------------------------------
+
+Individual-state safety misses collective effects: a powerstate
+$\{\state_1, \state_2\}$ can be collectively ip-universal even when neither
+$\state_1$ nor $\state_2$ is individually universal.
+The powerset analysis lifts safety to sets of states, using the same operations
+as the paper's algorithms: $\isCylinder$ for collective ip-universality,
+$\step_{\tgtStr}$ for successors.
+
+\begin{definition}[Safe powerset]
+\label{def:safe-powerset}
+$\SafePower \subseteq 2^{\States}$ is the smallest collection such that $\powerstate \in \SafePower$ if:
+\begin{enumerate}[label=(\alph*)]
+\item $\isCylinder(\powerstate)$
+  \quad (collectively ip-universal), or
+\item $\bigcup_{\state \in \powerstate} L(\transST_\state)$ is finite
+  \quad (finite closure), or
+\item for every $\srcSym \in \srcAlphabet$,\;
+  $\step_{\tgtStr}(\powerstate, \srcSym) \in \SafePower$ or
+  $\step_{\tgtStr}(\powerstate, \srcSym) = \emptyset$.
+\end{enumerate}
+\end{definition}
+
+\begin{remark}
+\label{rem:levels}
+$\powerstate \subseteq \SafeStates \implies \powerstate \in \SafePower$,
+so the individual analysis is a sound approximation of the powerset analysis.
+The converse does not hold.
+\end{remark}
+
+The same SCC algorithm applies, now on the \emph{powerset graph} whose
+vertices are powerstates and whose edges come from $\step$.  Since this graph
+can be exponentially large, we build it lazily with a budget $k$:
+
+\begin{algorithm}[ht]
+\caption{$\textsc{ComputeSafePowersets}(\transST, \text{seeds}, k)$}
+\label{alg:safe-powersets}
+\begin{algorithmic}[1]
+\REQUIRE Seeds: powerstates of interest;\quad $k$: budget ($2^{|\States|}$ for full)
+\STATE $\mathit{Exp} \leftarrow \emptyset$;\; $Q \leftarrow \text{seeds}$
+\WHILE{$Q \ne \emptyset$ and $|\mathit{Exp}| < k$}
+  \STATE $\powerstate \leftarrow Q.\mathrm{pop}()$
+  \IF{$\powerstate \in \mathit{Exp}$ or $\neg\,\isLive(\powerstate)$}
+    \STATE \textbf{continue}
+  \ENDIF
+  \STATE $\mathit{Exp}.\mathrm{add}(\powerstate)$
+  \IF{$\isCylinder(\powerstate)$ or finite closure}
+    \STATE mark as base case; \textbf{continue}
+  \ENDIF
+  \FOR{$\srcSym \in \srcAlphabet$}
+    \STATE $\powerstatep \leftarrow \step_{\tgtStr}(\powerstate, \srcSym)$
+    \IF{$\powerstatep \notin \mathit{Exp}$}
+      \STATE $Q.\mathrm{add}(\powerstatep)$
+    \ENDIF
+  \ENDFOR
+\ENDWHILE
+\STATE \textbf{// SCC analysis}
+\STATE $B \leftarrow$ base-case powerstates in $\mathit{Exp}$
+\STATE $\mathit{Unsafe} \leftarrow \{ \powerstate \in \mathit{Exp} \setminus B \mid
+  \powerstate \text{ reaches a non-trivial SCC or unexplored successor} \}$
+\RETURN $\SafePowerK \leftarrow \mathit{Exp} \setminus \mathit{Unsafe}$
+\end{algorithmic}
+\end{algorithm}
+
+Larger $k$ certifies more powerstates; the result is always sound.
+
+\begin{proposition}[Soundness, monotonicity, completeness]
+\label{prop:soundness}
+For any budget $k$:
+(i)~$\SafePowerK \subseteq \SafePower$ \emph{(sound)};
+(ii)~$k \le k' \implies \SafePowerK \subseteq \mathcal{G}_{\mathsf{safe}}^{(k')}$
+\emph{(monotone)}.
+The algorithm always terminates since the powerset graph has at most $2^{|\States|}$
+nodes; at completion ($k \ge 2^{|\States|}$), $\SafePowerK = \SafePower$ and
+the analysis is \emph{complete}: the decomposition is finite for $\tgtStr$ if
+and only if $\frontier(\tgtStr) \in \SafePower$.
+\end{proposition}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Revised Lemma and Proof}
+\label{sec:lemma}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{lemma}[Finite Decomposition --- Revised]
+\label{lemma:revised}
+Let $\transFn\colon \srcStrings \to \tgtStrings$ be a function realized by a
+transducer $\transST$.  The precover $\preCover(\tgtStr)$ admits a finite
+decomposition if and only if:
+\begin{enumerate}
+\item [(i)] \textbf{Finite pre-image:} $\frontier(\tgtStr)$ is
+  finite (no $\varepsilon$-output cycles on paths emitting $\tgtStr$).
+\item [(ii)] \textbf{Safety:} $\frontier(\tgtStr) \in \SafePower$.
+\end{enumerate}
+\end{lemma}
+
+\begin{corollary}[Individual-state sufficient condition]
+$\frontier(\tgtStr) \subseteq \SafeStates \implies$ finite decomposition.
+\end{corollary}
+
+\begin{proof}[Proof of \cref{lemma:revised}]
+The decomposition BFS explores a tree of powerstates rooted at
+$\powerstate_0 = \frontier(\tgtStr)$, with children $\Succ(\powerstate, \srcSym)$.
+
+\emph{Safety propagates}: if $\powerstate \in \SafePower$ is not a base case,
+clause~(c) gives $\Succ(\powerstate, \srcSym) \in \SafePower$ for all $\srcSym$.
+By (ii), every powerstate in the BFS is safe.
+
+\emph{The tree is finite}: safe powerstates cannot lie on cycles among
+non-base-case powerstates (SCC characterization).  Every BFS path terminates at
+a base case, an empty powerstate, or a previously-visited powerstate.  Finite
+branching + no infinite paths $\Rightarrow$ finite tree (K\H{o}nig).
+
+\emph{Quotient is finite}: each quotient element corresponds to a node reaching
+base case~(a) (collectively ip-universal).  Finite tree $\Rightarrow$ finitely many.
+
+\emph{Remainder is finite}: each remainder contribution comes from a
+finite-closure powerstate (base case~(b)), contributing $|\bigcup_{\state \in
+\powerstate} L(\transST_\state)| < \infty$ strings.  Finitely many such
+powerstates $\Rightarrow$ finite remainder.
+\end{proof}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Connection to the Algorithm}
+\label{sec:connection}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+The paper's $\isCylinder(\srcStr, \tgtStr)$ already performs a BFS over
+powerstates from $\run_{\tgtStr}(\srcStr)$ via $\step_{\tgtStr}$, returning
+\textsc{True} iff every reachable powerstate is non-empty and
+accepting---exactly base case~(a) of powerset safety.
+\cref{alg:safe-powersets} extends this with base case~(b) (finite closure) and
+SCC analysis to handle cycles, giving a complete characterization.
+Termination of the decomposition BFS is guaranteed when
+$\frontier(\tgtStr) \in \SafePower$.
+
+In practice:
+\begin{enumerate}
+\item Precompute $\SafeStates$ via \cref{alg:safe-states} in $O(|\States| + |\Transitions|)$.
+  Check $\frontier(\tgtStr) \subseteq \SafeStates$.
+\item If that fails, run \cref{alg:safe-powersets} seeded with $\frontier(\tgtStr)$
+  and budget $k$.
+\end{enumerate}
+
+\paragraph{BPE example.}
+Every state of a BPE transducer is ip-universal (total DFA, all accepting), so
+$\SafeStates = \States$ and the decomposition is always finite---matching the
+empirical observation that BPE quotients carry all mass with empty remainders.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Summary}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}llll@{}}
+\toprule
+& \textbf{Current} & \textbf{Level 1} & \textbf{Level 2} \\
+\midrule
+Object & $\Paths_{\tgtStr}$ (paths) & \multicolumn{2}{l}{$\frontier(\tgtStr)$ (frontier)} \\
+Safety on & individual states & individual states & powerstates \\
+Algorithm & none & \cref{alg:safe-states} & \cref{alg:safe-powersets} \\
+Complexity & --- & $O(|\States|{+}|\Transitions|)$ & budgetable ($k$ powerstates) \\
+Precomputable & no & yes & seeded per $\tgtStr$ \\
+Strength & \multicolumn{2}{l}{sufficient (individual-state)} & iff at $k{=}2^{|\States|}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\end{document}

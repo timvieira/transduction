@@ -33,3 +33,10 @@ out.prof*
 # Rust
 **/target/
 Cargo.lock
+
+*.out
+*.fls
+*.aux
+*.*_latexmk
+reports/out
+_minted*

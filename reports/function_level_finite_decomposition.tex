@@ -1,0 +1,735 @@
+\documentclass{article}
+\usepackage[margin=1in]{geometry}
+
+\usepackage{hyperref}
+\usepackage{url}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+
+\usepackage[inline]{enumitem}
+\setitemize{noitemsep,topsep=0pt,parsep=0pt,partopsep=0pt,leftmargin=*}
+\setenumerate{noitemsep,topsep=0pt,parsep=0pt,partopsep=0pt,leftmargin=*}
+
+\usepackage[capitalize,noabbrev]{cleveref}
+\crefname{section}{\S}{\S\S}
+
+\usepackage{latexsym}
+\usepackage{mleftright}
+\usepackage{xspace}
+
+\usepackage{stmaryrd}
+\usepackage{bbm}
+
+\usepackage{tikz}
+\usetikzlibrary{arrows,arrows.meta,shapes,automata,positioning}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% MACROS (from paper/macros.tex)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\colorlet{MacroColor}{black}
+\newcommand{\mymacro}[1]{#1}
+
+\newcommand{\defn}[1]{\textbf{#1}}
+\newcommand{\defeq}{\mathrel{\overset{\raisebox{-0.25ex}{\textnormal{\tiny def}}}{=}}}
+
+\newcommand{\card}[1]{\left|#1\right|}
+\newcommand{\set}[1]{\left\{ #1 \right\}}
+
+\newcommand{\bigo}{{\mymacro{ \mathcal{O}}}}
+\newcommand{\kleene}[1]{#1^*}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% PAPER-SPECIFIC NOTATION
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\definecolor{CharacterColor}{RGB}{98,115,19}
+\definecolor{TokenColor}{RGB}{140,10,89}
+\definecolor{StormBlue}{RGB}{42,90,120}
+
+\newcommand{\preCover}{{\color{TokenColor}\mathcal{P}}}
+\newcommand{\maxQuotient}{{\color{TokenColor}\overline{\mathcal{Q}}}}
+\newcommand{\Quotient}{{\color{TokenColor}\mathcal{Q}}}
+\newcommand{\Remainder}{{\color{TokenColor}\mathcal{R}}}
+
+\newcommand{\eos}{{\mymacro{\textsc{eos}}}}
+
+\newcommand{\basisSet}[1]{\langle #1\rangle}
+
+\newcommand{\tokenfont}[1]{{\color{TokenColor}\texttt{#1}}}
+\newcommand{\tfont}[1]{{\color{TokenColor}\texttt{#1}}}
+\newcommand{\charfont}[1]{{\color{CharacterColor}\strut\texttt{#1}}}
+
+\newcommand{\transFnSym}[0]{f}
+\newcommand{\transFn}{\ensuremath{{\color{CharacterColor}\transFnSym}}\xspace}
+
+% Source / target symbols and strings
+\newcommand{\srcSym}{{\color{TokenColor}x}}
+\newcommand{\srcSymp}{{\color{TokenColor}x^\prime}}
+\newcommand{\srcStr}{\ensuremath{{\color{TokenColor}\boldsymbol{x}}}\xspace}
+\newcommand{\srcStrp}{\ensuremath{{\color{TokenColor}\boldsymbol{x}^\prime}}\xspace}
+
+\newcommand{\tgtSym}{{\color{CharacterColor}y}}
+\newcommand{\tgtStr}{{\color{CharacterColor}\boldsymbol{y}}}
+\newcommand{\tgtStrp}{{\color{CharacterColor}\boldsymbol{y}^\prime}}
+
+% Alphabets
+\newcommand{\srcAlphabet}[0]{{\color{TokenColor}\ensuremath{\mathcal{X}}}\xspace}
+\newcommand{\tgtAlphabet}[0]{{\color{CharacterColor}\ensuremath{\mathcal{Y}}}\xspace}
+\newcommand{\srcStrings}[0]{\ensuremath{\srcAlphabet^*}\xspace}
+\newcommand{\tgtStrings}[0]{\ensuremath{\tgtAlphabet^*}\xspace}
+
+% Source LM
+\newcommand{\pSource}{\mymacro{p}}
+\newcommand{\prefixSource}{\mymacro{\bar{p}}}
+\newcommand{\prefixTarget}{\mymacro{\bar{p}}_{\!\tgtSym}}
+
+% Transducer
+\newcommand{\transST}{{\color{CharacterColor}\texttt{f}}}
+
+% States
+\newcommand{\States}{\mymacro{\mathsf{S}}}
+\newcommand{\InitialStates}[0]{\mymacro{\mathsf{I}}}
+\newcommand{\FinalStates}{\mymacro{\mathsf{F}}}
+
+\newcommand{\state}{\mymacro{s}}
+\newcommand{\statep}{\mymacro{s^\prime}}
+
+% Cover algorithm
+\newcommand{\frontier}{\mathcal{F}}
+\newcommand{\powerstate}{S}
+\newcommand{\powerstatep}{\powerstate^{\prime}}
+
+\newcommand{\Paths}{\mymacro{\Pi}}
+\newcommand{\Path}{\mymacro{\boldsymbol{\pi}}}
+
+\newcommand{\sem}[1]{\llbracket #1 \rrbracket}
+
+\newcommand{\buffer}{{\color{CharacterColor}\boldsymbol{b}}}
+
+% New macros for this report
+\newcommand{\committed}{\mathrm{out}}
+\newcommand{\lcp}{\mathrm{lcp}}
+\newcommand{\dom}{\mathrm{dom}}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{example}[theorem]{Example}
+
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\title{Function-Level Characterization\\of Finite Decomposition}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The paper's current finite decomposition lemma (Lemma~6.1) gives sufficient
+conditions at the \emph{transducer} level: it refers to paths, states,
+universality, and finite closure of individual states.  This report develops a
+parallel characterization at the \emph{function} level, with no reference to
+any particular transducer.  The key concept is the \emph{committed prefix}
+$\committed(\srcStr)$---the longest output prefix guaranteed after reading
+input $\srcStr$, regardless of future input.  It decomposes the finite
+decomposition property into two independent axes: \emph{finite commitment
+boundary} (the quotient is finite) and \emph{finite tentative set} (the
+remainder is finite), each generalizing strict-prefix monotonicity in a
+different direction.
+\end{abstract}
+
+
+\section{Background: The Decomposition is Function-Level}
+\label{sec:background}
+
+The quotient and remainder are defined purely in terms of the function
+$\transFn \colon \srcStrings \to \tgtStrings$, with no reference to any
+transducer.  Recall (paper, Definition~4.1):
+%
+\begin{align}
+  \preCover(\tgtStr) &\defeq \{ \srcStr \in \srcStrings : \tgtStr \preceq \transFn(\srcStr) \}, \\[4pt]
+  \maxQuotient(\tgtStr) &\defeq \{ \srcStr \in \srcStrings : \basisSet{\srcStr} \subseteq \preCover(\tgtStr) \},
+    \label{eq:maxQ} \\[4pt]
+  \Quotient(\tgtStr) &\defeq \mathrm{pr}\!\left(\maxQuotient(\tgtStr)\right),
+    \qquad
+  \Remainder(\tgtStr) \defeq \preCover(\tgtStr) \setminus \maxQuotient(\tgtStr).
+    \label{eq:QR}
+\end{align}
+%
+Here $\basisSet{\srcStr} = \{\srcStrp : \srcStr \preceq \srcStrp\}$ is the
+cylinder (upward closure) of $\srcStr$ under the prefix order, and
+$\mathrm{pr}(\cdot)$ extracts the minimal prefix-free generating set.
+
+\begin{remark}[Function-level property]
+\label{rem:function-level}
+The \defn{finite decomposition property}---that $\Quotient(\tgtStr)$ and
+$\Remainder(\tgtStr)$ are both finite for every $\tgtStr \in
+\tgtStrings$---depends only on $\transFn$, not on how $\transFn$ is
+represented.  Two transducers realizing the same function have identical
+$\Quotient(\tgtStr)$ and $\Remainder(\tgtStr)$ for every $\tgtStr$.
+\end{remark}
+
+This is in contrast to the paper's current Lemma~6.1, whose conditions (safety,
+finite closure, universality of individual states) depend on the specific
+transducer.  A function may have the finite decomposition property even when
+some transducers realizing it fail the lemma's conditions.
+
+
+\section{The Committed Prefix}
+\label{sec:committed}
+
+\begin{definition}[Committed prefix]
+\label{def:committed}
+For a function $\transFn \colon \srcStrings \to \tgtStrings$, the \defn{committed prefix} of an input $\srcStr \in \srcStrings$ is
+\begin{equation}
+  \committed(\srcStr) \defeq \lcp\!\set{\transFn(\srcStrp) : \srcStrp \succeq \srcStr}
+\end{equation}
+where $\lcp$ denotes the longest common prefix.
+\end{definition}
+
+Intuitively, $\committed(\srcStr)$ is the longest output prefix that is
+\emph{guaranteed} after reading $\srcStr$, no matter what future input
+arrives.
+
+\begin{proposition}[Monotonicity]
+\label{prop:committed-monotone}
+$\committed$ is monotonically non-decreasing under the prefix order:
+\[
+  \srcStr \preceq \srcStrp
+  \quad\Longrightarrow\quad
+  \committed(\srcStr) \preceq \committed(\srcStrp).
+\]
+\end{proposition}
+\begin{proof}
+If $\srcStr \preceq \srcStrp$ then
+$\{\transFn(\srcStr'') : \srcStr'' \succeq \srcStrp\} \subseteq
+\{\transFn(\srcStr'') : \srcStr'' \succeq \srcStr\}$, so the lcp of the
+smaller set is at least as long.
+\end{proof}
+
+\begin{proposition}[Committed prefix bounded by output]
+\label{prop:committed-bound}
+For every $\srcStr \in \srcStrings$:
+$\committed(\srcStr) \preceq \transFn(\srcStr)$.
+\end{proposition}
+\begin{proof}
+$\transFn(\srcStr)$ is an element of $\{\transFn(\srcStrp) : \srcStrp \succeq \srcStr\}$
+(taking $\srcStrp = \srcStr$), so the lcp is at most $\transFn(\srcStr)$.
+\end{proof}
+
+
+\section{Recharacterizing the Decomposition}
+\label{sec:recharacterize}
+
+The committed prefix gives a clean function-level reading of the maximal
+quotient and remainder.
+
+\begin{proposition}[Maximal quotient via committed prefix]
+\label{prop:maxQ-committed}
+\begin{equation}
+  \maxQuotient(\tgtStr) = \{ \srcStr \in \srcStrings : \tgtStr \preceq \committed(\srcStr) \}.
+\end{equation}
+\end{proposition}
+\begin{proof}
+By definition, $\srcStr \in \maxQuotient(\tgtStr)$ iff $\basisSet{\srcStr}
+\subseteq \preCover(\tgtStr)$, i.e., for all $\srcStrp \succeq \srcStr$,
+$\tgtStr \preceq \transFn(\srcStrp)$.  This holds iff $\tgtStr$ is a prefix
+of every element of $\{\transFn(\srcStrp) : \srcStrp \succeq \srcStr\}$,
+which is equivalent to $\tgtStr \preceq \lcp\{\transFn(\srcStrp) : \srcStrp
+\succeq \srcStr\} = \committed(\srcStr)$.
+\end{proof}
+
+This yields a natural two-part decomposition of $\preCover(\tgtStr)$:
+%
+\begin{equation}
+\preCover(\tgtStr) = \underbrace{\maxQuotient(\tgtStr)}_{\text{committed}}
+  \;\sqcup\; \underbrace{\Remainder(\tgtStr)}_{\text{tentative}},
+\end{equation}
+%
+where:
+\begin{itemize}
+\item \textbf{Committed set} $\maxQuotient(\tgtStr) = \{\srcStr : \tgtStr \preceq
+  \committed(\srcStr)\}$: inputs after which the output is \emph{guaranteed} to
+  start with $\tgtStr$, regardless of future input.
+
+\item \textbf{Tentative set} $\Remainder(\tgtStr) = \{\srcStr : \tgtStr \preceq
+  \transFn(\srcStr) \text{ but } \tgtStr \not\preceq \committed(\srcStr)\}$:
+  inputs where the output \emph{happens to} start with $\tgtStr$, but some
+  extension could steer the output away.  These are ``fragile'' coverers of
+  $\tgtStr$.
+\end{itemize}
+
+\begin{remark}
+The tentative set has a crisp reading as a \emph{monotonicity failure}: $\srcStr
+\in \Remainder(\tgtStr)$ iff $\tgtStr \preceq \transFn(\srcStr)$ yet there
+exists an extension $\srcStrp \succeq \srcStr$ with $\tgtStr \not\preceq
+\transFn(\srcStrp)$.  That is, extending the input \emph{lost} the output
+prefix $\tgtStr$---a violation of prefix monotonicity at $\srcStr$.
+\end{remark}
+
+
+\section{Two Independent Axes of Generalization}
+\label{sec:axes}
+
+The finite decomposition property requires both $\Quotient(\tgtStr)$ and
+$\Remainder(\tgtStr)$ to be finite for all $\tgtStr$.  These are
+\emph{independent} conditions on the function, each generalizing strict-prefix
+monotonicity in a different direction.
+
+\subsection{Axis A: Finite commitment boundary (finite quotient)}
+
+Recall $\Quotient(\tgtStr) = \mathrm{pr}(\maxQuotient(\tgtStr))$ is the set of
+minimal elements (in the prefix order) of the committed set.  These are the
+\emph{earliest} input prefixes at which the function becomes irrevocably
+committed to $\tgtStr$.  We call $\Quotient(\tgtStr)$ the \defn{commitment
+frontier} for $\tgtStr$.
+
+For the quotient to be finite, the committed set must have finitely many
+minimal elements.  This can fail when the function allows \emph{arbitrarily
+long delays} before commitment.
+
+\begin{example}[Infinite quotient from unbounded delay]
+\label{ex:infinite-Q}
+Let $\srcAlphabet = \{a, b\}$, $\tgtAlphabet = \{c\}$, and define
+$\transFn(\srcStr) = c^{\#_b(\srcStr)}$ (output one $c$ per $b$ in the
+input).  Then:
+\begin{itemize}
+\item $\preCover(c) = \{\srcStr : \#_b(\srcStr) \geq 1\}$ = all strings containing at least one $b$.
+\item $\committed(a^n) = \varepsilon$ for all $n$ (extending with only $a$'s produces no output).
+\item $\committed(a^n b) = c$ (once a $b$ is read, at least one $c$ is guaranteed).
+\item $\maxQuotient(c) = \{\srcStr : \srcStr \text{ contains at least one } b\}$.
+\item $\Quotient(c) = \{a^n b : n \geq 0\} = \{b, ab, aab, aaab, \ldots\}$ --- \textbf{infinite}.
+\end{itemize}
+The function can ``stall'' for arbitrarily many input symbols (reading $a$'s)
+without advancing the committed output.  There is no bound on how long
+commitment to $c$ can be delayed.
+\end{example}
+
+\begin{definition}[Bounded delay]
+\label{def:bounded-delay}
+A function $\transFn \colon \srcStrings \to \tgtStrings$ has \defn{bounded delay}
+if there exists a constant $k \geq 1$ such that for every $\srcStr \in
+\srcStrings$ and every extension $\srcStrp \succeq \srcStr$ with $|\srcStrp| =
+|\srcStr| + k$:
+\begin{equation}
+  |\committed(\srcStrp)| > |\committed(\srcStr)|
+  \qquad\text{or}\qquad
+  \committed(\srcStrp) = \committed(\srcStr) = \transFn(\srcStrp).
+\end{equation}
+That is, within every $k$ input symbols, the committed prefix either
+\emph{advances} or the input has reached a string in the domain where the full
+output is already committed.
+\end{definition}
+
+\begin{proposition}[Bounded delay implies finite quotient]
+\label{prop:delay-quotient}
+If $\transFn$ has bounded delay with constant $k$, then for every $\tgtStr \in \tgtStrings$:
+\[
+  |\Quotient(\tgtStr)| \leq |\srcAlphabet|^{k \cdot |\tgtStr|}.
+\]
+\end{proposition}
+\begin{proof}[Proof sketch]
+Every element of $\Quotient(\tgtStr)$ is a minimal string $\srcStr$ with
+$\committed(\srcStr) \succeq \tgtStr$ but $\committed(\srcStrp) \not\succeq
+\tgtStr$ for every proper prefix $\srcStrp \prec \srcStr$.  Since
+$\committed(\varepsilon) = \lcp\{\transFn(\srcStrp) : \srcStrp \in
+\srcStrings\}$ has some fixed length $\ell_0$, and $\committed$ advances by at
+least one output symbol every $k$ input symbols, we need at most $k \cdot
+(|\tgtStr| - \ell_0)$ input symbols for $\committed$ to reach length $|\tgtStr|$.
+Hence every element of $\Quotient(\tgtStr)$ has length at most $k \cdot
+|\tgtStr|$, and there are at most $|\srcAlphabet|^{k \cdot |\tgtStr|}$ such
+strings.
+\end{proof}
+
+\begin{remark}[Connection to strict-prefix monotonicity]
+Strict-prefix monotonicity is the special case $k = 1$.  If $\srcStr \prec
+\srcStrp$ implies $\transFn(\srcStr) \prec \transFn(\srcStrp)$, then each
+input symbol strictly advances the output, so
+$|\committed(\srcStr \cdot \srcSym)| \geq |\committed(\srcStr)| + 1$ for
+every $\srcSym \in \srcAlphabet$.  The bound recovers
+$|\Quotient(\tgtStr)| \leq (|\srcAlphabet| + 1)^{|\tgtStr|}$ from the
+paper's Proposition~B.2 (with the $+1$ accounting for elements
+already in $\Quotient(\tgtStr)$ that persist to $\Quotient(\tgtStr\tgtSym)$).
+\end{remark}
+
+\begin{remark}[Connection to transducer theory]
+Bounded delay is the function-level analog of the classical notion of
+\emph{finite delay} in transducer theory~(Choffrut, 1977), which
+characterizes when a rational function can be realized by a subsequential
+transducer.  At the transducer level, it corresponds to the absence of
+$\varepsilon$-output cycles---condition~(i) of the current Lemma~6.1.
+\end{remark}
+
+
+\subsection{Axis B: Finite tentative set (finite remainder)}
+
+The remainder $\Remainder(\tgtStr)$ consists of inputs $\srcStr$ where
+$\tgtStr \preceq \transFn(\srcStr)$ but $\tgtStr \not\preceq
+\committed(\srcStr)$---the function's output happens to start with $\tgtStr$,
+but future input could change this.
+
+\begin{example}[Infinite remainder from unbounded non-monotonicity]
+\label{ex:infinite-R}
+Let $\srcAlphabet = \{a, b\}$, $\tgtAlphabet = \{c, d\}$, and define:
+\[
+  \transFn(\srcStr) = \begin{cases}
+    c & \text{if } \srcStr = a^n \text{ for some } n \geq 1, \\
+    d^{|\srcStr|} & \text{otherwise.}
+  \end{cases}
+\]
+Then $\preCover(c) = \{a^n : n \geq 1\}$.  But $\committed(a^n) = \varepsilon$
+for all $n \geq 1$, since $a^n b$ is an extension of $a^n$ with
+$\transFn(a^n b) = d^{n+1}$ which does not start with $c$.  So
+$\maxQuotient(c) = \emptyset$ (no input is committed to $c$), and
+$\Remainder(c) = \{a, aa, aaa, \ldots\}$---\textbf{infinite}.
+
+Every $a^n$ covers $c$ ``accidentally'': the output happens to be $c$, but
+extending by $b$ steers it away.
+\end{example}
+
+\begin{definition}[Finite non-monotonicity]
+\label{def:finite-nonmonotone}
+A function $\transFn \colon \srcStrings \to \tgtStrings$ has \defn{finite
+non-monotonicity} if for every $\tgtStr \in \tgtStrings$, the tentative set
+\[
+  \Remainder(\tgtStr) = \{\srcStr \in \srcStrings : \tgtStr \preceq \transFn(\srcStr) \text{ and } \tgtStr \not\preceq \committed(\srcStr)\}
+\]
+is finite.
+\end{definition}
+
+\begin{remark}[Connection to prefix monotonicity]
+A prefix-monotone function has $\Remainder(\tgtStr) = \emptyset$ for all
+$\tgtStr$ (paper, Proposition~5.1), since $\srcStr \preceq \srcStrp$ implies
+$\transFn(\srcStr) \preceq \transFn(\srcStrp)$, so coverage is never
+fragile.  Indeed, for prefix-monotone $\transFn$, we have
+$\committed(\srcStr) = \transFn(\srcStr)$ for all $\srcStr$
+(see \cref{prop:prefix-monotone-committed} below).
+
+Finite non-monotonicity strictly generalizes this: the function
+may fail prefix monotonicity at finitely many inputs per target prefix.
+\end{remark}
+
+\begin{proposition}
+\label{prop:prefix-monotone-committed}
+If $\transFn$ is prefix monotone, then $\committed(\srcStr) = \transFn(\srcStr)$ for all $\srcStr$.
+\end{proposition}
+\begin{proof}
+By \cref{prop:committed-bound}, $\committed(\srcStr) \preceq \transFn(\srcStr)$.
+For the reverse: prefix monotonicity gives $\transFn(\srcStr) \preceq
+\transFn(\srcStrp)$ for all $\srcStrp \succeq \srcStr$.  So every element of
+$\{\transFn(\srcStrp) : \srcStrp \succeq \srcStr\}$ extends $\transFn(\srcStr)$,
+and their lcp satisfies $\committed(\srcStr) \succeq \transFn(\srcStr)$.
+\end{proof}
+
+
+\section{The Function-Level Finite Decomposition Lemma}
+\label{sec:lemma}
+
+\begin{lemma}[Function-level finite decomposition]
+\label{lemma:function-level}
+Let $\transFn \colon \srcStrings \to \tgtStrings$ be a function.  If $\transFn$
+has bounded delay (\cref{def:bounded-delay}) and finite non-monotonicity
+(\cref{def:finite-nonmonotone}), then $\transFn$ has the finite decomposition
+property: for every $\tgtStr \in \tgtStrings$, both $\Quotient(\tgtStr)$ and
+$\Remainder(\tgtStr)$ are finite.
+\end{lemma}
+\begin{proof}
+Bounded delay implies $|\Quotient(\tgtStr)| \leq |\srcAlphabet|^{k \cdot |\tgtStr|}$ by \cref{prop:delay-quotient}.  Finite non-monotonicity directly asserts that $\Remainder(\tgtStr)$ is finite.
+\end{proof}
+
+\begin{remark}
+The two conditions are independent:
+\begin{itemize}
+\item \Cref{ex:infinite-Q} has finite non-monotonicity ($\Remainder(c) = \emptyset$) but \emph{not} bounded delay, yielding an infinite quotient.
+\item \Cref{ex:infinite-R} can be modified to have bounded delay but infinite non-monotonicity, yielding an infinite remainder.
+\end{itemize}
+\end{remark}
+
+
+
+\section{Practical Implications}
+\label{sec:practical}
+
+\subsection{BPE tokenizers}
+
+BPE detokenization is prefix-monotone (each token emits $\geq 1$ byte, and
+extending the token sequence extends the byte output).  In fact it is
+strict-prefix monotone when no token maps to $\varepsilon$.  So BPE satisfies
+both conditions: bounded delay with $k = 1$, and $\Remainder = \emptyset$.
+
+\subsection{PTB tokenizers}
+
+The PTB tokenizer has context-dependent rules (e.g., ``\,\texttt{`\,`}\,''
+$\to$ ``\,\texttt{"}\,'' at sentence boundaries, space insertion rules that
+depend on surrounding tokens).  This can cause unbounded delay: arbitrarily
+many input tokens can be consumed before the committed output advances, because
+the output depends on future context.  This is the function-level reason why
+PTB quotients are infinite.
+
+\subsection{Connection to BFS termination}
+
+The paper's algorithms decompose $\preCover(\tgtStr)$ via BFS over source
+strings.  The BFS halts when every frontier element either:
+\begin{enumerate}
+\item \emph{commits} --- enters the committed set $\maxQuotient(\tgtStr)$
+  (becomes a quotient element), or
+\item \emph{exits} --- leaves $\preCover(\tgtStr)$ (not in the precover), or
+\item \emph{resolves} --- is identified as a remainder element.
+\end{enumerate}
+Bounded delay ensures that the frontier cannot grow without bound (commitment
+happens within bounded additional exploration).  Finite non-monotonicity ensures
+that only finitely many frontier elements take path~(3).  Together, they
+guarantee BFS termination---without reference to any particular transducer.
+
+
+\section{The Committed Prefix as a Sequential Function}
+\label{sec:sequential}
+
+There is an additional structural observation about $\committed$.
+
+\begin{proposition}
+\label{prop:committed-sequential}
+For any function $\transFn \colon \srcStrings \to \tgtStrings$, the committed
+prefix $\committed \colon \srcStrings \to \tgtStrings$ is itself a
+prefix-monotone function.
+\end{proposition}
+\begin{proof}
+By \cref{prop:committed-monotone}, $\srcStr \preceq \srcStrp$ implies
+$\committed(\srcStr) \preceq \committed(\srcStrp)$.
+\end{proof}
+
+So $\committed$ is the ``prefix-monotone part'' of $\transFn$---the largest
+output that can be committed to incrementally.  The gap between
+$\committed(\srcStr)$ and $\transFn(\srcStr)$ is what the remainder captures:
+it consists of strings where the actual output overshoots the committed prefix.
+
+This also gives an alternative characterization of the decomposition:
+\begin{equation}
+  \preCover(\tgtStr) = \underbrace{\preCover_{\committed}(\tgtStr)}_{\text{committed part}}
+  \;\cup\;
+  \underbrace{\{\srcStr : \tgtStr \preceq \transFn(\srcStr),\;
+    \tgtStr \not\preceq \committed(\srcStr)\}}_{\text{remainder}},
+\end{equation}
+where $\preCover_{\committed}(\tgtStr) = \{\srcStr : \tgtStr \preceq
+\committed(\srcStr)\}$ is the precover of $\tgtStr$ under the prefix-monotone
+function $\committed$.  Since $\committed$ is prefix-monotone, this precover
+is automatically a cylinder, and its quotient is exactly $\Quotient(\tgtStr)$.
+
+
+\section{Necessity of Bounded Delay}
+\label{sec:necessity}
+
+\Cref{sec:axes} established that bounded delay is \emph{sufficient} for finite
+quotients.  Is it \emph{necessary}?  The answer depends on whether we consider
+arbitrary functions or restrict to FST-realizable ones.
+
+\subsection{General functions: bounded delay is not necessary}
+
+\begin{proposition}
+\label{prop:not-necessary-general}
+There exists a prefix-monotone function $\transFn \colon \srcStrings \to
+\tgtStrings$ such that $\Quotient(\tgtStr)$ is finite for every $\tgtStr$ but
+$\transFn$ does not have bounded delay.
+\end{proposition}
+\begin{proof}
+Let $\srcAlphabet = \{a, b\}$, $\tgtAlphabet = \{c\}$, and define
+$\transFn(\srcStr) = c^{\lfloor \log_2(|\srcStr| + 1) \rfloor}$.  That is,
+the output length is the floor of $\log_2$ of one more than the input length.
+This function depends only on $|\srcStr|$, and since $\lfloor \log_2(n+1)
+\rfloor \leq \lfloor \log_2(m+1) \rfloor$ whenever $n \leq m$, the function
+is prefix monotone (longer inputs produce longer-or-equal outputs).  By
+\cref{prop:prefix-monotone-committed}, $\Remainder(\tgtStr) = \emptyset$ for
+all $\tgtStr$.
+
+\medskip\noindent\textbf{Committed prefix.}
+$\committed(\srcStr) = c^{\lfloor \log_2(|\srcStr| + 1) \rfloor}$, since the
+minimum output length over all extensions of $\srcStr$ is achieved by $\srcStr$
+itself (shorter extensions have shorter output).
+
+\medskip\noindent\textbf{Finite quotients.}
+$\maxQuotient(c^n) = \{ \srcStr : |\srcStr| \geq 2^n - 1 \}$, so
+$\Quotient(c^n) = \srcAlphabet^{2^n - 1}$ (all strings of length exactly
+$2^n - 1$).  This is finite: $|\Quotient(c^n)| = 2^{2^n - 1}$.
+
+\medskip\noindent\textbf{No bounded delay.}
+Between input lengths $2^n - 1$ and $2^{n+1} - 2$, the committed output stays
+at $c^n$.  This stalling interval has length $2^n - 1$, which grows without
+bound.  So no constant $k$ satisfies \cref{def:bounded-delay}.
+\end{proof}
+
+\begin{remark}
+This counterexample is not FST-realizable.  The output schedule requires
+counting to $2^n$ between successive output symbols, which exceeds the
+capacity of any finite-state device.
+\end{remark}
+
+\subsection{FST-realizable functions: bounded delay is necessary}
+
+For functions realized by finite-state transducers, the situation is different.
+The finite state space forces a dichotomy: either the committed prefix advances
+within a bounded number of steps, or it can stall indefinitely---and
+indefinite stalling creates infinite quotients.
+
+\begin{proposition}
+\label{prop:necessary-fst}
+Let $\transFn \colon \srcStrings \to \tgtStrings$ be a function realized by an
+input-deterministic FST $\transST$ with $N$ states.  If $\transFn$ does not
+have bounded delay with constant $k = N$, then there exists
+$\tgtStr \in \tgtStrings$ such that $\Quotient(\tgtStr)$ is infinite.
+\end{proposition}
+\begin{proof}
+Suppose bounded delay fails with $k = N$.  Then there exist $\srcStr \in
+\srcStrings$ and symbols $a_1, \ldots, a_N \in \srcAlphabet$ such that
+$\committed(\srcStr \cdot a_1 \cdots a_i) = \committed(\srcStr)$ for all
+$i = 0, \ldots, N$, and $\committed(\srcStr \cdot a_1 \cdots a_N) \neq
+\transFn(\srcStr \cdot a_1 \cdots a_N)$.
+
+Since $\transST$ is input-deterministic, processing $\srcStr$ then
+$a_1, \ldots, a_N$ visits $N + 1$ states.  By pigeonhole, some state $\state$
+is visited twice: $\state$ is reached after $\srcStr \cdot a_1 \cdots a_j$
+and again after $\srcStr \cdot a_1 \cdots a_{j'}$ for some $0 \leq j < j'
+\leq N$.
+
+\medskip\noindent\textbf{Claim:} The cycle word $w = a_{j+1} \cdots a_{j'}$
+produces $\varepsilon$ output.
+
+Since the transducer is input-deterministic, the output produced along
+$a_{j+1}, \ldots, a_{j'}$ from $\state$ is the same string $\tgtStrp$ every
+time the cycle is traversed.  Suppose $\tgtStrp \neq \varepsilon$.  Then
+traversing the cycle $m$ times from $\state$ produces output $\tgtStrp^m$.
+Consider the string $\srcStr' = \srcStr \cdot a_1 \cdots a_j$ (which reaches
+$\state$).  The output of $\transFn(\srcStr' \cdot w^m \cdot z)$ for any
+continuation $z$ begins with $\transFn(\srcStr') {|}_{\text{prefix}} \cdot
+\tgtStrp^m$ (the output accumulated before the cycle, plus $m$ copies of
+$\tgtStrp$, plus whatever $z$ produces).  Therefore
+$|\committed(\srcStr' \cdot w^m)| \geq |\committed(\srcStr')| + m \cdot
+|\tgtStrp|$, which grows with $m$.  But $\committed(\srcStr' \cdot w) =
+\committed(\srcStr \cdot a_1 \cdots a_{j'}) = \committed(\srcStr)$
+(by assumption that committed stalls).  This contradicts $|\tgtStrp| \geq 1$.
+Hence $\tgtStrp = \varepsilon$.
+
+\medskip\noindent\textbf{The $\varepsilon$-output cycle creates an infinite quotient.}
+
+Let $\srcStr' = \srcStr \cdot a_1 \cdots a_j$, so $\srcStr'$ reaches $\state$
+with accumulated output $\tgtStr_0$.  Since $w$ produces $\varepsilon$ and
+returns to $\state$, we have $\transFn(\srcStr' \cdot w^m \cdot z) =
+\transFn(\srcStr' \cdot z)$ for all $m \geq 0$ and $z \in \srcStrings$.  In
+particular, $\committed(\srcStr' \cdot w^m) = \committed(\srcStr')$ for all
+$m$.
+
+Since $\committed(\srcStr') \neq \transFn(\srcStr')$ (from the bounded-delay
+failure assumption), there exists a symbol $\tgtSym$ such that
+$\tgtStr_1 \defeq \committed(\srcStr') \cdot \tgtSym$ satisfies
+$\committed(\srcStr') \prec \tgtStr_1 \preceq \transFn(\srcStr' \cdot z_0)$
+for some continuation $z_0$.  Now consider the elements of $\Quotient(\tgtStr_1)$.
+Any $\srcStr''$ with $\committed(\srcStr'') \succeq \tgtStr_1$ must extend
+$\srcStr'$ past the $\varepsilon$-cycle (i.e., it must eventually take a
+non-cycle transition from $\state$).  Concretely, for each $m \geq 0$, the
+string $\srcStr' \cdot w^m \cdot b$ (where $b$ is the first symbol of $z_0$)
+reaches the same post-cycle state with $\committed \succeq \tgtStr_1$.  These
+strings are pairwise prefix-incomparable---$\srcStr' \cdot w^m \cdot b$ and
+$\srcStr' \cdot w^{m'} \cdot b$ differ at position $|\srcStr'| + (m \wedge m')
+\cdot |w| + 1$ (one has $b$, the other has $w$'s first symbol, and $b$ differs
+from $w$'s first symbol because $b$ exits the cycle while $w$'s first symbol
+stays on it).  Hence $\Quotient(\tgtStr_1)$ contains infinitely many minimal
+elements.
+\end{proof}
+
+\begin{corollary}
+\label{cor:fst-equivalence}
+For FST-realizable functions, bounded delay is both necessary and sufficient
+for finite quotients:
+\[
+  \text{$\Quotient(\tgtStr)$ finite for all $\tgtStr$}
+  \quad\Longleftrightarrow\quad
+  \text{$\transFn$ has bounded delay (with $k \leq N$)}.
+\]
+\end{corollary}
+
+\begin{remark}
+The $\varepsilon$-output cycle in the proof is a structural feature of the
+function, not an artifact of the chosen transducer.  If $\transFn$ does not
+have bounded delay, then \emph{every} input-deterministic FST realizing
+$\transFn$ must contain such a cycle (by the pigeonhole argument).
+\end{remark}
+
+\begin{remark}[Bounded vs.\ finite delay]
+The counterexample in \cref{prop:not-necessary-general} has \emph{finite
+delay}---$\committed$ always advances in finite time, just not within a uniform
+bound---but not \emph{bounded delay}.  For FST-realizable functions, the
+distinction collapses: by \cref{prop:necessary-fst}, finite delay implies
+bounded delay (with $k \leq N$), because an FST with finite delay cannot have
+$\varepsilon$-output cycles.
+\end{remark}
+
+
+\section{Summary}
+\label{sec:summary}
+
+\begin{center}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Condition on $\transFn$} & \textbf{Finite $\Quotient$?} & \textbf{Finite $\Remainder$?} \\
+\midrule
+Strict-prefix monotone & Yes ($\leq (|\srcAlphabet|+1)^{|\tgtStr|}$) & Yes ($= \emptyset$) \\
+Prefix monotone & Not guaranteed & Yes ($= \emptyset$) \\
+Bounded delay & Yes ($\leq |\srcAlphabet|^{k|\tgtStr|}$) & Not guaranteed \\
+Finite non-monotonicity & Not guaranteed & Yes (by definition) \\
+\midrule
+Bounded delay $+$ finite non-mono. & Yes & Yes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\medskip\noindent
+For FST-realizable functions, bounded delay is an \textbf{equivalence}:
+$\Quotient(\tgtStr)$ is finite for all $\tgtStr$ if and only if $\transFn$ has
+bounded delay (\cref{cor:fst-equivalence}).  For general functions, it is only
+sufficient (\cref{prop:not-necessary-general}).
+
+
+\section{Remaining Open Questions}
+\label{sec:open}
+
+\begin{enumerate}
+\item \textbf{Necessity of finite non-monotonicity.}
+  We showed bounded delay is necessary (for FSTs) for finite quotients.
+  Is finite non-monotonicity necessary for finite remainders?  That is: if
+  $\Remainder(\tgtStr)$ is finite for all $\tgtStr$, must the tentative set
+  be finite?  (This is tautological as stated; a non-trivial version would
+  seek a characterization in terms of more elementary properties of $\transFn$.)
+
+\item \textbf{Tighter bounds.}
+  The bound $|\srcAlphabet|^{k|\tgtStr|}$ is crude.  Can it be sharpened, e.g.,
+  using the structure of the committed prefix's ``increments''?
+
+\item \textbf{Decidability.}
+  Given an FST realizing $\transFn$, is bounded delay decidable?  For rational
+  functions, finite delay is known to be decidable (Choffrut 1977), and
+  our \cref{prop:necessary-fst} shows that finite delay = bounded delay for
+  FSTs, so the answer is likely yes.  Is finite non-monotonicity decidable?
+\end{enumerate}
+
+
+\end{document}
