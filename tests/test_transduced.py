@@ -34,9 +34,11 @@ def copy_fst(alphabet):
 
 class TinyState(LMState):
     """Minimal LM state for testing with a fixed token distribution."""
-    def __init__(self, probs, logprefix=0.0):
+    def __init__(self, lm, probs, logprefix=0.0, _history_id=0):
+        self._lm = lm
         self._probs = probs
         self.logprefix = logprefix
+        self._history_id = _history_id
 
     @property
     def logp_next(self):
@@ -44,29 +46,31 @@ class TinyState(LMState):
 
     @property
     def eos(self):
-        return '<EOS>'
+        return None
 
     def __rshift__(self, token):
         lp = self._probs.get(token, -np.inf)
-        return TinyState(self._probs, self.logprefix + lp)
+        return TinyState(self._lm, self._probs, self.logprefix + lp,
+                         _history_id=self._lm._history_pool.intern(self._history_id, token))
 
 
 class TinyLM(LM):
     def __init__(self):
-        self.eos = '<EOS>'
+        self.eos = None
     def initial(self):
-        probs = {'a': np.log(0.6), 'b': np.log(0.3), '<EOS>': np.log(0.1)}
-        return TinyState(probs)
+        probs = {'a': np.log(0.6), 'b': np.log(0.3), None: np.log(0.1)}
+        return TinyState(self, probs)
 
 
 class FiniteLMState(LMState):
     """State for a finite-support LM. Computes exact conditionals from the trie."""
 
-    def __init__(self, lm, prefix, logprefix):
+    def __init__(self, lm, prefix, logprefix, _history_id=0):
         self._lm = lm
         self._prefix = prefix
         self.logprefix = logprefix
         self.eos = lm.eos
+        self._history_id = _history_id
 
     def _prefix_mass(self, prefix):
         """Sum of P(s) for all strings s starting with prefix."""
@@ -98,7 +102,8 @@ class FiniteLMState(LMState):
         if token == self.eos:
             raise ValueError("Cannot advance past EOS")
         lp = self.logp_next[token]
-        return FiniteLMState(self._lm, self._prefix + (token,), self.logprefix + lp)
+        return FiniteLMState(self._lm, self._prefix + (token,), self.logprefix + lp,
+                             _history_id=self._lm._history_pool.intern(self._history_id, token))
 
 
 class FiniteLM(LM):
@@ -107,7 +112,7 @@ class FiniteLM(LM):
     string_probs: {tuple_of_tokens: probability} — must sum to 1.
     """
 
-    def __init__(self, string_probs, eos='<EOS>'):
+    def __init__(self, string_probs, eos=None):
         self.eos = eos
         self._string_probs = string_probs
 
@@ -172,7 +177,7 @@ class TestTransducedLM:
         """TransducedLM with a copy FST should reproduce the inner LM's distribution."""
         alphabet = char_ngram_lm.alphabet
         # filter out EOS from FST alphabet
-        fst_alpha = [s for s in alphabet if s != '<EOS>']
+        fst_alpha = [s for s in alphabet if s != char_ngram_lm.eos]
         fst = copy_fst(fst_alpha)
 
         tlm = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
@@ -193,7 +198,7 @@ class TestTransducedLM:
     def test_identity_after_advance(self, char_ngram_lm):
         """After advancing by a symbol, identity transducer still tracks inner LM."""
         alphabet = char_ngram_lm.alphabet
-        fst_alpha = [s for s in alphabet if s != '<EOS>']
+        fst_alpha = [s for s in alphabet if s != char_ngram_lm.eos]
         fst = copy_fst(fst_alpha)
 
         tlm = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
@@ -211,7 +216,7 @@ class TestTransducedLM:
 
     def test_incremental_consistency(self, char_ngram_lm):
         """logp after >> y1 >> y2 equals sum of logp_next[y_i] from successive states."""
-        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != char_ngram_lm.eos]
         fst = copy_fst(fst_alpha)
         tlm = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
 
@@ -284,7 +289,7 @@ class TestTransducedLM:
 
     def test_path_recovery(self, char_ngram_lm):
         """Path recovery returns the correct sequence of target symbols."""
-        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != char_ngram_lm.eos]
         fst = copy_fst(fst_alpha)
         tlm = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
 
@@ -293,7 +298,7 @@ class TestTransducedLM:
 
     def test_logp_starts_at_zero(self, char_ngram_lm):
         """Initial state has logprefix = 0."""
-        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != char_ngram_lm.eos]
         fst = copy_fst(fst_alpha)
         tlm = TransducedLM(char_ngram_lm, fst, K=100)
         state = tlm.initial()
@@ -301,7 +306,7 @@ class TestTransducedLM:
 
     def test_repr(self, char_ngram_lm):
         """Repr doesn't crash."""
-        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != char_ngram_lm.eos]
         fst = copy_fst(fst_alpha)
         tlm = TransducedLM(char_ngram_lm, fst, K=100)
         state = tlm.initial()
@@ -316,7 +321,7 @@ class TestTransducedLM:
                 self._probs = probs
                 self.logprefix = logprefix
                 self.history = history
-                self.eos = '<EOS>'
+                self.eos = None
 
             @property
             def logp_next(self):
@@ -329,9 +334,9 @@ class TestTransducedLM:
 
         class TinyLM(LM):
             def __init__(self):
-                self.eos = '<EOS>'
+                self.eos = None
             def initial(self):
-                probs = {'a': np.log(0.6), 'b': np.log(0.3), '<EOS>': np.log(0.1)}
+                probs = {'a': np.log(0.6), 'b': np.log(0.3), None: np.log(0.1)}
                 return TinyState(probs)
 
         inner_lm = TinyLM()
@@ -343,13 +348,13 @@ class TestTransducedLM:
         # With copy FST, the transduced EOS probability should match the
         # inner LM's EOS probability (normalized over {a, b, EOS}).
         inner_state = inner_lm.initial()
-        inner_eos = inner_state.logp_next['<EOS>']
+        inner_eos = inner_state.logp_next[None]
         inner_a = inner_state.logp_next['a']
         inner_b = inner_state.logp_next['b']
         inner_Z = logsumexp([inner_eos, inner_a, inner_b])
         expected_eos = inner_eos - inner_Z
 
-        got_eos = state.logp_next['<EOS>']
+        got_eos = state.logp_next[None]
         assert abs(got_eos - expected_eos) < 0.5, \
             f"EOS: expected={expected_eos:.4f}, got={got_eos:.4f}"
 
@@ -418,7 +423,7 @@ class TestLMState:
 
     def test_transduced_greedy_decode(self, char_ngram_lm):
         """TransducedState.greedy_decode returns a list of string tokens."""
-        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != char_ngram_lm.eos]
         fst = copy_fst(fst_alpha)
         tlm = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
         state = tlm.initial()
@@ -430,7 +435,7 @@ class TestLMState:
 
     def test_transduced_sample_decode(self, char_ngram_lm):
         """TransducedState.sample_decode returns a list of string tokens."""
-        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != char_ngram_lm.eos]
         fst = copy_fst(fst_alpha)
         tlm = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
         state = tlm.initial()
@@ -464,7 +469,7 @@ class TestLMState:
 
     def test_transduced_advance(self, char_ngram_lm):
         """__call__ on TransducedState matches sequential >>."""
-        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != char_ngram_lm.eos]
         fst = copy_fst(fst_alpha)
         tlm = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
         state = tlm.initial()
@@ -484,7 +489,7 @@ class TestFusedTransducedLM:
 
     def test_identity_transducer(self, char_ngram_lm):
         """Fused and original should agree on copy FST."""
-        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != char_ngram_lm.eos]
         fst = copy_fst(fst_alpha)
 
         orig = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
@@ -502,7 +507,7 @@ class TestFusedTransducedLM:
 
     def test_identity_after_advance(self, char_ngram_lm):
         """Fused matches original after advancing by a symbol."""
-        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != char_ngram_lm.eos]
         fst = copy_fst(fst_alpha)
 
         orig = TransducedLM(char_ngram_lm, fst, K=100, max_expansions=500)
@@ -583,7 +588,7 @@ class TestFusedTransducedLM:
 
     def test_incremental_consistency(self, char_ngram_lm):
         """logp after >> y1 >> y2 equals sum of conditional logps."""
-        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != char_ngram_lm.eos]
         fst = copy_fst(fst_alpha)
         fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
 
@@ -615,7 +620,7 @@ class TestFusedTransducedLM:
 
     def test_logp_starts_at_zero(self, char_ngram_lm):
         """Initial state has logprefix = 0."""
-        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != char_ngram_lm.eos]
         fst = copy_fst(fst_alpha)
         fused = FusedTransducedLM(char_ngram_lm, fst)
         state = fused.initial()
@@ -623,7 +628,7 @@ class TestFusedTransducedLM:
 
     def test_path_recovery(self, char_ngram_lm):
         """Path recovery returns the correct sequence of target symbols."""
-        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != char_ngram_lm.eos]
         fst = copy_fst(fst_alpha)
         fused = FusedTransducedLM(char_ngram_lm, fst, max_steps=500, max_beam=100)
 
@@ -632,7 +637,7 @@ class TestFusedTransducedLM:
 
     def test_repr(self, char_ngram_lm):
         """Repr doesn't crash."""
-        fst_alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        fst_alpha = [s for s in char_ngram_lm.alphabet if s != char_ngram_lm.eos]
         fst = copy_fst(fst_alpha)
         fused = FusedTransducedLM(char_ngram_lm, fst)
         state = fused.initial()
@@ -687,7 +692,7 @@ class TestMultiStateFSTs:
         assert len(scores0) > 0
 
         # Find a reachable symbol and advance
-        reachable = [y for y, lp in scores0.items() if lp > -10 and y != '<EOS>']
+        reachable = [y for y, lp in scores0.items() if lp > -10 and y != tlm.eos]
         assert len(reachable) > 0, "Should have at least one reachable symbol"
         y0 = reachable[0]
 
@@ -699,7 +704,7 @@ class TestMultiStateFSTs:
 
     def test_duplicate_fst(self, char_ngram_lm):
         """Duplicate FST: 'a' -> 'aa', 'b' -> 'bb'. Multi-state, multi-step."""
-        alpha = [s for s in char_ngram_lm.alphabet if s != '<EOS>']
+        alpha = [s for s in char_ngram_lm.alphabet if s != char_ngram_lm.eos]
         fst = examples.duplicate(alpha, K=2)
         tlm = TransducedLM(char_ngram_lm, fst, K=200, max_expansions=2000)
         state = tlm.initial()
@@ -1041,7 +1046,7 @@ def _brute_force_conditional(inner_lm, fst, prefix, max_source_len):
         if out_str[:len(prefix)] != prefix:
             continue
         suffix = out_str[len(prefix):]
-        y = '<EOS>' if len(suffix) == 0 else suffix[0]
+        y = None if len(suffix) == 0 else suffix[0]
         if y not in mass:
             mass[y] = lp
         else:
@@ -1252,7 +1257,7 @@ class TestReferenceTransducedLM:
 
         assert lp['x'] == pytest.approx(np.log(3 / 7), abs=1e-10)
         assert lp['y'] == pytest.approx(np.log(2 / 7), abs=1e-10)
-        assert lp['<EOS>'] == pytest.approx(np.log(2 / 7), abs=1e-10)
+        assert lp[None] == pytest.approx(np.log(2 / 7), abs=1e-10)
 
     def test_exact_bounded_copy(self):
         """Verify exact logp_next for bounded copy FST.
@@ -1269,7 +1274,7 @@ class TestReferenceTransducedLM:
 
         assert lp['a'] == pytest.approx(np.log(0.45), abs=1e-10)
         assert lp['b'] == pytest.approx(np.log(0.35), abs=1e-10)
-        assert lp['<EOS>'] == pytest.approx(np.log(0.2), abs=1e-10)
+        assert lp[None] == pytest.approx(np.log(0.2), abs=1e-10)
 
     def test_exact_after_advance(self):
         """Verify exact logp_next after advancing by 'a' on bounded copy FST.
@@ -1282,7 +1287,7 @@ class TestReferenceTransducedLM:
         lp = (tlm >> 'a').logp_next
 
         assert lp['b'] == pytest.approx(np.log(1 / 3), abs=1e-10)
-        assert lp['<EOS>'] == pytest.approx(np.log(2 / 3), abs=1e-10)
+        assert lp[None] == pytest.approx(np.log(2 / 3), abs=1e-10)
         assert lp['a'] == -np.inf  # no source 'aa' in inner LM
 
     def test_exact_ambiguous_fst(self):
@@ -1296,7 +1301,7 @@ class TestReferenceTransducedLM:
         lp = tlm.initial().logp_next
 
         assert lp['x'] == pytest.approx(np.log(5 / 7), abs=1e-10)
-        assert lp['<EOS>'] == pytest.approx(np.log(2 / 7), abs=1e-10)
+        assert lp[None] == pytest.approx(np.log(2 / 7), abs=1e-10)
 
     def test_exact_length_changing_fst(self):
         """Source 'a' maps to target 'xy' (two output symbols).
@@ -1308,7 +1313,7 @@ class TestReferenceTransducedLM:
         lp = tlm.initial().logp_next
 
         assert lp['x'] == pytest.approx(np.log(3 / 5), abs=1e-10)
-        assert lp['<EOS>'] == pytest.approx(np.log(2 / 5), abs=1e-10)
+        assert lp[None] == pytest.approx(np.log(2 / 5), abs=1e-10)
 
     def test_length_changing_second_step(self):
         """After 'x', the only option is 'y' with probability 1."""
@@ -1316,7 +1321,7 @@ class TestReferenceTransducedLM:
         lp = (tlm >> 'x').logp_next
 
         assert lp['y'] == pytest.approx(0.0, abs=1e-10)
-        assert lp['<EOS>'] == -np.inf
+        assert lp[None] == -np.inf
 
     def test_complete_string_probability(self):
         """Cumulative logp + logp_next[EOS] gives the correct string probability.
@@ -1326,7 +1331,7 @@ class TestReferenceTransducedLM:
         tlm = ReferenceTransducedLM(
             _finite_inner_lm(), _bounded_copy_fst(['a', 'b'], 2))
         state = tlm >> 'a' >> 'b'
-        complete_logp = state.logprefix + state.logp_next['<EOS>']
+        complete_logp = state.logprefix + state.logp_next[None]
         assert complete_logp == pytest.approx(np.log(0.15), abs=1e-10)
 
     # -- EOS and error handling ---------------------------------------------
@@ -1335,14 +1340,14 @@ class TestReferenceTransducedLM:
         """After exhausting all continuations, P(EOS) = 1."""
         tlm = ReferenceTransducedLM(_finite_inner_lm(), _mapping_fst())
         lp = (tlm >> 'x').logp_next
-        assert lp['<EOS>'] == pytest.approx(0.0, abs=1e-10)
+        assert lp[None] == pytest.approx(0.0, abs=1e-10)
 
     def test_advance_past_eos_raises(self):
         """Advancing by EOS raises ValueError."""
         tlm = ReferenceTransducedLM(_finite_inner_lm(), _mapping_fst())
         state = tlm.initial()
         with pytest.raises(ValueError, match="Cannot advance past EOS"):
-            state >> '<EOS>'
+            state >> None
 
     def test_zero_prob_symbol_raises(self):
         """Advancing by a symbol with zero probability raises ValueError."""
@@ -1456,7 +1461,7 @@ class TestReferenceTransducedLM:
         ref_state = ref.initial()
         approx_state = approx.initial()
 
-        for y in ['a', 'b', '<EOS>']:
+        for y in ['a', 'b', None]:
             ref_lp = ref_state.logp_next[y]
             approx_lp = approx_state.logp_next[y]
             assert abs(ref_lp - approx_lp) < 0.5, \
@@ -1473,7 +1478,7 @@ class TestReferenceTransducedLM:
         ref_state = ref.initial()
         fused_state = fused.initial()
 
-        for y in ['a', 'b', '<EOS>']:
+        for y in ['a', 'b', None]:
             ref_lp = ref_state.logp_next[y]
             fused_lp = fused_state.logp_next[y]
             assert abs(ref_lp - fused_lp) < 0.5, \
@@ -1494,7 +1499,7 @@ class TestReferenceTransducedLM:
             state = state >> y
             assert state.logprefix == pytest.approx(cumulative, abs=1e-10)
         # Final state should have P(EOS) = 1
-        assert state.logp_next['<EOS>'] == pytest.approx(0.0, abs=1e-10)
+        assert state.logp_next[None] == pytest.approx(0.0, abs=1e-10)
 
     def test_multi_step_length_changing(self):
         """Full decode through the length-changing FST: target 'xy'."""
@@ -1506,7 +1511,7 @@ class TestReferenceTransducedLM:
         # Target 'xy' corresponds to source 'a' with P = 0.3.
         # Pushforward total = 0.5, so P_target('xy') = 0.3/0.5 = 0.6.
         # Complete string logprob = log(0.6).
-        complete_logp = state.logprefix + state.logp_next['<EOS>']
+        complete_logp = state.logprefix + state.logp_next[None]
         assert complete_logp == pytest.approx(np.log(0.6), abs=1e-10)
 
 

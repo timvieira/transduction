@@ -41,7 +41,7 @@ class ReferenceTransducedLM(LM[Token]):
     """
 
     def __init__(self, inner_lm: LM, fst: FST[Any, Any],
-                 eos: Token = '<EOS>') -> None:  # type: ignore[assignment]
+                 eos: Token = None) -> None:  # type: ignore[assignment]
         self.inner_lm = inner_lm
         self.fst = fst
         self.eos = eos
@@ -69,6 +69,10 @@ class ReferenceTransducedState(LMState[Token]):
         self.eos = tlm.eos
         self._target = target
         self.logprefix = logprefix
+
+    @property
+    def context_key(self):
+        return self._target
 
     def _score(self, prefix: Str[Token]) -> float:
         """Compute log P(output starts with prefix).
@@ -162,7 +166,7 @@ class BruteForceTransducedLM(LM[Token]):
 
     def __init__(self, source_probs: dict[Str[Token], float],
                  fst: FST[Any, Any],
-                 eos: Token = '<EOS>') -> None:  # type: ignore[assignment]
+                 eos: Token = None) -> None:  # type: ignore[assignment]
         self.eos = eos
         self._target_alphabet = fst.B - {EPSILON}
         # Pushforward: output string -> total probability mass
@@ -186,6 +190,10 @@ class BruteForceTransducedState(LMState[Token]):
         self.eos = tlm.eos
         self._target = target
         self.logprefix = logprefix
+
+    @property
+    def context_key(self):
+        return self._target
 
     def _prefix_mass(self, prefix: Str[Token]) -> float:
         n = len(prefix)

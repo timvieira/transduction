@@ -261,6 +261,10 @@ class FusedTransducedState(LMState[Token]):
         self._logp_next_cache: LogDistr[Token] | None = None
         self._carry_forward_cache: dict[Token, list[Particle]] | None = None
 
+    @property
+    def context_key(self):
+        return self.path
+
     def decode_dfa_state(self, state_id: int) -> frozenset[Any]:
         """Decode a DFA state ID to NFA constituents.
 
@@ -341,7 +345,7 @@ class FusedTransducedLM(LM[Token]):
 
     def __init__(self, inner_lm: LM, fst: FST[Any, Any],
                  max_steps: int = 1000, max_beam: int = 100,
-                 eos: Token = '<EOS>', helper: str = "rust",
+                 eos: Token = None, helper: str = "rust",
                  top_k: int | None = None,
                  ) -> None:  # type: ignore[assignment]
 

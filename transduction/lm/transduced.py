@@ -123,6 +123,10 @@ class TransducedState(LMState[Token]):
         self._logp_next_cache: LogDistr[Token] | None = None
         self._carry_forward: dict[Token, list[Particle]] | None = None
 
+    @property
+    def context_key(self):
+        return self.path
+
     def _ensure_computed(self) -> None:
         if self._logp_next_cache is None:
             self._compute_logp_next()
@@ -392,7 +396,7 @@ class TransducedLM(LM[Token]):
     """
 
     def __init__(self, inner_lm: LM, fst: FST[Any, Any], K: int,
-                 max_expansions: int = 1000, eos: Token = '<EOS>',  # type: ignore[assignment]
+                 max_expansions: int = 1000, eos: Token = None,  # type: ignore[assignment]
                  decomp_state_cls: type | None = None,
                  univ_cls: type = _DefaultUniv,
                  ) -> None:

@@ -385,7 +385,38 @@ class LogDistr(_SparseLogMap[K]):
     """Immutable normalized distribution in log-space.
 
     Supports ``sample()`` but not mutation.
+
+    Optionally tensor-backed: use ``LogDistr.from_tensor(keys, values)``
+    to create a distribution backed by a ``torch.Tensor``.  When
+    ``_p`` is set, batch operations can extract values via integer
+    indexing instead of dict lookups.
     """
+
+    _p: torch.Tensor | None
+    _key_to_idx: dict[K, int] | None
+
+    def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        super().__init__(*args, **kwargs)
+        if not hasattr(self, '_p'):
+            self._p = None
+            self._key_to_idx = None
+
+    @classmethod
+    def from_tensor(cls, keys: list[K], values: torch.Tensor) -> LogDistr[K]:
+        """Create a tensor-backed LogDistr from parallel keys and values.
+
+        Args:
+            keys: list of K keys (length V)
+            values: 1-D tensor of log-probabilities (length V)
+
+        The resulting LogDistr behaves like a normal dict but also exposes
+        ``_p`` (the tensor) and ``_key_to_idx`` (key → position mapping)
+        for fast batch extraction.
+        """
+        d = cls(zip(keys, values.tolist()))
+        d._p = values
+        d._key_to_idx = {k: i for i, k in enumerate(keys)}
+        return d
 
     def sample(self) -> K:
         """Sample a key proportional to ``exp(value)``."""

@@ -52,9 +52,12 @@ class TokenCharacterTrie:
     token log-probabilities to all ancestor nodes in one ``np.logaddexp.at`` call.
     """
 
-    def __init__(self, vocab: dict[Any, bytes], eos_token: Any,
-                 eos_bytes: bytes) -> None:
-        self._tokens = list(vocab.keys())
+    def __init__(self, vocab: dict[Any, bytes], eos_token: Any) -> None:
+        self.eos_token = eos_token
+
+        # Exclude EOS from the trie — EOS mass is computed separately
+        # at root hypotheses to avoid emitting spurious EOS bytes.
+        self._tokens = [tok for tok in vocab if tok != eos_token]
         token_to_idx = {tok: i for i, tok in enumerate(self._tokens)}
 
         self.root = 0
@@ -64,14 +67,14 @@ class TokenCharacterTrie:
         coo_nodes: list[int] = []
         coo_token_ids: list[int] = []
 
-        for token, spelling in vocab.items():
-            trie_spelling = eos_bytes if token == eos_token else spelling
+        for token in self._tokens:
+            spelling = vocab[token]
             idx = token_to_idx[token]
 
             # Walk root → leaf, creating nodes and recording the path.
             curr = 0
             path = [0]
-            for byte_val in trie_spelling:
+            for byte_val in spelling:
                 if byte_val not in children[curr]:
                     nid = len(children)
                     children[curr][byte_val] = nid
@@ -105,6 +108,9 @@ class TokenCharacterTrie:
         except (TypeError, ValueError):
             self._token_ids = None
 
+        # Cache for index tensors keyed by id(key_to_idx) from tensor-backed LogDistr.
+        self._key_idx_cache: dict[int, torch.Tensor] = {}
+
         # Sparse reachability matrix for fast log_mass_sum via matvec.
         n_nodes = len(children)
         n_tokens = len(self._tokens)
@@ -114,19 +120,66 @@ class TokenCharacterTrie:
             indices, values, (n_nodes, n_tokens),
         ).coalesce()
 
+    def _logp_row(self, logp_next: LogDistr) -> torch.Tensor:
+        """Extract a (n_tokens,) logp vector from logp_next, using fastest available path."""
+        p = getattr(logp_next, '_p', None)
+        if p is not None:
+            # Path 1: tensor-backed LogDistr with _key_to_idx (e.g., CharNgramLM)
+            key_to_idx = getattr(logp_next, '_key_to_idx', None)
+            if key_to_idx is not None:
+                cache_key = id(key_to_idx)
+                indices = self._key_idx_cache.get(cache_key)
+                if indices is None:
+                    try:
+                        indices = torch.tensor(
+                            [key_to_idx[s] for s in self._tokens],
+                            dtype=torch.long)
+                    except KeyError:
+                        indices = False  # type: ignore[assignment]
+                    self._key_idx_cache[cache_key] = indices
+                if indices is not False:
+                    return p[indices].double()
+            elif self._token_ids is not None:
+                # TokenLogProbs — _p is indexed by raw integer token IDs
+                return p[self._token_ids].double()
+        return torch.tensor([logp_next[tok] for tok in self._tokens],
+                            dtype=torch.float64)
+
     def log_mass_sum(self, logp_next: LogDistr) -> torch.Tensor:
         """Bottom-up log-probability mass at each trie node via sparse matvec."""
-        p = getattr(logp_next, '_p', None)
-        if p is not None and self._token_ids is not None:
-            logp = p[self._token_ids].double()
-        else:
-            logp = torch.tensor([logp_next[tok] for tok in self._tokens],
-                                dtype=torch.float64)
+        logp = self._logp_row(logp_next)
         logp_max = logp.max()
         prob = torch.exp(logp - logp_max)
         mass = torch.mv(self._reach, prob)
         log_mass = torch.log(mass) + logp_max
         return log_mass
+
+    def log_mass_sum_batch(self, logp_nexts: list[LogDistr]) -> list:
+        """Batched log_mass_sum: single sparse matmul for multiple LM states."""
+        n = len(logp_nexts)
+        if n == 0:
+            return []
+        if n == 1:
+            return [self.log_mass_sum(logp_nexts[0])]
+
+        # Deduplicate by identity
+        unique: dict[int, tuple[int, torch.Tensor]] = {}
+        idx_map: list[int] = []
+        for logp_next in logp_nexts:
+            key = id(logp_next)
+            if key not in unique:
+                unique[key] = (len(unique), self._logp_row(logp_next))
+            idx_map.append(unique[key][0])
+
+        unique_rows = [row for _, row in sorted(unique.values())]
+        logp_mat = torch.stack(unique_rows)
+
+        logp_max = logp_mat.max(dim=1, keepdim=True).values
+        prob_mat = torch.exp(logp_mat - logp_max)
+        mass_mat = torch.sparse.mm(self._reach, prob_mat.T)
+        log_mass_mat = torch.log(mass_mat) + logp_max.T
+
+        return [log_mass_mat[:, idx_map[i]] for i in range(n)]
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +217,6 @@ class TrieState:
         if a is None:
             # End-of-token: complete current token, advance LM state.
             lm_token = self.trie.leaf2lm_token[next_node]
-            if lm_token == self.lm_state.eos:
-                return None
             next_lm = self.lm_state >> lm_token
             next_log_mass = self.trie.log_mass_sum(next_lm.logp_next)
             return TrieState(next_lm, self.trie, self.trie.root,
@@ -177,16 +228,13 @@ class TrieState:
     def _prepare_eot(self) -> tuple[LMState, float] | None:
         """Prepare EOT transition: create child LM state without triggering forward pass.
 
-        Returns (child_lm_state, new_weight) or None if EOT leads to EOS.
+        Returns (child_lm_state, new_weight) or None if no EOT action.
         """
         next_node = self.trie.children[self.node].get(None)
         if next_node is None:
             return None
         new_weight = float(self.weight + self.log_mass[next_node] - self.log_mass[self.node])
         lm_token = self.trie.leaf2lm_token[next_node]
-        if lm_token == self.lm_state.eos:
-            return None
-        # Create child LM state (cheap: no forward pass yet).
         child_lm = self.lm_state >> lm_token
         return (child_lm, new_weight)
 
@@ -254,11 +302,17 @@ class _Bundle:
     @cached_property
     def _logp_next(self) -> LogDistr:
         scores: LogVector = LogVector()
+        eos_token = self.alg.trie.eos_token
         for hyp in self.extend:
             node_mass = float(hyp.log_mass[hyp.node])
             for a, child_node in hyp.actions.items():
                 if a is not None:
                     scores.logaddexp(a, hyp.weight + float(hyp.log_mass[child_node]) - node_mass)
+            # EOS: hypotheses at root can stop (EOS is not in the trie).
+            if hyp.node == hyp.trie.root:
+                eos_lp = hyp.lm_state.logp_next[eos_token]
+                if eos_lp > float('-inf'):
+                    scores.logaddexp(None, hyp.weight + eos_lp)
         return scores.normalize()
 
     @cached_property
@@ -291,9 +345,17 @@ class _Bundle:
         if child_states:
             self.alg.lm.prefetch(child_states)
 
-        # Phase 3: Complete — consume (now-cached) logp_next.
-        extended = [hyp._complete_eot(child_lm, weight)
-                    for hyp, child_lm, weight in prepared]
+        # Phase 3: Complete — batch log_mass_sum across all children.
+        if prepared:
+            trie = prepared[0][0].trie
+            batch_masses = trie.log_mass_sum_batch(
+                [child_lm.logp_next for _, child_lm, _ in prepared])
+            extended = [
+                TrieState(child_lm, trie, trie.root, batch_masses[i], weight)
+                for i, (hyp, child_lm, weight) in enumerate(prepared)
+            ]
+        else:
+            extended = []
 
         return _Bundle(self.alg, self.states + extended)
 
@@ -346,6 +408,10 @@ class CharacterBeamState(LMState):
         self.logprefix = logprefix
         self._candidates = candidates
 
+    @property
+    def context_key(self):
+        return self.context
+
     @cached_property
     def logp_next(self) -> LogDistr:
         return self._candidates._logp_next
@@ -374,9 +440,6 @@ class CharacterBeam(LM):
         K: Beam width (max hypotheses to keep after pruning).
         eos_token: Which token in ``vocab`` represents end-of-sequence.
             Defaults to ``lm.eos`` if not provided.
-        eos: End-of-string marker (bytes).  The EOS token is replaced
-            with this sequence in the trie so that EOS has a distinct
-            character representation.
         relative_score_threshold: Optional ratio threshold for pruning.
         eot_immunity: If True, hypotheses without EOT are immune from pruning.
         extend_threshold: Minimum probability threshold for extending.
@@ -386,19 +449,16 @@ class CharacterBeam(LM):
 
     def __init__(self, lm: LM, vocab: dict[Any, bytes], K: int,
                  eos_token: Any | None = None,
-                 eos: bytes = '▪'.encode(),
                  relative_score_threshold: float | None = None,
                  eot_immunity: bool = False,
                  extend_threshold: float | None = None,
                  verbosity: int = 0) -> None:
         self.lm = lm
-        self._eos_bytes = eos
         self.V: set[int] = {x for y in vocab.values() for x in y}
 
         self.trie = TokenCharacterTrie(
             vocab=vocab,
             eos_token=eos_token if eos_token is not None else lm.eos,
-            eos_bytes=self._eos_bytes,
         )
 
         self._trie_init = TrieState.initial(self.lm, self.trie)

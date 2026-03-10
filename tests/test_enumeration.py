@@ -12,7 +12,7 @@ from transduction.enumeration import (
 from transduction.dfa_decomp_nonrecursive import NonrecursiveDFADecomp
 
 
-EOS = '<EOS>'
+EOS = None
 
 
 class SimpleGrammarLM(LMState):

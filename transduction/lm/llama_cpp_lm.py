@@ -143,12 +143,14 @@ class LlamaCppState(LMState[int]):
     """
 
     def __init__(self, lm: LlamaCppLM, logprefix: float,
-                 context: tuple[Any, ...], parent: LlamaCppState | None) -> None:
+                 context: tuple[Any, ...], parent: LlamaCppState | None,
+                 _history_id: int = 0) -> None:
         self.lm = lm
         self.eos = lm.eos
         self.logprefix = logprefix
         self.context = context
         self.parent = parent
+        self._history_id = _history_id
 
     def __rshift__(self, token_id: int) -> LlamaCppState:
         if token_id not in self.logp_next or token_id == self.eos:
@@ -158,6 +160,7 @@ class LlamaCppState(LMState[int]):
             logprefix=self.logprefix + self.logp_next[token_id],
             context=(self.context, token_id),
             parent=self,
+            _history_id=self.lm._history_pool.intern(self._history_id, token_id),
         )
 
     @cached_property

@@ -39,27 +39,34 @@ class NgramState(LMState[int]):
         state >> token     -> new state  (token is int 0-255)
         state.logp_next[x] -> log P(x | context)
         state.logprefix         -> cumulative log probability
-        state.eos          -> EOS token (int 0)
+        state.eos          -> None sentinel
     """
 
     def __init__(self, lm: ByteNgramLM, context: Str[int], logprefix: float,
-                 history: tuple[Any, ...] = ()) -> None:
+                 history: tuple[Any, ...] = (),
+                 _history_id: int = 0) -> None:
         self.lm = lm
         self.eos = lm.eos
         self._context = context      # last (n-1) bytes as tuple of ints
         self.logprefix = logprefix
         self.history = history        # full path as nested tuple (like LM/LMState.context)
+        self._history_id = _history_id
+
+    @property
+    def context_key(self):
+        return self._context
 
     def __rshift__(self, token: int) -> NgramState:
+        if token is self.eos:
+            raise ValueError("Cannot advance past EOS")
         if not isinstance(token, int):
             raise TypeError(f"Expected int (byte value 0-255), got {type(token).__name__}: {token!r}")
-        if token == self.eos:
-            raise ValueError(f"Cannot advance past EOS (byte {self.eos})")
         lp = self.logp_next[token]
         n = self.lm.n
         new_ctx = (self._context + (token,))[-(n - 1):] if n > 1 else ()
         return NgramState(self.lm, new_ctx, self.logprefix + lp,
-                          history=(self.history, token))
+                          history=(self.history, token),
+                          _history_id=self.lm._history_pool.intern(self._history_id, token))
 
     @cached_property
     def logp_next(self) -> LogDistr[int]:
@@ -109,7 +116,12 @@ class ByteNgramLM(LM[int]):
         """
         self.n = n
         self.alpha = alpha
-        self.eos: int = 0  # use null byte as EOS
+        self.eos = None  # sentinel — not a byte value
+
+        # Internally, byte 0 is the EOS marker during training.
+        # We split it out: bytes 1-255 are real symbols, byte 0's
+        # probability becomes the EOS (None) entry.
+        EOS_BYTE = 0
 
         # Precompute log-probability tables for each context
         self._tables: dict[Str[int], np.ndarray] = {}
@@ -123,15 +135,28 @@ class ByteNgramLM(LM[int]):
         # Fallback: uniform distribution for unseen contexts
         self._uniform: np.ndarray = np.full(256, np.log(1.0 / 256))
 
+        # Pre-build tensor-backed LogDistr for each unique table.
+        # Keys: bytes 1-255 as real symbols, plus None for EOS.
+        import torch
+        real_bytes = list(range(1, 256))
+        keys = real_bytes + [None]  # type: ignore[list-item]
+        self._cached_logdistr: dict[int, LogDistr] = {}
+        for arr in list(self._tables.values()) + [self._uniform]:
+            arr_id = id(arr)
+            if arr_id not in self._cached_logdistr:
+                # Remap: real bytes 1-255, then EOS (byte 0's prob → None key)
+                vals = np.concatenate([arr[1:], arr[EOS_BYTE:EOS_BYTE+1]])
+                self._cached_logdistr[arr_id] = LogDistr.from_tensor(
+                    keys, torch.from_numpy(vals).double())
+
     def _logp_next(self, context: Str[int]) -> LogDistr[int]:
         """Return LogDistr for a given context tuple."""
         # Try full context, then back off to shorter contexts
         for start in range(len(context) + 1):
             ctx = context[start:]
             if ctx in self._tables:
-                lp = self._tables[ctx]
-                return LogDistr({i: float(lp[i]) for i in range(256)})
-        return LogDistr({i: float(self._uniform[i]) for i in range(256)})
+                return self._cached_logdistr[id(self._tables[ctx])]
+        return self._cached_logdistr[id(self._uniform)]
 
     def initial(self) -> NgramState:
         return NgramState(self, (), 0.0)
@@ -205,12 +230,18 @@ class CharNgramState(LMState[Token]):
     """
 
     def __init__(self, lm: CharNgramLM, context: Str[Token], logprefix: float,
-                 history: tuple[Any, ...] = ()) -> None:
+                 history: tuple[Any, ...] = (),
+                 _history_id: int = 0) -> None:
         self.lm = lm
         self.eos = lm.eos
         self._context = context      # last (n-1) symbols as tuple
         self.logprefix = logprefix
         self.history = history
+        self._history_id = _history_id
+
+    @property
+    def context_key(self):
+        return self._context
 
     def __rshift__(self, token: Token) -> CharNgramState:
         if token not in self.logp_next or token == self.eos:
@@ -219,7 +250,8 @@ class CharNgramState(LMState[Token]):
         n = self.lm.n
         new_ctx = (self._context + (token,))[-(n - 1):] if n > 1 else ()
         return CharNgramState(self.lm, new_ctx, self.logprefix + lp,
-                              history=(self.history, token))
+                              history=(self.history, token),
+                              _history_id=self.lm._history_pool.intern(self._history_id, token))
 
     @cached_property
     def logp_next(self) -> LogDistr[Token]:
@@ -257,39 +289,43 @@ class CharNgramLM(LM[Token]):
     """
 
     def __init__(self, counts: dict[Str[Token], Counter[Token]],
-                 n: int, alpha: float, alphabet: set[Token]) -> None:
+                 n: int, alpha: float, alphabet: set[Token],
+                 eos: Token = None) -> None:
         """
         Args:
             counts: dict mapping context_tuple -> Counter({symbol: count})
             n: n-gram order (e.g., 2 for bigram)
             alpha: Laplace smoothing parameter
             alphabet: set of symbols (including EOS)
+            eos: end-of-sequence symbol
         """
         self.n = n
         self.alpha = alpha
-        self.eos: str = '<EOS>'
-        self.alphabet = alphabet
-        V = len(self.alphabet)
+        self.eos = eos
+        self.alphabet = alphabet - {eos}
+        V = len(self.alphabet) + 1  # +1 for EOS
 
-        self._tables: dict[Str[Token], dict[Token, float]] = {}
+        import torch
+        sorted_alpha = sorted(self.alphabet, key=repr) + [eos]
+
+        self._tables: dict[Str[Token], LogDistr[Token]] = {}
         for ctx, counter in counts.items():
             total = sum(counter.values()) + V * alpha
-            self._tables[ctx] = {
-                s: np.log((counter.get(s, 0) + alpha) / total)
-                for s in self.alphabet
-            }
-        self._uniform: dict[Token, float] = {
-            s: np.log(1.0 / V) for s in self.alphabet
-        }
+            vals = [np.log((counter.get(s, 0) + alpha) / total)
+                    for s in sorted_alpha]
+            self._tables[ctx] = LogDistr.from_tensor(
+                sorted_alpha, torch.tensor(vals, dtype=torch.float64))
+        uniform_vals = [np.log(1.0 / V)] * V
+        self._uniform: LogDistr[Token] = LogDistr.from_tensor(
+            sorted_alpha, torch.tensor(uniform_vals, dtype=torch.float64))
 
     def _logp_next(self, context: Str[Token]) -> LogDistr[Token]:
         """Return LogDistr for a given context tuple."""
-        # Try full context, then back off to shorter contexts
         for start in range(len(context) + 1):
             ctx = context[start:]
             if ctx in self._tables:
-                return LogDistr(self._tables[ctx])
-        return LogDistr(self._uniform)
+                return self._tables[ctx]
+        return self._uniform
 
     def initial(self) -> CharNgramState:
         return CharNgramState(self, (), 0.0)
@@ -297,7 +333,8 @@ class CharNgramLM(LM[Token]):
     @classmethod
     def train(cls, data: str | list[Any] | tuple[Any, ...],
               n: int = 2, alpha: float = 0.5,
-              alphabet: set[Token] | None = None) -> CharNgramLM:
+              alphabet: set[Token] | None = None,
+              eos: Token = None) -> CharNgramLM:
         """Train from a string, iterable of symbols, or list of instances.
 
         Args:
@@ -308,11 +345,11 @@ class CharNgramLM(LM[Token]):
             n: n-gram order (1=unigram, 2=bigram, ...)
             alpha: Laplace smoothing parameter
             alphabet: optional set of extra symbols to include in the vocabulary
+            eos: end-of-sequence symbol (must match eos_token used downstream)
 
         Returns:
             CharNgramLM instance
         """
-        eos = '<EOS>'
 
         # Detect list-of-instances: data is a list/tuple whose first element
         # is itself a list/tuple (not a scalar symbol like str/int).
@@ -338,7 +375,7 @@ class CharNgramLM(LM[Token]):
         full_alphabet = obs_alphabet | {eos}
         if alphabet is not None:
             full_alphabet |= set(alphabet)
-        return cls(counts, n, alpha, full_alphabet)
+        return cls(counts, n, alpha, full_alphabet, eos=eos)
 
     def __repr__(self) -> str:
         return f'CharNgramLM(n={self.n}, alphabet_size={len(self.alphabet)})'

@@ -21,6 +21,29 @@ from transduction.util import LogDistr
 Token = TypeVar('Token', bound=Hashable)
 
 
+class HistoryPool:
+    """Hash-consing pool for LM state histories.
+
+    Assigns a unique integer ID to each ``(parent_id, token)`` pair,
+    making ``context_key`` O(1) to compute and compare.
+    """
+    __slots__ = ('_next_id', '_table')
+
+    def __init__(self) -> None:
+        self._next_id = 1       # 0 is reserved for the empty history
+        self._table: dict[tuple, int] = {}
+
+    def intern(self, parent_id: int, token) -> int:
+        """Return a unique ID for (parent_id, token), creating one if needed."""
+        key = (parent_id, token)
+        hid = self._table.get(key)
+        if hid is None:
+            hid = self._next_id
+            self._next_id += 1
+            self._table[key] = hid
+        return hid
+
+
 class LM(ABC, Generic[Token]):
     """Abstract base for language models; delegates to self.initial().
 
@@ -41,6 +64,10 @@ class LM(ABC, Generic[Token]):
     """
 
     eos: Token
+
+    @cached_property
+    def _history_pool(self) -> HistoryPool:
+        return HistoryPool()
 
     @abstractmethod
     def initial(self) -> LMState:
@@ -91,15 +118,28 @@ class LMState(ABC, Generic[Token]):
     model parameters; see :class:`LM`.
 
     Subclasses must provide:
-        logp_next  — dict-like with items() → (token, logp) pairs
-                     and __getitem__(token) → logp
-        eos        — EOS sentinel token (attribute or property)
+        logp_next  — dict-like; includes EOS token with its log-probability
+        eos        — EOS sentinel
         __rshift__ — advance state by one token, returns new state
         __call__   — advance state by a sequence of tokens, returns final state
     """
 
     eos: Token
     logprefix: float
+
+    @property
+    def context_key(self):
+        """Hashable sufficient statistic for the LM state's distribution.
+
+        Two states with the same context_key produce the same logp_next.
+        Default: the hash-consed history ID (O(1) integer).  Subclasses may
+        override with a coarser key (e.g., n-gram context tuple) when a suffix
+        of the path is a sufficient statistic.
+
+        All concrete LM states should set ``_history_id`` via their LM's
+        ``_history_pool.intern()`` in ``__rshift__``.
+        """
+        return self._history_id
 
     @property
     @abstractmethod
@@ -127,6 +167,8 @@ class LMState(ABC, Generic[Token]):
         state = self
         tokens: list[Token] = []
         for _ in range(max_len):
+            if not state.logp_next:
+                break
             best_tok = state.logp_next.argmax()
             if best_tok == state.eos:
                 break

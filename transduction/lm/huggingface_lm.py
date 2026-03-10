@@ -534,12 +534,14 @@ class TokenIDState(LMState[int]):
     """
 
     def __init__(self, lm: HuggingFaceLM, logprefix: float,
-                 context: tuple[Any, ...], _kv_source: TokenIDState | None) -> None:
+                 context: tuple[Any, ...], _kv_source: TokenIDState | None,
+                 _history_id: int = 0) -> None:
         self.lm = lm
         self.eos = lm.eos
         self.logprefix = logprefix
         self.context = context
         self._kv_source = _kv_source
+        self._history_id = _history_id
 
     def __rshift__(self, token_id: int) -> TokenIDState:
         if token_id not in self.logp_next or token_id == self.eos:
@@ -549,6 +551,7 @@ class TokenIDState(LMState[int]):
             logprefix=self.logprefix + self.logp_next[token_id],
             context=(self.context, token_id),
             _kv_source=self,
+            _history_id=self.lm._history_pool.intern(self._history_id, token_id),
         )
 
     @cached_property

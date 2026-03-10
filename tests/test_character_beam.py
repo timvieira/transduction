@@ -181,7 +181,7 @@ def test_cb_self_consistency(setup):
 
     # Check top-5 keys: logp_next[k] == logp(context + k) - logp(context)
     for k in list(logp.top(5)):
-        if k == cb._eos_bytes:
+        if k is None:
             continue
         have = logp[k]
         want = (state >> k).logprefix - Z
@@ -260,7 +260,7 @@ def _renormalize_bytes(logp):
 def test_cb_vs_reference(small_setup):
     """CharacterBeam matches ReferenceTransducedLM (exact) on small BPE FST.
 
-    ReferenceTransducedLM puts EOS mass under a separate '<EOS>' key, while
+    ReferenceTransducedLM puts EOS mass under a separate None key, while
     CharacterBeam encodes EOS as a byte sequence.  We compare the conditional
     distribution over bytes (renormalized to exclude EOS) so the comparison
     is apples-to-apples.
