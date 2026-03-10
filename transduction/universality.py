@@ -63,28 +63,32 @@ def check_all_input_universal(fst):
 
 def compute_ip_universal_states(fst):
     """
-    Greatest-fixpoint computation of ip-universal FST states.
+    Kahn-style worklist computation of ip-universal FST states.
 
     A state q is ip-universal if the input projection of the FST, started from
     eps_close({q}), accepts Sigma*. This is strictly more general than
     check_all_input_universal, which only checks the start set.
 
-    Algorithm:
-    1. Precompute eps_close({q}) for all FST states q
-    2. Initialize candidates = set(fst.states)
-    3. Iteratively remove states that violate universality:
-       - eps_close({q}) must contain a final state
-       - eps_close({q}) must have arcs for every symbol in Sigma
-       - For each symbol, the successor eps-closure must contain >= 1 candidate
-    4. Fixed point = set of ip-universal states
+    Uses a two-level counting scheme to avoid materializing the ε-removed NFA
+    (which can be quadratically larger than the original FST):
+
+    - Level 1 (raw destinations): For each raw destination j of a non-ε arc,
+      alive[j] tracks how many states in eps_close(j) are still in U.
+    - Level 2 (per-state symbol counts): raw_count[q][x] tracks how many raw
+      x-destinations of q still have alive[j] > 0.
+
+    When a state q' is removed from U, we decrement alive[j] for each j whose
+    ε-closure contains q'. When alive[j] hits 0, we decrement raw_count[q][x]
+    for each (q, x) that had j as a raw destination.
     """
     source_alphabet = fst.A - {eps}
     if not source_alphabet:
-        return {q for q in fst.states if fst.is_final(q)}
+        return frozenset(q for q in fst.states if fst.is_final(q))
 
-    def ip_eps_close(states):
-        visited = set(states)
-        worklist = deque(states)
+    # ε-closures on the input projection
+    def ip_eps_close(state):
+        visited = {state}
+        worklist = deque([state])
         while worklist:
             s = worklist.popleft()
             for a, _b, j in fst.arcs(s):
@@ -93,55 +97,62 @@ def compute_ip_universal_states(fst):
                     worklist.append(j)
         return frozenset(visited)
 
-    # Precompute closures
-    closures = {q: ip_eps_close({q}) for q in fst.states}
+    closures = {q: ip_eps_close(q) for q in fst.states}
 
-    # Precompute per-closure: successor sets by symbol
-    # For each closure, for each symbol, the raw destinations (before eps-close)
-    closure_symbol_succs = {}
+    # eps_close_rev[q'] = {j | q' ∈ closures[j]} — reverse ε-closure index
+    eps_close_rev = defaultdict(set)
+    for j in fst.states:
+        for qp in closures[j]:
+            eps_close_rev[qp].add(j)
+
+    # Raw destination sets: raw[q][x] = {j | s ∈ closures[q], (s,x,j) ∈ arcs}
+    # raw_reverse[j] = [(q, x)] — which (state, symbol) pairs have j as raw dest
+    raw = {q: defaultdict(set) for q in fst.states}
+    raw_reverse = defaultdict(list)
     for q in fst.states:
-        by_symbol = defaultdict(set)
         for s in closures[q]:
             for a, _b, j in fst.arcs(s):
-                if a != eps:
-                    by_symbol[a].add(j)
-        closure_symbol_succs[q] = by_symbol
+                if a != eps and j not in raw[q][a]:
+                    raw[q][a].add(j)
+                    raw_reverse[j].append((q, a))
 
-    candidates = set(fst.states)
+    # U = final states of the ε-removed NFA
+    U = {q for q in fst.states if closures[q] & fst.stop}
 
-    changed = True
-    while changed:
-        changed = False
-        to_remove = set()
-        for q in candidates:
-            closure = closures[q]
+    # Level 1: alive[j] = |closures[j] ∩ U|
+    alive = {j: len(closures[j] & U) for j in fst.states}
 
-            # Must contain a final state
-            if not any(fst.is_final(s) for s in closure):
-                to_remove.add(q)
-                continue
+    # Level 2: raw_count[q][x] = |{j ∈ raw[q][x] | alive[j] > 0}|
+    raw_count = {}
+    for q in fst.states:
+        raw_count[q] = {}
+        for x, dests in raw[q].items():
+            raw_count[q][x] = sum(1 for j in dests if alive[j] > 0)
 
-            # Must be complete on source alphabet
-            by_symbol = closure_symbol_succs[q]
-            if not all(a in by_symbol for a in source_alphabet):
-                to_remove.add(q)
-                continue
+    # Seed queue: states in U missing a live successor for some symbol
+    queue = set()
+    for q in U:
+        for x in source_alphabet:
+            if raw_count[q].get(x, 0) == 0:
+                queue.add(q)
+                break
 
-            # For each symbol, successor eps-closure must contain a candidate
-            ok = True
-            for a in source_alphabet:
-                succ_closure = ip_eps_close(by_symbol[a])
-                if not (succ_closure & candidates):
-                    ok = False
-                    break
-            if not ok:
-                to_remove.add(q)
+    # Two-level Kahn worklist
+    while queue:
+        qp = queue.pop()
+        U.discard(qp)
+        # Level 1: qp left U, so alive[j] decreases for each j whose
+        # ε-closure contained qp
+        for j in eps_close_rev[qp]:
+            alive[j] -= 1
+            if alive[j] == 0:
+                # Level 2: j is now dead, decrement raw_count for its users
+                for q, x in raw_reverse[j]:
+                    raw_count[q][x] -= 1
+                    if raw_count[q][x] == 0 and q in U:
+                        queue.add(q)
 
-        if to_remove:
-            candidates -= to_remove
-            changed = True
-
-    return frozenset(candidates)
+    return frozenset(U)
 
 
 class UniversalityFilter:
