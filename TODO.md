@@ -4,6 +4,9 @@
 
 ## Refactoring
 
+- [ ] Consolidate the multiple trie implementations across
+  (character|compiled|generalized)_beam? (possibly others?)
+
 - [ ] **Extract dirty-state infrastructure**: `dfa_decomp_incremental_truncated.py`
   and `peekaboo_dirty.py` share near-identical dirty-state management (frontier
   tracking, border identification, invalidation, epsilon-cache eviction,

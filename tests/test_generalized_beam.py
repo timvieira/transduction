@@ -580,3 +580,138 @@ class TestHubVocabComputation:
         ip_univ = compute_ip_universal_states(fst)
         assert 'h0' in ip_univ
         assert 'h1' in ip_univ
+
+
+# ---------------------------------------------------------------------------
+# TestDuplicateSpelling — tokens with identical output sequences
+# ---------------------------------------------------------------------------
+
+def _duplicate_spelling_fst():
+    """FST where source symbols 'x' and 'y' both produce output 'ab'.
+
+    Hub state 0 has two arcs:
+        0 --x:ε--> 1 --ε:a--> 2 --ε:b--> 0
+        0 --y:ε--> 3 --ε:a--> 4 --ε:b--> 0
+
+    Both 'x' and 'y' produce the same output ('a','b') and return to hub 0.
+    The trie should have a single path root->a->b->leaf, but two leaves (one
+    per source symbol).  Mass at internal nodes must sum contributions from
+    both source symbols.
+    """
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(0)
+    # x -> 'ab'
+    fst.add_arc(0, 'x', EPSILON, 1)
+    fst.add_arc(1, EPSILON, 'a', 2)
+    fst.add_arc(2, EPSILON, 'b', 0)
+    # y -> 'ab'
+    fst.add_arc(0, 'y', EPSILON, 3)
+    fst.add_arc(3, EPSILON, 'a', 4)
+    fst.add_arc(4, EPSILON, 'b', 0)
+    return fst
+
+
+class TestDuplicateSpelling:
+    """Test that OutputTrie correctly handles multiple source symbols with
+    the same output spelling.  Both should contribute mass to shared trie
+    nodes; dropping one silently loses probability mass."""
+
+    def test_trie_both_leaves_reachable(self):
+        """OutputTrie built from duplicate-spelling entries should have both
+        sentinel leaves reachable via the children dict, not just the last."""
+        entries = [
+            ('x', ('a', 'b'), 0),
+            ('y', ('a', 'b'), 0),
+        ]
+        trie = OutputTrie(entries, inner_eos=None)
+
+        # Walk root -> 'a' -> 'b'
+        node_a = trie.children[trie.root]['a']
+        node_b = trie.children[node_a]['b']
+
+        # Collect all sentinel (None-child) leaves reachable from node_b.
+        # With the overwrite bug, only one source symbol's leaf survives.
+        reachable_src_syms = set()
+        sentinel = trie.children[node_b].get(None)
+        if sentinel is not None:
+            if isinstance(trie.leaf_info.get(sentinel), list):
+                for src_sym, _ in trie.leaf_info[sentinel]:
+                    reachable_src_syms.add(src_sym)
+            else:
+                info = trie.leaf_info.get(sentinel)
+                if info is not None:
+                    reachable_src_syms.add(info[0])
+
+        assert 'x' in reachable_src_syms and 'y' in reachable_src_syms, \
+            f"Trie lost a source symbol via children walk; found only {reachable_src_syms}"
+
+    def test_mass_sums_both_tokens(self):
+        """log_mass_sum at the root should reflect mass from both source
+        symbols, not just one."""
+        entries = [
+            ('x', ('a', 'b'), 0),
+            ('y', ('a', 'b'), 0),
+        ]
+        trie = OutputTrie(entries, inner_eos=None)
+
+        # logp_next where x and y have equal probability
+        logp = LogDistr({'x': np.log(0.4), 'y': np.log(0.4), None: np.log(0.2)})
+        mass = trie.log_mass_sum(logp)
+        root_mass = float(mass[trie.root])
+
+        # Root mass should be log(P(x) + P(y)) = log(0.8)
+        # If the trie only has one token, root mass would be log(0.4)
+        expected = np.log(0.8)
+        assert abs(root_mass - expected) < 1e-6, \
+            f"Root mass {root_mass:.6f} != expected {expected:.6f}; " \
+            f"trie may have dropped a duplicate-spelling token"
+
+    def test_gb_vs_reference_duplicate_spelling(self):
+        """GeneralizedBeam should match ReferenceTransducedLM when source
+        symbols share output spellings, including multi-step carry-forward.
+
+        Note: the duplicate-spelling FST has epsilon-output arcs, so after
+        EOT the hypotheses fall into particle mode (not hub-trie mode),
+        introducing beam approximation error.  The tolerance accounts for
+        this; the key check is that both source tokens are carried forward.
+        """
+        fst = _duplicate_spelling_fst()
+
+        # Use FiniteLM with different weights for x vs y so the bug matters.
+        # After one 'ab' output, the carry-forward should have hypotheses for
+        # both 'x' and 'y' source prefixes; losing one distorts step-2 probs.
+        string_probs = {
+            ('x',): 0.3,
+            ('y',): 0.1,
+            ('x', 'x'): 0.2,
+            ('x', 'y'): 0.1,
+            ('y', 'x'): 0.15,
+            ('y', 'y'): 0.15,
+        }
+        inner_lm = FiniteLM(string_probs, eos=None)
+
+        gb = GeneralizedBeam(inner_lm, fst, K=500, max_beam=500, max_steps=10000,
+                             eos=None, helper='python')
+        ref = ReferenceTransducedLM(inner_lm, fst)
+
+        # Multi-step: advance through 'a','b','a','b' and compare at each step
+        gb_state = gb.initial()
+        ref_state = ref.initial()
+        target = ['a', 'b', 'a', 'b']
+
+        for i, y in enumerate(target):
+            gb_lp = gb_state.logp_next
+            ref_lp = ref_state.logp_next
+
+            all_syms = set(gb_lp.keys()) | set(ref_lp.keys())
+            for sym in all_syms:
+                gb_val = gb_lp[sym]
+                ref_val = ref_lp[sym]
+                if gb_val > -10 or ref_val > -10:
+                    # Particle-mode steps have ~0.07 beam error
+                    assert abs(gb_val - ref_val) < 0.1, \
+                        f"Step {i}, symbol {sym!r}: gb={gb_val:.4f}, ref={ref_val:.4f}"
+
+            gb_state = gb_state >> y
+            ref_state = ref_state >> y

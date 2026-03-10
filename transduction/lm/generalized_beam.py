@@ -38,7 +38,7 @@ from transduction.lm.base import LM, LMState, Token
 from transduction.lm.transduced import Particle, _select_top_k
 from transduction.lm.fused_transduced import _FusedSearch
 from transduction.universality import compute_ip_universal_states
-from transduction.util import LogDistr, LogVector, Str
+from transduction.util import LogDistr, LogVector, Str, logsumexp
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +67,7 @@ class OutputTrie:
 
         self.root = 0
         children: list[dict[Any, int]] = [{}]
-        leaf_info: dict[int, tuple[Any, Any]] = {}   # leaf_node -> (src_sym, dest)
+        leaf_info: dict[int, list[tuple[Any, Any]]] = {}  # leaf_node -> [(src_sym, dest)]
         coo_nodes: list[int] = []
         coo_src_ids: list[int] = []
 
@@ -88,11 +88,16 @@ class OutputTrie:
                 curr = children[curr][out_sym]
                 path.append(curr)
 
-            # End-of-token sentinel leaf.
-            sentinel = len(children)
-            children[curr][None] = sentinel
-            children.append({})
-            leaf_info[sentinel] = (src_sym, dest_state)
+            # End-of-token sentinel leaf.  If another entry already created
+            # a sentinel at this node, reuse it and append to leaf_info.
+            if None in children[curr]:
+                sentinel = children[curr][None]
+                leaf_info[sentinel].append((src_sym, dest_state))
+            else:
+                sentinel = len(children)
+                children[curr][None] = sentinel
+                children.append({})
+                leaf_info[sentinel] = [(src_sym, dest_state)]
 
             # COO: every node on the path (incl. sentinel) maps to this source sym.
             for node in path:
@@ -322,21 +327,47 @@ class _HybridBundle:
             if not h.has_EOT():
                 continue
 
-            for eot_child_node, (src_sym, dest_state) in self._eot_leaves(h):
-                w_prime = float(h.weight + h.log_mass[eot_child_node] - h.log_mass[h.node])
-                if w_prime <= float('-inf'):
+            for eot_child_node in self._collect_eot_nodes(h.trie, h.node):
+                w_total = float(h.weight + h.log_mass[eot_child_node])
+                if w_total <= float('-inf'):
                     continue
 
-                new_lm_state = h.lm_state >> src_sym
+                leaf_entries = h.trie.leaf_info[eot_child_node]
+                if len(leaf_entries) == 1:
+                    # Common case: single token at this leaf.
+                    src_sym, dest_state = leaf_entries[0]
+                    w_prime = w_total
+                    new_lm_state = h.lm_state >> src_sym
 
-                if dest_state in self.alg._hub_tries:
-                    dest_trie = self.alg._hub_tries[dest_state]
-                    hub_pending.append((new_lm_state, dest_state, dest_trie, w_prime))
-                    needs_logp.append(new_lm_state)
+                    if dest_state in self.alg._hub_tries:
+                        dest_trie = self.alg._hub_tries[dest_state]
+                        hub_pending.append((new_lm_state, dest_state, dest_trie, w_prime))
+                        needs_logp.append(new_lm_state)
+                    else:
+                        new_particles.append(Particle(
+                            None, new_lm_state, w_prime, (src_sym,),
+                        ))
                 else:
-                    new_particles.append(Particle(
-                        None, new_lm_state, w_prime, (src_sym,),
-                    ))
+                    # Multiple tokens share this spelling.  The sentinel mass
+                    # sums all of them; split proportionally by P_inner(token).
+                    lm_logp = h.lm_state.logp_next
+                    token_logps = [lm_logp[src_sym] for src_sym, _ in leaf_entries]
+                    total_lp = logsumexp(token_logps)
+
+                    for (src_sym, dest_state), tok_lp in zip(leaf_entries, token_logps):
+                        w_prime = w_total + tok_lp - total_lp
+                        if w_prime <= float('-inf'):
+                            continue
+                        new_lm_state = h.lm_state >> src_sym
+
+                        if dest_state in self.alg._hub_tries:
+                            dest_trie = self.alg._hub_tries[dest_state]
+                            hub_pending.append((new_lm_state, dest_state, dest_trie, w_prime))
+                            needs_logp.append(new_lm_state)
+                        else:
+                            new_particles.append(Particle(
+                                None, new_lm_state, w_prime, (src_sym,),
+                            ))
 
         # Phase 2: Prefetch — batch forward passes for hub-bound states.
         if needs_logp:
@@ -380,7 +411,8 @@ class _HybridBundle:
     def _eot_leaves(self, h: HubHyp):
         """Yield (eot_child_node, (src_sym, dest_state)) for EOT transitions."""
         for child_node in self._collect_eot_nodes(h.trie, h.node):
-            yield child_node, h.trie.leaf_info[child_node]
+            for entry in h.trie.leaf_info[child_node]:
+                yield child_node, entry
 
     def _collect_eot_nodes(self, trie: OutputTrie, node: int) -> list[int]:
         """Collect all EOT sentinel leaf nodes reachable from the given node."""
@@ -403,13 +435,13 @@ class _HybridBundle:
         all_hub_hyps = self.hub_hyps + extended_hub_hyps
 
         for h in all_hub_hyps:
-            # Score output symbols via trie mass
-            node_mass = float(h.log_mass[h.node])
+            # Score output symbols via raw trie mass (unnormalized).
+            # Normalization happens at the end via scores.normalize().
             for y, child_node in h.trie.children[h.node].items():
                 if y is None:
                     continue  # EOT sentinel, not a real output symbol
                 child_mass = float(h.log_mass[child_node])
-                scores.logaddexp(y, h.weight + child_mass - node_mass)
+                scores.logaddexp(y, h.weight + child_mass)
 
             # EOS contribution: hub hyps at root contribute P_inner(EOS)
             if h.node == h.trie.root:
@@ -470,7 +502,7 @@ class _HybridBundle:
         for item in carry:
             if isinstance(item, tuple) and item[0] == 'hub':
                 _, h, child_node = item
-                new_w = float(h.weight + h.log_mass[child_node] - h.log_mass[h.node])
+                new_w = float(h.weight + h.log_mass[child_node])
                 raw_hub_hyps.append(HubHyp(
                     h.lm_state, h.hub, h.trie,
                     child_node, h.log_mass, new_w,
@@ -700,9 +732,10 @@ class GeneralizedBeam(LM):
 
         # If any hub's vocab entries go to non-hub destinations, need particles
         for _hub, trie in self._hub_tries.items():
-            for _leaf_node, (_src_sym, dest) in trie.leaf_info.items():
-                if dest not in self._deterministic_hubs:
-                    return True
+            for _leaf_node, entries in trie.leaf_info.items():
+                for _src_sym, dest in entries:
+                    if dest not in self._deterministic_hubs:
+                        return True
 
         return False
 

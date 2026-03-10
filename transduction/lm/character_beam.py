@@ -83,12 +83,17 @@ class TokenCharacterTrie:
                 curr = children[curr][byte_val]
                 path.append(curr)
 
-            # End-of-token sentinel leaf.
-            sentinel = len(children)
-            children[curr][None] = sentinel
-            children.append({})
-            node2prefix[sentinel] = node2prefix[curr]
-            leaf2lm_token[sentinel] = token
+            # End-of-token sentinel leaf.  If another token already created
+            # a sentinel at this node (same spelling), reuse it and append.
+            if None in children[curr]:
+                sentinel = children[curr][None]
+                leaf2lm_token[sentinel].append(token)
+            else:
+                sentinel = len(children)
+                children[curr][None] = sentinel
+                children.append({})
+                node2prefix[sentinel] = node2prefix[curr]
+                leaf2lm_token[sentinel] = [token]
 
             # COO: every node on the path (incl. sentinel) maps to this token.
             for node in path:
@@ -216,7 +221,18 @@ class TrieState:
         new_weight = float(self.weight + self.log_mass[next_node] - self.log_mass[self.node])
         if a is None:
             # End-of-token: complete current token, advance LM state.
-            lm_token = self.trie.leaf2lm_token[next_node]
+            tokens = self.trie.leaf2lm_token[next_node]
+            if len(tokens) == 1:
+                lm_token = tokens[0]
+            else:
+                # Multiple tokens share this spelling — pick the most probable
+                # and adjust weight proportionally.  The full fan-out is handled
+                # by _prepare_eot; this path is for __rshift__ which returns a
+                # single TrieState.
+                logp = self.lm_state.logp_next
+                best_idx = max(range(len(tokens)), key=lambda i: logp[tokens[i]])
+                lm_token = tokens[best_idx]
+                new_weight += logp[lm_token] - logsumexp([logp[t] for t in tokens])
             next_lm = self.lm_state >> lm_token
             next_log_mass = self.trie.log_mass_sum(next_lm.logp_next)
             return TrieState(next_lm, self.trie, self.trie.root,
@@ -225,18 +241,34 @@ class TrieState:
         return TrieState(self.lm_state, self.trie, next_node,
                          self.log_mass, new_weight)
 
-    def _prepare_eot(self) -> tuple[LMState, float] | None:
-        """Prepare EOT transition: create child LM state without triggering forward pass.
+    def _prepare_eot(self) -> list[tuple[LMState, float]]:
+        """Prepare EOT transitions: create child LM states without triggering forward passes.
 
-        Returns (child_lm_state, new_weight) or None if no EOT action.
+        Returns list of (child_lm_state, new_weight), one per token at the leaf.
+        Empty list if no EOT action.
+
+        When multiple tokens share a trie leaf (duplicate spellings), the
+        sentinel mass is the sum of their individual probabilities.  We split
+        ``w_total`` proportionally by each token's inner-LM probability so
+        that the total mass is conserved.
         """
         next_node = self.trie.children[self.node].get(None)
         if next_node is None:
-            return None
-        new_weight = float(self.weight + self.log_mass[next_node] - self.log_mass[self.node])
-        lm_token = self.trie.leaf2lm_token[next_node]
-        child_lm = self.lm_state >> lm_token
-        return (child_lm, new_weight)
+            return []
+        w_total = float(self.weight + self.log_mass[next_node] - self.log_mass[self.node])
+        tokens = self.trie.leaf2lm_token[next_node]
+        if len(tokens) == 1:
+            child_lm = self.lm_state >> tokens[0]
+            return [(child_lm, w_total)]
+        # Multiple tokens share this spelling — split proportionally
+        logp = self.lm_state.logp_next
+        token_logps = [logp[tok] for tok in tokens]
+        total_lp = logsumexp(token_logps)
+        results = []
+        for tok, tok_lp in zip(tokens, token_logps):
+            child_lm = self.lm_state >> tok
+            results.append((child_lm, w_total + tok_lp - total_lp))
+        return results
 
     def _complete_eot(self, child_lm: LMState, weight: float) -> TrieState:
         """Complete EOT transition using a (possibly prefetched) child LM state.
@@ -335,9 +367,7 @@ class _Bundle:
         prepared: list[tuple[TrieState, LMState, float]] = []
         child_states: list[LMState] = []
         for hyp in batch:
-            result = hyp._prepare_eot()
-            if result is not None:
-                child_lm, weight = result
+            for child_lm, weight in hyp._prepare_eot():
                 prepared.append((hyp, child_lm, weight))
                 child_states.append(child_lm)
 

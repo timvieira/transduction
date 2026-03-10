@@ -167,14 +167,14 @@ class HubRegion(Region):
             all_items.append((h.region_state, h.weight, mass_vectors[k], h.lm_state))
         all_items.extend(extended_hub_hyps)
 
-        # Score trie children (horizontal: all items together)
+        # Score trie children (horizontal: all items together).
+        # Use raw trie masses (unnormalized); normalize() at the end handles it.
         for node, w, log_mass, lm_state in all_items:
-            node_mass = float(log_mass[node])
             for y, child_node in trie.children[node].items():
                 if y is None:
                     continue
                 child_mass = float(log_mass[child_node])
-                out.scores.logaddexp(y, w + child_mass - node_mass)
+                out.scores.logaddexp(y, w + child_mass)
 
             # EOS: hyps at trie root contribute P_inner(EOS)
             if node == trie.root:
@@ -247,27 +247,47 @@ class HubRegion(Region):
                 continue
 
             eot_node = children[None]
-            src_sym, dest_state = trie.leaf_info[eot_node]
-            node_mass = float(mass_vectors[k][h.region_state])
             eot_mass = float(mass_vectors[k][eot_node])
-            w_prime = h.weight + eot_mass - node_mass
+            w_prime = h.weight + eot_mass
             if w_prime <= float('-inf'):
                 continue
 
-            new_lm_state = h.lm_state >> src_sym
-
-            dest_region = compiled._region_map.region_for(dest_state)
-            if isinstance(dest_region, HubRegion):
-                hub_pending.append((new_lm_state, dest_state, dest_region.trie, w_prime))
-                needs_logp.append(new_lm_state)
-            elif isinstance(dest_region, (CorridorRegion, UniversalPlateauRegion)):
-                # Route to corridor/plateau region
-                non_hub_pending.append((new_lm_state, dest_state, w_prime, dest_region))
-                needs_logp.append(new_lm_state)
-            elif compiled._wild_region is not None:
-                exit_particles.append(
-                    Particle(None, new_lm_state, w_prime, (src_sym,))
-                )
+            leaf_entries = trie.leaf_info[eot_node]
+            if len(leaf_entries) == 1:
+                src_sym, dest_state = leaf_entries[0]
+                new_lm_state = h.lm_state >> src_sym
+                dest_region = compiled._region_map.region_for(dest_state)
+                if isinstance(dest_region, HubRegion):
+                    hub_pending.append((new_lm_state, dest_state, dest_region.trie, w_prime))
+                    needs_logp.append(new_lm_state)
+                elif isinstance(dest_region, (CorridorRegion, UniversalPlateauRegion)):
+                    non_hub_pending.append((new_lm_state, dest_state, w_prime, dest_region))
+                    needs_logp.append(new_lm_state)
+                elif compiled._wild_region is not None:
+                    exit_particles.append(
+                        Particle(None, new_lm_state, w_prime, (src_sym,))
+                    )
+            else:
+                # Multiple tokens share this spelling — split weight proportionally.
+                lm_logp = h.lm_state.logp_next
+                token_logps = [lm_logp[src_sym] for src_sym, _ in leaf_entries]
+                total_lp = logsumexp(token_logps)
+                for (src_sym, dest_state), tok_lp in zip(leaf_entries, token_logps):
+                    w_split = w_prime + tok_lp - total_lp
+                    if w_split <= float('-inf'):
+                        continue
+                    new_lm_state = h.lm_state >> src_sym
+                    dest_region = compiled._region_map.region_for(dest_state)
+                    if isinstance(dest_region, HubRegion):
+                        hub_pending.append((new_lm_state, dest_state, dest_region.trie, w_split))
+                        needs_logp.append(new_lm_state)
+                    elif isinstance(dest_region, (CorridorRegion, UniversalPlateauRegion)):
+                        non_hub_pending.append((new_lm_state, dest_state, w_split, dest_region))
+                        needs_logp.append(new_lm_state)
+                    elif compiled._wild_region is not None:
+                        exit_particles.append(
+                            Particle(None, new_lm_state, w_split, (src_sym,))
+                        )
 
         # Phase 2: Prefetch
         if needs_logp:
@@ -304,7 +324,7 @@ class HubRegion(Region):
         result = []
         for _region, (lm_state, parent_node, child_node, w, log_mass) in carry_items:
             # Weight for the advanced hyp: parent weight + transition score
-            new_w = w + float(log_mass[child_node]) - float(log_mass[parent_node])
+            new_w = w + float(log_mass[child_node])
             result.append((self, Hyp(lm_state, new_w, child_node)))
         return result
 
