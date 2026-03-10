@@ -112,6 +112,9 @@ class OutputTrie:
         except (TypeError, ValueError):
             self._source_sym_ids = None
 
+        # Cache for index tensors keyed by id(key_to_idx) from tensor-backed LogDistr.
+        self._key_idx_cache: dict[int, torch.Tensor] = {}
+
         # Sparse reachability matrix for fast log_mass_sum via matvec.
         n_nodes = len(children)
         n_tokens = len(self._source_syms)
@@ -121,19 +124,79 @@ class OutputTrie:
             indices, values, (n_nodes, n_tokens),
         ).coalesce()
 
+        self.n_nodes = n_nodes
+
+    def _logp_row(self, logp_next: LogDistr) -> torch.Tensor:
+        """Extract a (n_tokens,) logp vector from logp_next, using fastest available path."""
+        p = getattr(logp_next, '_p', None)
+        if p is not None:
+            # Path 1: tensor-backed LogDistr with _key_to_idx (e.g., CharNgramLM)
+            key_to_idx = getattr(logp_next, '_key_to_idx', None)
+            if key_to_idx is not None:
+                cache_key = id(key_to_idx)
+                indices = self._key_idx_cache.get(cache_key)
+                if indices is None:
+                    try:
+                        indices = torch.tensor(
+                            [key_to_idx[s] for s in self._source_syms],
+                            dtype=torch.long)
+                    except KeyError:
+                        indices = False  # type: ignore[assignment]
+                    self._key_idx_cache[cache_key] = indices
+                if indices is not False:
+                    return p[indices].double()
+            elif self._source_sym_ids is not None:
+                # TokenLogProbs — _p is indexed by raw integer token IDs
+                return p[self._source_sym_ids].double()
+        # Path 3: dict fallback
+        return torch.tensor([logp_next[tok] for tok in self._source_syms],
+                            dtype=torch.float64)
+
     def log_mass_sum(self, logp_next: LogDistr) -> torch.Tensor:
         """Bottom-up log-probability mass at each trie node via sparse matvec."""
-        p = getattr(logp_next, '_p', None)
-        if p is not None and self._source_sym_ids is not None:
-            logp = p[self._source_sym_ids].double()
-        else:
-            logp = torch.tensor([logp_next[tok] for tok in self._source_syms],
-                                dtype=torch.float64)
+        logp = self._logp_row(logp_next)
         logp_max = logp.max()
         prob = torch.exp(logp - logp_max)
         mass = torch.mv(self._reach, prob)
         log_mass = torch.log(mass) + logp_max
         return log_mass
+
+    def log_mass_sum_batch(self, logp_nexts: list[LogDistr]) -> list:
+        """Batched log_mass_sum: single sparse matmul for multiple LM states.
+
+        Args:
+            logp_nexts: list of N log-probability distributions.
+
+        Returns:
+            list of N tensors, each (n_nodes,).
+        """
+        n = len(logp_nexts)
+        if n == 0:
+            return []
+        if n == 1:
+            return [self.log_mass_sum(logp_nexts[0])]
+
+        # Deduplicate by identity — same LogDistr object produces same row.
+        unique: dict[int, tuple[int, torch.Tensor]] = {}
+        idx_map: list[int] = []
+        for logp_next in logp_nexts:
+            key = id(logp_next)
+            if key not in unique:
+                unique[key] = (len(unique), self._logp_row(logp_next))
+            idx_map.append(unique[key][0])
+
+        unique_rows = [row for _, row in sorted(unique.values())]
+        logp_mat = torch.stack(unique_rows)  # (n_unique, n_tokens)
+
+        # Per-row max for numerical stability
+        logp_max = logp_mat.max(dim=1, keepdim=True).values  # (n_unique, 1)
+        prob_mat = torch.exp(logp_mat - logp_max)             # (n_unique, n_tokens)
+
+        # Batched sparse matmul
+        mass_mat = torch.sparse.mm(self._reach, prob_mat.T)   # (n_nodes, n_unique)
+        log_mass_mat = torch.log(mass_mat) + logp_max.T       # (n_nodes, n_unique)
+
+        return [log_mass_mat[:, idx_map[i]] for i in range(n)]
 
     @property
     def is_empty(self) -> bool:
@@ -279,13 +342,38 @@ class _HybridBundle:
         if needs_logp:
             self.alg.inner_lm.prefetch(needs_logp)
 
-        # Phase 3: Complete — consume (now-cached) logp_next via log_mass_sum.
-        for new_lm_state, dest_state, dest_trie, w_prime in hub_pending:
-            new_mass = dest_trie.log_mass_sum(new_lm_state.logp_next)
-            new_hub_hyps.append(HubHyp(
-                new_lm_state, dest_state, dest_trie,
-                dest_trie.root, new_mass, w_prime,
-            ))
+        # Phase 3: Complete — batch log_mass_sum by dest_trie.
+        by_trie: dict[int, list[int]] = defaultdict(list)
+        for idx in range(len(hub_pending)):
+            by_trie[id(hub_pending[idx][2])].append(idx)
+
+        mass_results: dict[int, Any] = {}
+        for trie_id, indices in by_trie.items():
+            dest_trie = hub_pending[indices[0]][2]
+            logp_nexts = [hub_pending[i][0].logp_next for i in indices]
+            batch_masses = dest_trie.log_mass_sum_batch(logp_nexts)
+            for k, idx in enumerate(indices):
+                mass_results[idx] = batch_masses[k]
+
+        # Merge new hub hyps that landed at the same (hub, lm_context).
+        merged: dict[tuple, HubHyp] = {}
+        for idx, (new_lm_state, dest_state, dest_trie, w_prime) in enumerate(hub_pending):
+            key = (dest_state, new_lm_state.context_key)
+            if key in merged:
+                prev = merged[key]
+                a, b = prev.weight, w_prime
+                if a < b: a, b = b, a
+                new_w = a + math.log1p(math.exp(b - a)) if b > float('-inf') else a
+                merged[key] = HubHyp(
+                    prev.lm_state, prev.hub, prev.trie,
+                    prev.node, prev.log_mass, new_w,
+                )
+            else:
+                merged[key] = HubHyp(
+                    new_lm_state, dest_state, dest_trie,
+                    dest_trie.root, mass_results[idx], w_prime,
+                )
+        new_hub_hyps = list(merged.values())
 
         return new_hub_hyps, new_particles
 
@@ -372,23 +460,44 @@ class _HybridBundle:
         return self._scored[1]
 
     def advance(self, y: Token) -> _HybridBundle:
-        """Advance by symbol y: prune, then advance all hyps."""
+        """Advance by symbol y: merge duplicates, prune, then build new bundle."""
         carry = self.carry_forward.get(y, [])
 
-        new_hub_hyps: list[HubHyp] = []
+        # Collect raw hub hyps and particles from carry.
+        raw_hub_hyps: list[HubHyp] = []
         new_particles: list[Particle] = []
 
         for item in carry:
             if isinstance(item, tuple) and item[0] == 'hub':
                 _, h, child_node = item
                 new_w = float(h.weight + h.log_mass[child_node] - h.log_mass[h.node])
-                new_hub_hyps.append(HubHyp(
+                raw_hub_hyps.append(HubHyp(
                     h.lm_state, h.hub, h.trie,
                     child_node, h.log_mass, new_w,
                 ))
             else:
-                # Particle carry-forward
                 new_particles.append(item)
+
+        # Merge hub hyps at the same (node, lm_context) by logaddexp-ing weights.
+        # Two LM states with the same context_key produce the same logp_next;
+        # merging prevents beam blow-up when multiple source tokens lead to the
+        # same effective LM state.
+        merged: dict[tuple, HubHyp] = {}
+        for h in raw_hub_hyps:
+            key = (h.node, h.lm_state.context_key)
+            if key in merged:
+                prev = merged[key]
+                # logaddexp the weights
+                a, b = prev.weight, h.weight
+                if a < b: a, b = b, a
+                new_w = a + math.log1p(math.exp(b - a)) if b > float('-inf') else a
+                merged[key] = HubHyp(
+                    prev.lm_state, prev.hub, prev.trie,
+                    prev.node, prev.log_mass, new_w,
+                )
+            else:
+                merged[key] = h
+        new_hub_hyps = list(merged.values())
 
         # Prune particles
         new_particles = _select_top_k(new_particles, self.alg.max_beam)
@@ -416,6 +525,10 @@ class GeneralizedBeamState(LMState):
         self._target = target
         self.logprefix = logprefix
         self._bundle = bundle
+
+    @property
+    def context_key(self):
+        return self._target
 
     @property
     def logp_next(self) -> LogDistr[Token]:
@@ -482,7 +595,7 @@ class GeneralizedBeam(LM):
                  K: int = 10,
                  max_beam: int = 100,
                  max_steps: int = 1000,
-                 eos: Token = '<EOS>',   # type: ignore[assignment]
+                 eos: Token = None,   # type: ignore[assignment]
                  helper: str = "python",
                  top_k: int | None = None) -> None:
         self.inner_lm = inner_lm

@@ -32,9 +32,11 @@ def copy_fst(alphabet):
 
 class TinyState(LMState):
     """Minimal LM state for testing with a fixed token distribution."""
-    def __init__(self, probs, logprefix=0.0):
+    def __init__(self, lm, probs, logprefix=0.0, _history_id=0):
+        self._lm = lm
         self._probs = probs
         self.logprefix = logprefix
+        self._history_id = _history_id
 
     @property
     def logp_next(self):
@@ -42,29 +44,31 @@ class TinyState(LMState):
 
     @property
     def eos(self):
-        return '<EOS>'
+        return None
 
     def __rshift__(self, token):
         lp = self._probs.get(token, -np.inf)
-        return TinyState(self._probs, self.logprefix + lp)
+        return TinyState(self._lm, self._probs, self.logprefix + lp,
+                         _history_id=self._lm._history_pool.intern(self._history_id, token))
 
 
 class TinyLM(LM):
     def __init__(self):
-        self.eos = '<EOS>'
+        self.eos = None
     def initial(self):
-        probs = {'a': np.log(0.6), 'b': np.log(0.3), '<EOS>': np.log(0.1)}
-        return TinyState(probs)
+        probs = {'a': np.log(0.6), 'b': np.log(0.3), None: np.log(0.1)}
+        return TinyState(self, probs)
 
 
 class FiniteLMState(LMState):
     """State for a finite-support LM. Computes exact conditionals from the trie."""
 
-    def __init__(self, lm, prefix, logprefix):
+    def __init__(self, lm, prefix, logprefix, _history_id=0):
         self._lm = lm
         self._prefix = prefix
         self.logprefix = logprefix
         self.eos = lm.eos
+        self._history_id = _history_id
 
     def _prefix_mass(self, prefix):
         n = len(prefix)
@@ -95,13 +99,14 @@ class FiniteLMState(LMState):
         if token == self.eos:
             raise ValueError("Cannot advance past EOS")
         lp = self.logp_next[token]
-        return FiniteLMState(self._lm, self._prefix + (token,), self.logprefix + lp)
+        return FiniteLMState(self._lm, self._prefix + (token,), self.logprefix + lp,
+                             _history_id=self._lm._history_pool.intern(self._history_id, token))
 
 
 class FiniteLM(LM):
     """LM with exact support on a finite set of strings."""
 
-    def __init__(self, string_probs, eos='<EOS>'):
+    def __init__(self, string_probs, eos=None):
         self.eos = eos
         self._string_probs = string_probs
 
@@ -532,7 +537,7 @@ class TestOutputTrie:
             ('t1', ('x', 'y'), 'dest1'),
             ('t2', ('x', 'z'), 'dest2'),
         ]
-        trie = OutputTrie(entries, inner_eos='<EOS>')
+        trie = OutputTrie(entries, inner_eos=None)
         assert not trie.is_empty
 
         # Root should have one child 'x'
@@ -540,7 +545,7 @@ class TestOutputTrie:
 
     def test_empty_trie(self):
         """OutputTrie with no entries is empty."""
-        trie = OutputTrie([], inner_eos='<EOS>')
+        trie = OutputTrie([], inner_eos=None)
         assert trie.is_empty
 
 
