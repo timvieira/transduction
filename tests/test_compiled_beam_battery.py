@@ -10,10 +10,12 @@ from transduction.lm.base import LM, LMState
 from transduction.util import LogDistr, LogVector, logsumexp
 from transduction.lm.compiled_beam import (
     CompiledBeam, CompiledBeamState, RegionAnalyzer, RegionMap,
-    HubRegion, WildRegion, CorridorRegion, Region, Hyp, ScoredOutput,
+    HubRegion, WildRegion, CorridorRegion, UniversalPlateauRegion,
+    Region, Hyp, ScoredOutput,
 )
 from transduction.lm.fused_transduced import FusedTransducedLM
-from transduction.lm.generalized_beam import GeneralizedBeam, _compute_hub_vocab
+from transduction.lm.generalized_beam import GeneralizedBeam, OutputTrie, _compute_hub_vocab
+from transduction.lm.reference_transduced import ReferenceTransducedLM
 from transduction.universality import compute_ip_universal_states
 
 
@@ -588,3 +590,150 @@ class TestScoredOutput:
         b = ScoredOutput()
         a.merge(b)
         assert a.eos_score == float('-inf')
+
+
+# ---------------------------------------------------------------------------
+# TestDuplicateSpelling
+# ---------------------------------------------------------------------------
+
+def _duplicate_spelling_fst():
+    """FST where source symbols 'x' and 'y' both produce output 'ab'.
+
+    Hub state 0 has two arcs:
+        0 --x:ε--> 1 --ε:a--> 2 --ε:b--> 0
+        0 --y:ε--> 3 --ε:a--> 4 --ε:b--> 0
+    """
+    fst = FST()
+    fst.add_start(0)
+    fst.add_stop(0)
+    fst.add_arc(0, 'x', EPSILON, 1)
+    fst.add_arc(1, EPSILON, 'a', 2)
+    fst.add_arc(2, EPSILON, 'b', 0)
+    fst.add_arc(0, 'y', EPSILON, 3)
+    fst.add_arc(3, EPSILON, 'a', 4)
+    fst.add_arc(4, EPSILON, 'b', 0)
+    return fst
+
+
+class TestDuplicateSpelling:
+
+    def test_cb_vs_reference_duplicate_spelling(self):
+        """CompiledBeam should match ReferenceTransducedLM when source
+        symbols share output spellings."""
+        fst = _duplicate_spelling_fst()
+
+        string_probs = {
+            ('x',): 0.3,
+            ('y',): 0.1,
+            ('x', 'x'): 0.2,
+            ('x', 'y'): 0.1,
+            ('y', 'x'): 0.15,
+            ('y', 'y'): 0.15,
+        }
+        inner_lm = FiniteLM(string_probs, eos=None)
+
+        cb = CompiledBeam(inner_lm, fst, K=500, max_beam=500, max_steps=10000,
+                          eos=None, helper='python')
+        ref = ReferenceTransducedLM(inner_lm, fst)
+
+        cb_state = cb.initial()
+        ref_state = ref.initial()
+        target = ['a', 'b', 'a', 'b']
+
+        for i, y in enumerate(target):
+            cb_lp = cb_state.logp_next
+            ref_lp = ref_state.logp_next
+
+            all_syms = set(cb_lp.keys()) | set(ref_lp.keys())
+            for sym in all_syms:
+                cb_val = cb_lp[sym]
+                ref_val = ref_lp[sym]
+                if cb_val > -10 or ref_val > -10:
+                    assert abs(cb_val - ref_val) < 0.1, \
+                        f"Step {i}, symbol {sym!r}: cb={cb_val:.4f}, ref={ref_val:.4f}"
+
+            cb_state = cb_state >> y
+            ref_state = ref_state >> y
+
+
+# ---------------------------------------------------------------------------
+# TestVsReference — multi-step reference comparison across region types
+# ---------------------------------------------------------------------------
+
+class TestVsReference:
+    """Compare CompiledBeam against ReferenceTransducedLM (exact ground truth)
+    for multi-step decoding on finite-relation FSTs."""
+
+    @pytest.mark.parametrize("fst_name,fst_fn,steps", [
+        ("hub_with_escape", examples.hub_with_escape, ['a', 'b']),
+        ("small", examples.small, ['a', 'b']),
+        ("copy_ab", lambda: copy_fst(['a', 'b']), ['a', 'b', 'a']),
+        ("lowercase", examples.lowercase, ['A', 'B']),
+    ])
+    def test_multi_step_vs_reference(self, fst_name, fst_fn, steps):
+        inner_lm = TinyLM()
+        fst = fst_fn()
+
+        cb = CompiledBeam(inner_lm, fst, K=200, max_beam=500, max_steps=5000,
+                          helper='python')
+        ref = ReferenceTransducedLM(inner_lm, fst)
+
+        cb_state = cb.initial()
+        ref_state = ref.initial()
+
+        for i, y in enumerate(steps):
+            cb_lp = cb_state.logp_next
+            ref_lp = ref_state.logp_next
+
+            all_syms = set(cb_lp.keys()) | set(ref_lp.keys())
+            for sym in all_syms:
+                cb_val = cb_lp[sym]
+                ref_val = ref_lp[sym]
+                if cb_val > -10 or ref_val > -10:
+                    assert abs(cb_val - ref_val) < 0.5, \
+                        f"[{fst_name}] Step {i}, symbol {sym!r}: " \
+                        f"cb={cb_val:.4f}, ref={ref_val:.4f}"
+
+            if y not in ref_lp or ref_lp[y] <= -50:
+                break
+            cb_state = cb_state >> y
+            ref_state = ref_state >> y
+
+
+class TestVsFused:
+    """Compare CompiledBeam against FusedTransducedLM for multi-step decoding
+    on FSTs with infinite quotients (where ReferenceTransducedLM is too slow)."""
+
+    @pytest.mark.parametrize("fst_name,fst_fn,steps", [
+        ("triplets_of_doom", examples.triplets_of_doom, ['a', 'b', 'a']),
+        ("no_hub_transducer", examples.no_hub_transducer, ['a', 'b']),
+    ])
+    def test_multi_step_vs_fused(self, fst_name, fst_fn, steps):
+        inner_lm = TinyLM()
+        fst = fst_fn()
+
+        cb = CompiledBeam(inner_lm, fst, K=200, max_beam=500, max_steps=5000,
+                          helper='python')
+        fused = FusedTransducedLM(inner_lm, fst, max_steps=5000, max_beam=500,
+                                  helper='python')
+
+        cb_state = cb.initial()
+        fused_state = fused.initial()
+
+        for i, y in enumerate(steps):
+            cb_lp = cb_state.logp_next
+            fused_lp = fused_state.logp_next
+
+            all_syms = set(cb_lp.keys()) | set(fused_lp.keys())
+            for sym in all_syms:
+                cb_val = cb_lp[sym]
+                fused_val = fused_lp[sym]
+                if cb_val > -10 or fused_val > -10:
+                    assert abs(cb_val - fused_val) < 0.5, \
+                        f"[{fst_name}] Step {i}, symbol {sym!r}: " \
+                        f"cb={cb_val:.4f}, fused={fused_val:.4f}"
+
+            if y not in fused_lp or fused_lp[y] <= -50:
+                break
+            cb_state = cb_state >> y
+            fused_state = fused_state >> y

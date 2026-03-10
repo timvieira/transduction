@@ -113,7 +113,8 @@ Eliminated deps (previously external, now inlined):
 - `test_fst.py`: 56 passed
 - `test_enumeration.py`: 55 passed
 - `test_push_labels.py`: 35 passed
-- `test_generalized_beam.py`: 33 passed
+- `test_compiled_beam_battery.py`: 54 passed
+- `test_generalized_beam.py`: 36 passed
 - `test_fsa.py`: 33 passed
 - `test_lazy_precover_dfa.py`: 26 passed
 - `test_is_functional.py`: 26 passed
@@ -124,7 +125,7 @@ Eliminated deps (previously external, now inlined):
 - `test_ptb_nltk.py`: 4 passed
 - `test_make_total.py`: 3 passed
 - `test_character_beam.py`: 3 passed
-- **Total: 977 tests across 18 files (962 passed, excluding GPU-dependent)**
+- **Total: 1034 tests across 19 files (1019 passed, excluding GPU-dependent)**
 - `test_general.py` tests the **general-case** algorithms (handle infinite quotients/remainders):
   NonrecursiveDFADecomp, TruncatedIncrementalDFADecomp,
   PeekabooState, PeekabooNonrecursive, DirtyPeekaboo, RustDecomp, RustDirtyState,
