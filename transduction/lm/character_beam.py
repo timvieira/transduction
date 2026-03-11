@@ -18,7 +18,7 @@ Uses the library's ``LM``/``LMState`` interface for language model states
 and ``LogDistr`` for probability distributions.
 
 The trie mass update uses a vectorized log-space sparse matvec via
-a precomputed COO reachability index (leaf → all ancestors).
+a precomputed CSR reachability matrix (leaf → all ancestors).
 
 Usage::
 
@@ -117,13 +117,23 @@ class TokenCharacterTrie:
         self._key_idx_cache: dict[int, torch.Tensor] = {}
 
         # Sparse reachability matrix for fast log_mass_sum via matvec.
+        # CSR float32 for optimized CPU sparse BLAS (MKL/OpenBLAS); ~15x faster
+        # than COO float64.  Precision loss is <1e-6, negligible for beam search.
         n_nodes = len(children)
         n_tokens = len(self._tokens)
         indices = torch.tensor([coo_nodes, coo_token_ids], dtype=torch.long)
-        values = torch.ones(len(coo_nodes), dtype=torch.float64)
+        values = torch.ones(len(coo_nodes), dtype=torch.float32)
         self._reach = torch.sparse_coo_tensor(
             indices, values, (n_nodes, n_tokens),
-        ).coalesce()
+        ).coalesce().to_sparse_csr()
+
+        # Pre-compute root child indices for vectorized _logp_next.
+        # _root_byte_actions: list of (byte_val, child_node) for root, sorted.
+        # _root_child_nodes: tensor of child node indices, shape (num_root_children,).
+        root_actions = [(a, c) for a, c in children[self.root].items() if a is not None]
+        root_actions.sort(key=lambda x: x[0])
+        self._root_bytes = [a for a, _ in root_actions]
+        self._root_child_nodes = torch.tensor([c for _, c in root_actions], dtype=torch.long)
 
     def _logp_row(self, logp_next: LogDistr) -> torch.Tensor:
         """Extract a (n_tokens,) logp vector from logp_next, using fastest available path."""
@@ -152,12 +162,24 @@ class TokenCharacterTrie:
 
     def log_mass_sum(self, logp_next: LogDistr) -> torch.Tensor:
         """Bottom-up log-probability mass at each trie node via sparse matvec."""
-        logp = self._logp_row(logp_next)
+        logp = self._logp_row(logp_next).float()
         logp_max = logp.max()
         prob = torch.exp(logp - logp_max)
         mass = torch.mv(self._reach, prob)
         log_mass = torch.log(mass) + logp_max
         return log_mass
+
+    def log_mass_sum_from_logits(self, logp_batch: torch.Tensor) -> list[torch.Tensor]:
+        """Compute trie mass vectors from (N, vocab_size) log-prob tensor.
+
+        Fuses token selection + sparse matmul. No LogDistr construction.
+        """
+        logp = logp_batch[:, self._token_ids].float()   # (N, n_tokens)
+        logp_max = logp.max(dim=1, keepdim=True).values
+        prob = torch.exp(logp - logp_max)
+        mass = torch.sparse.mm(self._reach, prob.T)     # (n_nodes, N)
+        log_mass = torch.log(mass) + logp_max.T          # (n_nodes, N)
+        return [log_mass[:, i] for i in range(logp_batch.shape[0])]
 
     def log_mass_sum_batch(self, logp_nexts: list[LogDistr]) -> list:
         """Batched log_mass_sum: single sparse matmul for multiple LM states."""
@@ -177,7 +199,7 @@ class TokenCharacterTrie:
             idx_map.append(unique[key][0])
 
         unique_rows = [row for _, row in sorted(unique.values())]
-        logp_mat = torch.stack(unique_rows)
+        logp_mat = torch.stack(unique_rows).float()
 
         logp_max = logp_mat.max(dim=1, keepdim=True).values
         prob_mat = torch.exp(logp_mat - logp_max)
@@ -333,18 +355,61 @@ class _Bundle:
 
     @cached_property
     def _logp_next(self) -> LogDistr:
-        scores: LogVector = LogVector()
-        eos_token = self.alg.trie.eos_token
+        trie = self.alg.trie
+        eos_token = trie.eos_token
+        root = trie.root
+
+        # Separate root hypotheses (vectorizable) from non-root (Python loop).
+        root_hyps: list = []
+        nonroot_hyps: list = []
         for hyp in self.extend:
+            if hyp.node == root:
+                root_hyps.append(hyp)
+            else:
+                nonroot_hyps.append(hyp)
+
+        scores: LogVector = LogVector()
+
+        # Vectorized path for root hypotheses (dominate after extend).
+        if root_hyps:
+            root_child_nodes = trie._root_child_nodes
+            root_bytes = trie._root_bytes
+            n = len(root_hyps)
+
+            # Stack log_mass tensors and weights.
+            log_masses = torch.stack([h.log_mass for h in root_hyps])  # (n, num_nodes)
+            weights = torch.tensor([h.weight for h in root_hyps], dtype=torch.float64)
+
+            # log_mass at root for each hyp.
+            root_masses = log_masses[:, root]  # (n,)
+
+            # log_mass at each root child for each hyp.
+            child_masses = log_masses[:, root_child_nodes]  # (n, num_children)
+
+            # weighted[i, j] = weight[i] + child_mass[i, j] - root_mass[i]
+            weighted = weights.unsqueeze(1) + child_masses - root_masses.unsqueeze(1)
+
+            # logsumexp across hypotheses for each byte.
+            byte_scores = torch.logsumexp(weighted, dim=0)  # (num_children,)
+
+            for j, a in enumerate(root_bytes):
+                scores.logaddexp(a, float(byte_scores[j]))
+
+            # EOS for root hypotheses.
+            eos_lps = torch.tensor([h.lm_state.logp_next[eos_token] for h in root_hyps],
+                                   dtype=torch.float64)
+            eos_weighted = weights + eos_lps
+            mask = eos_lps > float('-inf')
+            if mask.any():
+                scores.logaddexp(None, float(torch.logsumexp(eos_weighted[mask], dim=0)))
+
+        # Scalar path for non-root hypotheses.
+        for hyp in nonroot_hyps:
             node_mass = float(hyp.log_mass[hyp.node])
             for a, child_node in hyp.actions.items():
                 if a is not None:
                     scores.logaddexp(a, hyp.weight + float(hyp.log_mass[child_node]) - node_mass)
-            # EOS: hypotheses at root can stop (EOS is not in the trie).
-            if hyp.node == hyp.trie.root:
-                eos_lp = hyp.lm_state.logp_next[eos_token]
-                if eos_lp > float('-inf'):
-                    scores.logaddexp(None, hyp.weight + eos_lp)
+
         return scores.normalize()
 
     @cached_property
@@ -362,6 +427,10 @@ class _Bundle:
                           - self.weight)).item() >= self.alg.extend_threshold
             )
         ]
+
+        # Limit extensions to top-N by weight
+        if self.alg.max_extend is not None and len(batch) > self.alg.max_extend:
+            batch = sorted(batch, key=lambda h: -h.weight)[:self.alg.max_extend]
 
         # Phase 1: Prepare — create child LM states without forward passes.
         prepared: list[tuple[TrieState, LMState, float]] = []
@@ -438,6 +507,45 @@ class CharacterBeamState(LMState):
         self.logprefix = logprefix
         self._candidates = candidates
 
+    def __repr__(self) -> str:
+        n = len(self._candidates.states)
+        ctx = self.context[-40:] if len(self.context) > 40 else self.context
+        return (f'CharacterBeamState(context={ctx!r}, logprefix={self.logprefix:.2f}, '
+                f'beam={n})')
+
+    def _repr_html_(self) -> str:
+        """Rich HTML display for Jupyter notebooks."""
+        from math import exp
+        states = self._candidates.states
+        n = len(states)
+        ctx = repr(self.context)
+        if len(ctx) > 80:
+            ctx = '...' + ctx[-77:]
+
+        rows = ['<tr><th>#</th><th>weight</th><th>rel. prob</th>'
+                '<th>partial</th><th>trie node</th><th>has EOT</th></tr>']
+        top_w = states[0].weight if states else 0.0
+        for i, h in enumerate(sorted(states, key=lambda h: -h.weight)):
+            rel = exp(h.weight - top_w) if h.weight > float('-inf') else 0.0
+            partial = repr(h.partial) if h.partial else ''
+            eot = 'yes' if h.has_EOT() else ''
+            rows.append(
+                f'<tr><td>{i}</td><td>{h.weight:.3f}</td>'
+                f'<td>{rel:.4f}</td>'
+                f'<td><code>{partial!r}</code></td>'
+                f'<td>{h.node}</td><td>{eot}</td></tr>')
+
+        return (
+            f'<div style="font-family:monospace; font-size:13px">'
+            f'<b>CharacterBeamState</b> &mdash; '
+            f'context=<code>{ctx!r}</code>, '
+            f'logprefix={self.logprefix:.2f}, '
+            f'K={self.cb.K}, beam={n}<br>'
+            f'<table style="border-collapse:collapse; margin-top:4px">'
+            + '\n'.join(rows) +
+            '</table></div>'
+        )
+
     @property
     def context_key(self):
         return self.context
@@ -450,11 +558,22 @@ class CharacterBeamState(LMState):
         logp_delta = self.logp_next[byte_val]
         if self.cb.verbosity > 0:
             print(self.context)
-        next_candidates = self._candidates.extend.prune() >> byte_val
-        return CharacterBeamState(
+        pre = self._candidates
+        extended = pre.extend
+        pruned = extended.prune()
+        advanced = pruned >> byte_val
+        next_state = CharacterBeamState(
             self.cb, self.context + bytes([byte_val]),
-            self.logprefix + logp_delta, next_candidates,
+            self.logprefix + logp_delta, advanced,
         )
+        next_state._step_info = {
+            'pre_extend': len(pre.states),
+            'post_extend': len(extended.states),
+            'post_prune': len(pruned.states),
+            'post_advance': len(advanced.states),
+        }
+        self.cb.trace.append(next_state)
+        return next_state
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +592,9 @@ class CharacterBeam(LM):
         relative_score_threshold: Optional ratio threshold for pruning.
         eot_immunity: If True, hypotheses without EOT are immune from pruning.
         extend_threshold: Minimum probability threshold for extending.
+        max_extend: Maximum number of EOT hypotheses to extend per step.
+            When set, only the top ``max_extend`` hypotheses (by weight) are
+            extended; the rest remain at their current trie position.
     """
 
     eos = None
@@ -482,6 +604,7 @@ class CharacterBeam(LM):
                  relative_score_threshold: float | None = None,
                  eot_immunity: bool = False,
                  extend_threshold: float | None = None,
+                 max_extend: int | None = None,
                  verbosity: int = 0) -> None:
         self.lm = lm
         self.V: set[int] = {x for y in vocab.values() for x in y}
@@ -496,8 +619,18 @@ class CharacterBeam(LM):
         self.K = K
         self.relative_score_threshold = relative_score_threshold
         self.extend_threshold = extend_threshold
+        self.max_extend = max_extend
         self.eot_immunity = eot_immunity
         self.verbosity = verbosity
+        self.trace: list[CharacterBeamState] = []
 
     def initial(self) -> CharacterBeamState:
-        return CharacterBeamState(self, b'', 0.0, _Bundle.initial(self))
+        self.trace = []
+        state = CharacterBeamState(self, b'', 0.0, _Bundle.initial(self))
+        self.trace.append(state)
+        return state
+
+    def visualize(self) -> None:
+        """Display interactive beam search visualization of the current trace."""
+        from transduction.lm.beam_viz import visualize_beam_trace
+        visualize_beam_trace(self.trace)
